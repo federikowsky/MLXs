@@ -56,3 +56,4 @@ logs/
 # Model weights (large files; keep dir, ignore contents if needed)
 # Uncomment if you do not commit fixture models:
 # tests/fixtures/models/
+CLAUDE.md
