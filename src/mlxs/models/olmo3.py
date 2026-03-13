@@ -172,6 +172,18 @@ class Olmo3Model(nn.Module):
         self.layers = [TransformerBlock(args, layer_idx=i) for i in range(args.num_hidden_layers)]
         self.norm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
+        # Find first index of each layer type for mask creation
+        self.ga_idx = 0
+        self.swa_idx = 0
+        for i, lt in enumerate(self.layer_types):
+            if lt == "full_attention":
+                self.ga_idx = i
+                break
+        for i, lt in enumerate(self.layer_types):
+            if lt != "full_attention":
+                self.swa_idx = i
+                break
+
     def __call__(
         self,
         inputs: mx.array,
@@ -181,8 +193,8 @@ class Olmo3Model(nn.Module):
         if cache is None:
             cache = [None] * len(self.layers)  # type: ignore[list-item]
 
-        full_mask = create_attention_mask(h, cache[0])
-        sliding_mask = create_attention_mask(h, cache[0], window_size=self.sliding_window)
+        full_mask = create_attention_mask(h, cache[self.ga_idx])
+        sliding_mask = create_attention_mask(h, cache[self.swa_idx], window_size=self.sliding_window)
 
         for layer, c, layer_type in zip(self.layers, cache, self.layer_types, strict=True):
             mask = full_mask if layer_type == "full_attention" else sliding_mask

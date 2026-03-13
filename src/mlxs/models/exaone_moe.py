@@ -95,7 +95,7 @@ class ModelArgs(BaseModelArgs):
 
 
 class MoEGate(nn.Module):
-    """Router: linear gate + score correction bias, top-k via group_expert_select."""
+    """Router: raw weight gate + score correction bias, top-k via group_expert_select."""
 
     def __init__(self, args: ModelArgs) -> None:
         super().__init__()
@@ -104,11 +104,11 @@ class MoEGate(nn.Module):
         self.n_group = args.n_group
         self.topk_group = args.topk_group
         self.routed_scaling_factor = args.routed_scaling_factor
-        self.linear = nn.Linear(args.hidden_size, args.num_experts, bias=False)
+        self.weight = mx.zeros((args.num_experts, args.hidden_size))
         self.e_score_correction_bias = mx.zeros((args.num_experts,))
 
     def __call__(self, x: mx.array) -> tuple[mx.array, mx.array]:
-        gates = self.linear(x)
+        gates = x @ self.weight.T
         return _group_expert_select(
             gates,
             self.e_score_correction_bias,
