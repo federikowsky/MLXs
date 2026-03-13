@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import mlx.core as mx
 
-from mlxs.cache.attention_mask import create_attention_mask
+from mlxs.cache.attention_mask import _mask_from_length
 
 
 class KVCache:
@@ -126,6 +126,6 @@ class KVCache:
         window_size: int | None = None,
     ) -> mx.array | str | None:
         """Create attention mask compatible with mlx.fast.scaled_dot_product_attention."""
-        return create_attention_mask(
+        return _mask_from_length(
             n, offset=self._offset, return_array=return_array, window_size=window_size
         )

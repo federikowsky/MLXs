@@ -22,11 +22,9 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
+from mlxs.cache.attention_mask import create_attention_mask
 from mlxs.cache.kv import KVCache
-from mlxs.models.base import (
-    BaseModelArgs,
-    create_attention_mask,
-)
+from mlxs.models.base import BaseModelArgs
 
 
 @dataclass

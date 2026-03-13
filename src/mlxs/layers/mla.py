@@ -36,9 +36,7 @@ class MultiLinear(nn.Module):
         mode: str = "affine",
     ) -> QuantizedMultiLinear:
         num_heads, output_dims, input_dims = self.weight.shape
-        ql = QuantizedMultiLinear(
-            input_dims, output_dims, num_heads, group_size, bits, mode
-        )
+        ql = QuantizedMultiLinear(input_dims, output_dims, num_heads, group_size, bits, mode)
         ql.weight, ql.scales, *biases = mx.quantize(
             self.weight,
             group_size,
@@ -66,15 +64,13 @@ class QuantizedMultiLinear(nn.Module):
         self.bits = bits
         self.mode = mode
 
-        scale = math.sqrt(1 / input_dims)
+        scale = math.sqrt(1.0 / input_dims)
         weight = mx.random.uniform(
             low=-scale,
             high=scale,
             shape=(num_heads, output_dims, input_dims),
         )
-        self.weight, self.scales, *biases = mx.quantize(
-            weight, group_size, bits, mode=mode
-        )
+        self.weight, self.scales, *biases = mx.quantize(weight, group_size, bits, mode=mode)
         self.biases = biases[0] if biases else None
         self.freeze()
 

@@ -8,6 +8,8 @@ Compatible with mlx.fast.scaled_dot_product_attention mask conventions:
 
 from __future__ import annotations
 
+from typing import Any
+
 import mlx.core as mx
 
 
@@ -44,28 +46,43 @@ def create_causal_mask(
     return mask
 
 
-def create_attention_mask(
+def _mask_from_length(
     n: int,
     offset: int = 0,
     *,
     return_array: bool = False,
     window_size: int | None = None,
 ) -> mx.array | str | None:
-    """Create attention mask for scaled_dot_product_attention.
-
-    Args:
-        n: Query sequence length.
-        offset: KV cache offset (past tokens).
-        return_array: Force array output instead of string hint.
-        window_size: Optional sliding window size.
-
-    Returns:
-        None for single-token decode (no mask needed),
-        "causal" string for fast-path causal masking,
-        or an explicit boolean mask array.
-    """
+    """Low-level: create attention mask from sequence length (used by cache internals)."""
     if n == 1:
         return None
     if return_array or (window_size is not None and n > window_size):
         return create_causal_mask(n, offset=offset, window_size=window_size)
     return "causal"
+
+
+def create_attention_mask(
+    h: mx.array,
+    cache: Any = None,
+    window_size: int | None = None,
+    return_array: bool = False,
+) -> mx.array | str | None:
+    """Create attention mask from hidden states and cache (for use in model layers).
+
+    Delegates to cache.make_mask if available, otherwise creates a causal mask.
+    Compatible with mlx_lm mask conventions.
+    """
+    n = h.shape[1]
+    if cache is not None and hasattr(cache, "make_mask"):
+        return cache.make_mask(n, return_array=return_array, window_size=window_size)
+    return _mask_from_length(n, return_array=return_array, window_size=window_size)
+
+
+def create_ssm_mask(
+    h: mx.array,
+    cache: Any = None,
+) -> mx.array | None:
+    """Create SSM mask for state-space models (Mamba, Jamba, etc.)."""
+    if cache is not None and hasattr(cache, "make_mask"):
+        return cache.make_mask(h.shape[1])
+    return None

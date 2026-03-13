@@ -12,7 +12,6 @@ Compatible with mlx_lm rope_utils.py API.
 from __future__ import annotations
 
 import math
-from typing import Union
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -27,8 +26,8 @@ class SuScaledRoPE(nn.Module):
         base: float = 10000.0,
         max_position_embeddings: int = 131072,
         original_max_position_embeddings: int = 4096,
-        short_factor: Union[list[float], float] = 1.0,
-        long_factor: Union[list[float], float] = 1.0,
+        short_factor: list[float] | float = 1.0,
+        long_factor: list[float] | float = 1.0,
         short_mscale: float | None = None,
         long_mscale: float | None = None,
     ) -> None:
@@ -40,14 +39,12 @@ class SuScaledRoPE(nn.Module):
         self._freqs = mx.array(long_factor, dtype=mx.float32) * freqs
 
         def default_scale(factor: float) -> float:
-            return math.sqrt(
-                1 + math.log(factor) / math.log(original_max_position_embeddings)
-            )
+            return math.sqrt(1 + math.log(factor) / math.log(original_max_position_embeddings))
 
         factor = max_position_embeddings / original_max_position_embeddings
         self._scale = long_mscale or (1.0 if factor <= 1.0 else default_scale(factor))
 
-    def __call__(self, x: mx.array, offset: Union[int, mx.array] = 0) -> mx.array:
+    def __call__(self, x: mx.array, offset: int | mx.array = 0) -> mx.array:
         x[..., : self.dim] = self._scale * x[..., : self.dim]
         return mx.fast.rope(
             x,
@@ -81,9 +78,7 @@ class Llama3RoPE(nn.Module):
         factor = scaling_config["factor"]
         low_freq_factor = scaling_config.get("low_freq_factor", 1.0)
         high_freq_factor = scaling_config.get("high_freq_factor", 4.0)
-        old_context_len = scaling_config.get(
-            "original_max_position_embeddings", 8192
-        )
+        old_context_len = scaling_config.get("original_max_position_embeddings", 8192)
 
         low_freq_wavelen = old_context_len / low_freq_factor
         high_freq_wavelen = old_context_len / high_freq_factor
@@ -137,10 +132,7 @@ class YarnRoPE(nn.Module):
 
         def yarn_find_correction_dim(num_rotations: float) -> float:
             return (
-                dims
-                * math.log(
-                    original_max_position_embeddings / (num_rotations * 2 * math.pi)
-                )
+                dims * math.log(original_max_position_embeddings / (num_rotations * 2 * math.pi))
             ) / (2 * math.log(base))
 
         def yarn_find_correction_range() -> tuple[int, int]:
@@ -156,9 +148,7 @@ class YarnRoPE(nn.Module):
         def yarn_linear_ramp_mask(min_val: int, max_val: int, dim: int) -> mx.array:
             if min_val == max_val:
                 max_val += 0.001
-            linear_func = (mx.arange(dim, dtype=mx.float32) - min_val) / (
-                max_val - min_val
-            )
+            linear_func = (mx.arange(dim, dtype=mx.float32) - min_val) / (max_val - min_val)
             return mx.clip(linear_func, 0, 1)
 
         self.mscale = yarn_get_mscale(scaling_factor, mscale) / yarn_get_mscale(
@@ -208,9 +198,7 @@ def initialize_rope(
         nn.Module implementing RoPE __call__(x, offset).
     """
     if scaling_config is not None:
-        rope_type = scaling_config.get("type") or scaling_config.get(
-            "rope_type", "default"
-        )
+        rope_type = scaling_config.get("type") or scaling_config.get("rope_type", "default")
     else:
         rope_type = "default"
 
@@ -254,9 +242,7 @@ def initialize_rope(
             dims=dims,
             base=base,
             max_position_embeddings=max_position_embeddings or 131072,
-            original_max_position_embeddings=scaling_config[
-                "original_max_position_embeddings"
-            ],
+            original_max_position_embeddings=scaling_config["original_max_position_embeddings"],
             short_factor=scaling_config["short_factor"],
             long_factor=scaling_config["long_factor"],
         )

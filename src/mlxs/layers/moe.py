@@ -11,12 +11,10 @@ import math
 import mlx.core as mx
 import mlx.nn as nn
 
-from mlxs.models.activations import swiglu
+from mlxs.layers.activations import swiglu
 
 
-def _gather_sort(
-    x: mx.array, indices: mx.array
-) -> tuple[mx.array, mx.array, mx.array]:
+def _gather_sort(x: mx.array, indices: mx.array) -> tuple[mx.array, mx.array, mx.array]:
     *_, M = indices.shape
     indices = indices.flatten()
     order = mx.argsort(indices)
@@ -24,9 +22,7 @@ def _gather_sort(
     return x.flatten(0, -3)[order // M], indices[order], inv_order
 
 
-def _scatter_unsort(
-    x: mx.array, inv_order: mx.array, shape: tuple | None = None
-) -> mx.array:
+def _scatter_unsort(x: mx.array, inv_order: mx.array, shape: tuple | None = None) -> mx.array:
     x = x[inv_order]
     if shape is not None:
         x = mx.unflatten(x, 0, shape)
@@ -74,9 +70,7 @@ class QuantizedSwitchLinear(nn.Module):
     def num_experts(self) -> int:
         return self.weight.shape[0]
 
-    def __call__(
-        self, x: mx.array, indices: mx.array, sorted_indices: bool = False
-    ) -> mx.array:
+    def __call__(self, x: mx.array, indices: mx.array, sorted_indices: bool = False) -> mx.array:
         x = mx.gather_qmm(
             x,
             self["weight"],
@@ -122,9 +116,7 @@ class SwitchLinear(nn.Module):
     def num_experts(self) -> int:
         return self.weight.shape[0]
 
-    def __call__(
-        self, x: mx.array, indices: mx.array, sorted_indices: bool = False
-    ) -> mx.array:
+    def __call__(self, x: mx.array, indices: mx.array, sorted_indices: bool = False) -> mx.array:
         x = mx.gather_mm(
             x,
             self["weight"].swapaxes(-1, -2),
@@ -142,9 +134,7 @@ class SwitchLinear(nn.Module):
         ql = QuantizedSwitchLinear(
             input_dims, output_dims, num_experts, False, group_size, bits, mode=mode
         )
-        ql.weight, ql.scales, *biases = mx.quantize(
-            self.weight, group_size, bits, mode=mode
-        )
+        ql.weight, ql.scales, *biases = mx.quantize(self.weight, group_size, bits, mode=mode)
         ql.biases = biases[0] if biases else None
         if "bias" in self:
             ql.bias = self.bias
@@ -185,9 +175,7 @@ class SwitchGLU(nn.Module):
             idx = mx.stop_gradient(idx)
         x_up = self.up_proj(x, idx, sorted_indices=do_sort)
         x_gate = self.gate_proj(x, idx, sorted_indices=do_sort)
-        x = self.down_proj(
-            self.activation(x_up, x_gate), idx, sorted_indices=do_sort
-        )
+        x = self.down_proj(self.activation(x_up, x_gate), idx, sorted_indices=do_sort)
         if do_sort:
             x = _scatter_unsort(x, inv_order, indices.shape)
         return x.squeeze(-2)

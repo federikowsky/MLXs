@@ -108,9 +108,7 @@ def segsum(x: mx.array, mask: mx.array | None = None) -> mx.array:
     x = mx.tril(x, -1)
     x_segsum = mx.cumsum(x, axis=-2)
     if mask is not None:
-        x_segsum = mx.where(
-            mask[..., None, :] * mask[..., None], x_segsum, -float("inf")
-        )
+        x_segsum = mx.where(mask[..., None, :] * mask[..., None], x_segsum, -float("inf"))
     return x_segsum
 
 
@@ -173,16 +171,10 @@ def ssm_attn(
             exp_dtA_cumsum = mx.exp(mx.cumsum(dtA, axis=-2))
             next_state += exp_dtA_cumsum[:, -1, :, None, None] * state
             C_r = C.reshape(b, s, g, 1, d, 1)
-            y_prev = (
-                (state.reshape((b, 1, g, repeats, dh, d)) @ C_r)
-                .squeeze(-1)
-                .flatten(2, 3)
-            )
+            y_prev = (state.reshape((b, 1, g, repeats, dh, d)) @ C_r).squeeze(-1).flatten(2, 3)
             y += exp_dtA_cumsum[..., None] * y_prev
         if lengths is not None and state is not None:
-            next_state = mx.where(
-                mx.expand_dims(lengths < 0, (1, 2, 3)), state, next_state
-            )
+            next_state = mx.where(mx.expand_dims(lengths < 0, (1, 2, 3)), state, next_state)
         return y, next_state
 
     ys = []

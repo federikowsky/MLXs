@@ -12,14 +12,12 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
+from mlxs.cache.attention_mask import create_attention_mask
 from mlxs.cache.kv import KVCache
-from mlxs.models.activations import swiglu
-from mlxs.models.base import (
-    BaseModelArgs,
-    create_attention_mask,
-    scaled_dot_product_attention,
-)
-from mlxs.models.rope import initialize_rope
+from mlxs.layers.activations import swiglu
+from mlxs.layers.attention import scaled_dot_product_attention
+from mlxs.layers.rope import initialize_rope
+from mlxs.models.base import BaseModelArgs
 
 
 @dataclass

@@ -10,7 +10,7 @@ from __future__ import annotations
 import mlx.core as mx
 from mlx.utils import tree_map, tree_reduce
 
-from mlxs.cache.attention_mask import create_attention_mask
+from mlxs.cache.attention_mask import _mask_from_length
 
 
 class QuantizedKVCache:
@@ -127,6 +127,6 @@ class QuantizedKVCache:
         return_array: bool = False,
         window_size: int | None = None,
     ) -> mx.array | str | None:
-        return create_attention_mask(
+        return _mask_from_length(
             n, offset=self._offset, return_array=return_array, window_size=window_size
         )
