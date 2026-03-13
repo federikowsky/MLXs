@@ -18,6 +18,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+paro = [
+    "paroquant[mlx]>=0.1.5",
+]
 server = [
     "starlette>=0.37.0",
     "uvicorn>=0.29.0",

@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from mlxs._types import MemoryCeilingPolicy, ModelMode, PaddingSide, StreamPolicy
+from mlxs._types import (
+    MemoryCeilingPolicy,
+    ModelMode,
+    PaddingSide,
+    StreamPolicy,
+    WeightFormat,
+)
 
 
 class _Frozen(BaseModel):
@@ -48,6 +54,19 @@ class ModelConfig(_Frozen):
     model_mode: ModelMode = Field(
         default=ModelMode.AUTO,
         description="Execution mode: text-only, multimodal, or auto (FR12, §7.4).",
+    )
+    weight_format: WeightFormat = Field(
+        default=WeightFormat.AUTO,
+        description="Weight format: auto (detect), safetensors, paro (PARO/paroquant), "
+        "awq, gptq (placeholders for future). NFR1, O4.",
+    )
+    model_hf_revision: str | None = Field(
+        default=None,
+        description="Hugging Face repo revision (branch, tag, or commit). Used when model_path is an HF id. Default uses Hub default (usually main).",
+    )
+    model_hf_token: str | None = Field(
+        default=None,
+        description="Hugging Face token for gated/private repos. Prefer HF_TOKEN env for security. Never logged.",
     )
 
 

@@ -16,7 +16,7 @@ import mlx.nn as nn
 from mlxs.config.schema import AppConfig
 from mlxs.generate import generate
 from mlxs.generate.compile import warmup
-from mlxs.load import load_model, load_tokenizer
+from mlxs.load import load_model_and_tokenizer
 from mlxs.load.tokenizer import TokenizerWrapper
 from mlxs.observability.logger import setup_logging
 from mlxs.observability.metrics import create_metrics
@@ -63,17 +63,11 @@ def create_dependencies(config: AppConfig) -> Dependencies:
         except Exception:
             pass
 
-    # Load model
+    # Load model and tokenizer (format-aware: safetensors, PARO, etc.)
     logger.info("Loading model from %s", config.model.model_path)
-    model = load_model(
+    model, tokenizer = load_model_and_tokenizer(
         config.model.model_path,
-        lazy=config.model.lazy_load and not config.model.preload,
-    )
-
-    # Load tokenizer
-    tokenizer = load_tokenizer(
-        config.model.model_path,
-        trust_remote_code=config.model.trust_remote_code,
+        config.model,
     )
 
     # Warmup if configured
