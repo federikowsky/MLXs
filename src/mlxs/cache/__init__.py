@@ -10,6 +10,7 @@ Provides:
 
 from mlxs.cache.arrays import ArraysCache
 from mlxs.cache.cache_list import CacheList
+from mlxs.cache.chunked import ChunkedKVCache
 from mlxs.cache.kv import KVCache
 from mlxs.cache.quantized import QuantizedKVCache
 from mlxs.cache.rotating import RotatingKVCache
@@ -17,6 +18,7 @@ from mlxs.cache.rotating import RotatingKVCache
 __all__ = [
     "ArraysCache",
     "CacheList",
+    "ChunkedKVCache",
     "KVCache",
     "QuantizedKVCache",
     "RotatingKVCache",

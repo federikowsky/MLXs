@@ -1,7 +1,7 @@
-"""Llama model architecture — Llama 3.x / 4.x (§7.1 Phase 1).
+"""Seed OSS model — port from mlx_lm (seed_oss.py), ModelProtocol-compliant.
 
-Implements ModelProtocol. Compatible with mlx_lm-converted weights.
-Supports GQA, RoPE (with scaling), SwiGLU, and sliding window attention.
+Dense decoder-only: RMSNorm, SwiGLU MLP, RoPE, optional tied word embeddings.
+Imports: mlxs.cache, mlxs.layers, mlxs.models.base. Norms: nn.RMSNorm only.
 """
 
 from __future__ import annotations
@@ -22,32 +22,25 @@ from mlxs.models.base import BaseModelArgs
 
 @dataclass
 class ModelArgs(BaseModelArgs):
-    """Llama model configuration (§7.2)."""
+    """Seed OSS config (config.json); from_dict aligned to mlx_lm."""
 
-    model_type: str = "llama"
-    hidden_size: int = 4096
+    model_type: str = "seed_oss"
+    hidden_size: int = 2048
     num_hidden_layers: int = 32
-    intermediate_size: int = 11008
-    num_attention_heads: int = 32
+    intermediate_size: int = 8192
+    num_attention_heads: int = 16
+    num_key_value_heads: int = 16
+    head_dim: int = 128
     rms_norm_eps: float = 1e-6
     vocab_size: int = 32000
-    head_dim: int | None = None
     max_position_embeddings: int | None = None
-    num_key_value_heads: int | None = None
     attention_bias: bool = False
+    attention_out_bias: bool = False
     mlp_bias: bool = False
     rope_theta: float = 10000.0
     rope_traditional: bool = False
-    rope_scaling: dict[str, float | str] | None = None
+    rope_scaling: dict[str, Any] | None = None
     tie_word_embeddings: bool = True
-    layer_types: list[str] | None = None
-    sliding_window: int | None = None
-
-    def __post_init__(self) -> None:
-        if self.num_key_value_heads is None:
-            self.num_key_value_heads = self.num_attention_heads
-        if self.layer_types is None:
-            self.layer_types = ["full_attention"] * self.num_hidden_layers
 
 
 class Attention(nn.Module):
@@ -58,14 +51,13 @@ class Attention(nn.Module):
         dim = args.hidden_size
         self.n_heads = args.num_attention_heads
         self.n_kv_heads = args.num_key_value_heads
-        self.head_dim = args.head_dim or dim // self.n_heads
+        self.head_dim = args.head_dim
         self.scale = self.head_dim**-0.5
-        bias = args.attention_bias
 
-        self.q_proj = nn.Linear(dim, self.n_heads * self.head_dim, bias=bias)
-        self.k_proj = nn.Linear(dim, self.n_kv_heads * self.head_dim, bias=bias)
-        self.v_proj = nn.Linear(dim, self.n_kv_heads * self.head_dim, bias=bias)
-        self.o_proj = nn.Linear(self.n_heads * self.head_dim, dim, bias=bias)
+        self.q_proj = nn.Linear(dim, self.n_heads * self.head_dim, bias=args.attention_bias)
+        self.k_proj = nn.Linear(dim, self.n_kv_heads * self.head_dim, bias=args.attention_bias)
+        self.v_proj = nn.Linear(dim, self.n_kv_heads * self.head_dim, bias=args.attention_bias)
+        self.o_proj = nn.Linear(self.n_heads * self.head_dim, dim, bias=args.attention_out_bias)
 
         self.rope = initialize_rope(
             self.head_dim,
@@ -96,40 +88,41 @@ class Attention(nn.Module):
             keys = self.rope(keys)
 
         output = scaled_dot_product_attention(
-            queries,
-            keys,
-            values,
-            cache=cache,
-            scale=self.scale,
-            mask=mask,
+            queries, keys, values, cache=cache, scale=self.scale, mask=mask
         )
-        return self.o_proj(output.transpose(0, 2, 1, 3).reshape(B, L, -1))
+        output = output.transpose(0, 2, 1, 3).reshape(B, L, -1)
+        return self.o_proj(output)
 
 
 class MLP(nn.Module):
-    """SwiGLU MLP."""
+    """SwiGLU MLP: gate_proj, up_proj, down_proj."""
 
-    def __init__(self, args: ModelArgs) -> None:
+    def __init__(
+        self,
+        dim: int,
+        hidden_dim: int,
+        bias: bool = False,
+    ) -> None:
         super().__init__()
-        dim = args.hidden_size
-        hidden = args.intermediate_size
-        bias = args.mlp_bias
-        self.gate_proj = nn.Linear(dim, hidden, bias=bias)
-        self.down_proj = nn.Linear(hidden, dim, bias=bias)
-        self.up_proj = nn.Linear(dim, hidden, bias=bias)
+        self.gate_proj = nn.Linear(dim, hidden_dim, bias=bias)
+        self.up_proj = nn.Linear(dim, hidden_dim, bias=bias)
+        self.down_proj = nn.Linear(hidden_dim, dim, bias=bias)
 
     def __call__(self, x: mx.array) -> mx.array:
         return self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))
 
 
 class TransformerBlock(nn.Module):
-    """Pre-norm transformer block with residual connections."""
+    """Pre-norm block: attention + MLP with residual connections."""
 
-    def __init__(self, args: ModelArgs, use_sliding: bool = False) -> None:
+    def __init__(self, args: ModelArgs) -> None:
         super().__init__()
-        self.use_sliding = use_sliding
         self.self_attn = Attention(args)
-        self.mlp = MLP(args)
+        self.mlp = MLP(
+            args.hidden_size,
+            args.intermediate_size,
+            bias=args.mlp_bias,
+        )
         self.input_layernorm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
         self.post_attention_layernorm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
@@ -139,81 +132,62 @@ class TransformerBlock(nn.Module):
         mask: mx.array | str | None = None,
         cache: KVCache | None = None,
     ) -> mx.array:
-        h = x + self.self_attn(self.input_layernorm(x), mask, cache)
-        return h + self.mlp(self.post_attention_layernorm(h))
+        r = self.self_attn(self.input_layernorm(x), mask, cache)
+        h = x + r
+        r = self.mlp(self.post_attention_layernorm(h))
+        return h + r
 
 
-class LlamaModel(nn.Module):
-    """Llama transformer backbone."""
+class SeedModel(nn.Module):
+    """Backbone: embed + decoder layers + final RMSNorm."""
 
     def __init__(self, args: ModelArgs) -> None:
         super().__init__()
-        self.args = args
-        self.vocab_size = args.vocab_size
-        self.sliding_window = args.sliding_window
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
-        self.layers = [
-            TransformerBlock(args, use_sliding=(lt == "sliding_attention"))
-            for lt in args.layer_types
-        ]
+        self.layers = [TransformerBlock(args=args) for _ in range(args.num_hidden_layers)]
         self.norm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
-        # Find indices for mask creation
-        self._fa_idx = args.layer_types.index("full_attention")
-        self._swa_idx: int | None = None
-        for i, layer in enumerate(self.layers):
-            if layer.use_sliding:
-                self._swa_idx = i
-                break
 
     def __call__(
         self,
         inputs: mx.array,
         cache: list[KVCache] | None = None,
-        input_embeddings: mx.array | None = None,
     ) -> mx.array:
-        h = (
-            input_embeddings
-            if input_embeddings is not None
-            else self.embed_tokens(inputs)
-        )
+        h = self.embed_tokens(inputs)
+
         if cache is None:
             cache = [None] * len(self.layers)  # type: ignore[list-item]
 
-        fa_mask = create_attention_mask(h, cache[self._fa_idx])
-        swa_mask = None
-        if self._swa_idx is not None:
-            swa_mask = create_attention_mask(
-                h, cache[self._swa_idx], window_size=self.sliding_window
-            )
+        mask = create_attention_mask(h, cache[0])
 
         for layer, c in zip(self.layers, cache, strict=True):
-            mask = swa_mask if layer.use_sliding else fa_mask
             h = layer(h, mask, cache=c)
+
         return self.norm(h)
 
 
 class Model(nn.Module):
-    """Llama LM head wrapper — satisfies ModelProtocol (§7.3, AC17)."""
+    """Seed OSS LM head wrapper — satisfies ModelProtocol."""
 
     def __init__(self, args: ModelArgs) -> None:
         super().__init__()
         self.args = args
         self.model_type = args.model_type
-        self.model = LlamaModel(args)
+        self.model = SeedModel(args)
+        self.tie_word_embeddings = args.tie_word_embeddings
         if not args.tie_word_embeddings:
             self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
 
     def __call__(
         self,
-        inputs: mx.array,
+        input_ids: mx.array,
+        *,
         cache: list[KVCache] | None = None,
-        input_embeddings: mx.array | None = None,
-        **_kwargs: Any,
+        mask: mx.array | None = None,
     ) -> mx.array:
-        out = self.model(inputs, cache, input_embeddings=input_embeddings)
-        if self.args.tie_word_embeddings:
-            return self.model.embed_tokens.as_linear(out)
-        return self.lm_head(out)
+        h = self.model(input_ids, cache=cache)
+        if self.tie_word_embeddings:
+            return h @ self.model.embed_tokens.weight.T
+        return self.lm_head(h)
 
     @property
     def num_layers(self) -> int:
@@ -224,14 +198,11 @@ class Model(nn.Module):
         return self.args.vocab_size
 
     def make_cache(self) -> list[KVCache]:
-        return [KVCache() for _ in self.model.layers]
+        return [KVCache() for _ in range(len(self.model.layers))]
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        weights = {k: v for k, v in weights.items() if "self_attn.rotary_emb.inv_freq" not in k}
-        if self.args.tie_word_embeddings:
-            weights.pop("lm_head.weight", None)
+        if self.tie_word_embeddings:
+            out = dict(weights)
+            out.pop("lm_head.weight", None)
+            return out
         return weights
-
-    @property
-    def layers(self) -> list[TransformerBlock]:
-        return self.model.layers

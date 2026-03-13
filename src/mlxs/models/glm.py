@@ -1,7 +1,7 @@
-"""Llama model architecture — Llama 3.x / 4.x (§7.1 Phase 1).
+"""Base GLM model — port from mlx_lm (mlx_lm/models/glm.py), ModelProtocol-compliant.
 
-Implements ModelProtocol. Compatible with mlx_lm-converted weights.
-Supports GQA, RoPE (with scaling), SwiGLU, and sliding window attention.
+Dense decoder-only: RMSNorm, SwiGLU MLP, full RoPE. Not GLM-4 (see glm4.py).
+Imports only from mlxs.cache, mlxs.layers, mlxs.models.base.
 """
 
 from __future__ import annotations
@@ -22,36 +22,29 @@ from mlxs.models.base import BaseModelArgs
 
 @dataclass
 class ModelArgs(BaseModelArgs):
-    """Llama model configuration (§7.2)."""
+    """Base GLM config (config.json)."""
 
-    model_type: str = "llama"
-    hidden_size: int = 4096
-    num_hidden_layers: int = 32
-    intermediate_size: int = 11008
-    num_attention_heads: int = 32
+    model_type: str = "glm"
+    hidden_size: int = 2048
+    num_hidden_layers: int = 24
+    intermediate_size: int = 8192
+    num_attention_heads: int = 16
     rms_norm_eps: float = 1e-6
-    vocab_size: int = 32000
+    vocab_size: int = 130528
     head_dim: int | None = None
-    max_position_embeddings: int | None = None
     num_key_value_heads: int | None = None
+    max_position_embeddings: int | None = None
     attention_bias: bool = False
-    mlp_bias: bool = False
     rope_theta: float = 10000.0
-    rope_traditional: bool = False
-    rope_scaling: dict[str, float | str] | None = None
     tie_word_embeddings: bool = True
-    layer_types: list[str] | None = None
-    sliding_window: int | None = None
 
     def __post_init__(self) -> None:
         if self.num_key_value_heads is None:
             self.num_key_value_heads = self.num_attention_heads
-        if self.layer_types is None:
-            self.layer_types = ["full_attention"] * self.num_hidden_layers
 
 
-class Attention(nn.Module):
-    """Multi-head attention with GQA and RoPE."""
+class GLMAttention(nn.Module):
+    """Multi-head attention with full RoPE (traditional)."""
 
     def __init__(self, args: ModelArgs) -> None:
         super().__init__()
@@ -65,13 +58,13 @@ class Attention(nn.Module):
         self.q_proj = nn.Linear(dim, self.n_heads * self.head_dim, bias=bias)
         self.k_proj = nn.Linear(dim, self.n_kv_heads * self.head_dim, bias=bias)
         self.v_proj = nn.Linear(dim, self.n_kv_heads * self.head_dim, bias=bias)
-        self.o_proj = nn.Linear(self.n_heads * self.head_dim, dim, bias=bias)
+        self.o_proj = nn.Linear(self.n_heads * self.head_dim, dim, bias=False)
 
         self.rope = initialize_rope(
             self.head_dim,
             base=args.rope_theta,
-            traditional=args.rope_traditional,
-            scaling_config=args.rope_scaling,
+            traditional=True,
+            scaling_config=None,
             max_position_embeddings=args.max_position_embeddings,
         )
 
@@ -96,40 +89,32 @@ class Attention(nn.Module):
             keys = self.rope(keys)
 
         output = scaled_dot_product_attention(
-            queries,
-            keys,
-            values,
-            cache=cache,
-            scale=self.scale,
-            mask=mask,
+            queries, keys, values, cache=cache, scale=self.scale, mask=mask
         )
         return self.o_proj(output.transpose(0, 2, 1, 3).reshape(B, L, -1))
 
 
-class MLP(nn.Module):
-    """SwiGLU MLP."""
+class GLMMLP(nn.Module):
+    """SwiGLU MLP with combined gate_up projection."""
 
     def __init__(self, args: ModelArgs) -> None:
         super().__init__()
-        dim = args.hidden_size
-        hidden = args.intermediate_size
-        bias = args.mlp_bias
-        self.gate_proj = nn.Linear(dim, hidden, bias=bias)
-        self.down_proj = nn.Linear(hidden, dim, bias=bias)
-        self.up_proj = nn.Linear(dim, hidden, bias=bias)
+        self.gate_up_proj = nn.Linear(args.hidden_size, 2 * args.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(args.intermediate_size, args.hidden_size, bias=False)
 
     def __call__(self, x: mx.array) -> mx.array:
-        return self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))
+        x = self.gate_up_proj(x)
+        gate, up = mx.split(x, 2, axis=-1)
+        return self.down_proj(swiglu(gate, up))
 
 
-class TransformerBlock(nn.Module):
-    """Pre-norm transformer block with residual connections."""
+class GLMBlock(nn.Module):
+    """Pre-norm block: input norm → attention → residual, post_attn norm → MLP → residual."""
 
-    def __init__(self, args: ModelArgs, use_sliding: bool = False) -> None:
+    def __init__(self, args: ModelArgs) -> None:
         super().__init__()
-        self.use_sliding = use_sliding
-        self.self_attn = Attention(args)
-        self.mlp = MLP(args)
+        self.self_attn = GLMAttention(args)
+        self.mlp = GLMMLP(args)
         self.input_layernorm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
         self.post_attention_layernorm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
@@ -143,74 +128,52 @@ class TransformerBlock(nn.Module):
         return h + self.mlp(self.post_attention_layernorm(h))
 
 
-class LlamaModel(nn.Module):
-    """Llama transformer backbone."""
+class GLMModel(nn.Module):
+    """Base GLM transformer: embed, decoder layers, final norm."""
 
     def __init__(self, args: ModelArgs) -> None:
         super().__init__()
-        self.args = args
-        self.vocab_size = args.vocab_size
-        self.sliding_window = args.sliding_window
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
-        self.layers = [
-            TransformerBlock(args, use_sliding=(lt == "sliding_attention"))
-            for lt in args.layer_types
-        ]
+        self.layers = [GLMBlock(args=args) for _ in range(args.num_hidden_layers)]
         self.norm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
-        # Find indices for mask creation
-        self._fa_idx = args.layer_types.index("full_attention")
-        self._swa_idx: int | None = None
-        for i, layer in enumerate(self.layers):
-            if layer.use_sliding:
-                self._swa_idx = i
-                break
 
     def __call__(
         self,
         inputs: mx.array,
         cache: list[KVCache] | None = None,
-        input_embeddings: mx.array | None = None,
     ) -> mx.array:
-        h = (
-            input_embeddings
-            if input_embeddings is not None
-            else self.embed_tokens(inputs)
-        )
+        h = self.embed_tokens(inputs)
+
         if cache is None:
             cache = [None] * len(self.layers)  # type: ignore[list-item]
 
-        fa_mask = create_attention_mask(h, cache[self._fa_idx])
-        swa_mask = None
-        if self._swa_idx is not None:
-            swa_mask = create_attention_mask(
-                h, cache[self._swa_idx], window_size=self.sliding_window
-            )
+        mask = create_attention_mask(h, cache[0])
 
         for layer, c in zip(self.layers, cache, strict=True):
-            mask = swa_mask if layer.use_sliding else fa_mask
             h = layer(h, mask, cache=c)
+
         return self.norm(h)
 
 
 class Model(nn.Module):
-    """Llama LM head wrapper — satisfies ModelProtocol (§7.3, AC17)."""
+    """Base GLM LM head wrapper — satisfies ModelProtocol."""
 
     def __init__(self, args: ModelArgs) -> None:
         super().__init__()
         self.args = args
         self.model_type = args.model_type
-        self.model = LlamaModel(args)
+        self.model = GLMModel(args)
         if not args.tie_word_embeddings:
             self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
 
     def __call__(
         self,
-        inputs: mx.array,
+        input_ids: mx.array,
+        *,
         cache: list[KVCache] | None = None,
-        input_embeddings: mx.array | None = None,
-        **_kwargs: Any,
+        mask: mx.array | None = None,
     ) -> mx.array:
-        out = self.model(inputs, cache, input_embeddings=input_embeddings)
+        out = self.model(input_ids, cache=cache)
         if self.args.tie_word_embeddings:
             return self.model.embed_tokens.as_linear(out)
         return self.lm_head(out)
@@ -231,7 +194,3 @@ class Model(nn.Module):
         if self.args.tie_word_embeddings:
             weights.pop("lm_head.weight", None)
         return weights
-
-    @property
-    def layers(self) -> list[TransformerBlock]:
-        return self.model.layers

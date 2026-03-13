@@ -1,4 +1,9 @@
-"""Shared normalization layers used by multiple model architectures."""
+"""Shared normalization layers used by multiple model architectures.
+
+Only norms used by more than one model belong here. Model-specific norms
+(e.g. LayerNorm1P for Nemotron, LayerNormNoAffine for OLMo) live in the
+respective model module to keep SRP: one reason to change per norm.
+"""
 
 from __future__ import annotations
 
