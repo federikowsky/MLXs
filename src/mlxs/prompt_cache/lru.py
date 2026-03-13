@@ -34,16 +34,17 @@ class _CacheEntry:
 class _PrefixTrie:
     """Trie for longest-prefix lookup of token sequences.
 
-    Each node stores an optional entry key (the full prefix tuple).
-    Lookup walks the trie as far as possible and returns the deepest
-    node with a stored key.
+    Each node stores a dict of model_id → entry_key to support
+    multiple models sharing the same token prefix. Lookup walks the
+    trie and returns the deepest node with a stored key for the
+    requested model_id.
     """
 
-    __slots__ = ("children", "entry_key")
+    __slots__ = ("children", "entry_keys")
 
     def __init__(self) -> None:
         self.children: dict[int, _PrefixTrie] = {}
-        self.entry_key: tuple[str, tuple[int, ...]] | None = None
+        self.entry_keys: dict[str, tuple[str, tuple[int, ...]]] = {}
 
     def insert(self, model_id: str, tokens: tuple[int, ...]) -> None:
         node = self
@@ -51,7 +52,7 @@ class _PrefixTrie:
             if token not in node.children:
                 node.children[token] = _PrefixTrie()
             node = node.children[token]
-        node.entry_key = (model_id, tokens)
+        node.entry_keys[model_id] = (model_id, tokens)
 
     def longest_prefix(
         self, model_id: str, tokens: tuple[int, ...]
@@ -69,20 +70,20 @@ class _PrefixTrie:
             if token not in node.children:
                 break
             node = node.children[token]
-            if node.entry_key is not None and node.entry_key[0] == model_id:
-                best_key = node.entry_key
+            if model_id in node.entry_keys:
+                best_key = node.entry_keys[model_id]
                 best_len = i + 1
 
         return best_key, best_len
 
-    def remove(self, tokens: tuple[int, ...]) -> None:
-        """Remove an entry from the trie (best-effort, doesn't prune empty nodes)."""
+    def remove(self, model_id: str, tokens: tuple[int, ...]) -> None:
+        """Remove an entry for a specific model from the trie."""
         node = self
         for token in tokens:
             if token not in node.children:
                 return
             node = node.children[token]
-        node.entry_key = None
+        node.entry_keys.pop(model_id, None)
 
 
 class LRUPromptCache:
@@ -226,7 +227,7 @@ class LRUPromptCache:
         if not self._entries:
             return
         _key, entry = self._entries.popitem(last=False)
-        self._trie.remove(entry.prefix_tokens)
+        self._trie.remove(entry.model_id, entry.prefix_tokens)
         self._total_bytes -= entry.size_bytes
         self._eviction_count += 1
         logger.debug(
