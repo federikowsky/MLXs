@@ -14,12 +14,45 @@ from typing import Any
 # Registry: model_type string → (module_path, Model class name, ModelArgs class name)
 # Lazy imports to avoid loading all model code at startup.
 MODEL_REGISTRY: dict[str, tuple[str, str, str]] = {
+    "cohere": ("mlxs.models.cohere", "Model", "ModelArgs"),
+    "cohere2": ("mlxs.models.cohere2", "Model", "ModelArgs"),
+    "dbrx": ("mlxs.models.dbrx", "Model", "ModelArgs"),
+    "deepseek": ("mlxs.models.deepseek", "Model", "ModelArgs"),
+    "falcon_h1": ("mlxs.models.falcon_h1", "Model", "ModelArgs"),
+    "deepseek_v2": ("mlxs.models.deepseek_v2", "Model", "ModelArgs"),
+    "deepseek_v3": ("mlxs.models.deepseek_v3", "Model", "ModelArgs"),
+    "gemma": ("mlxs.models.gemma", "Model", "ModelArgs"),
+    "gemma2": ("mlxs.models.gemma2", "Model", "ModelArgs"),
+    "granite": ("mlxs.models.granite", "Model", "ModelArgs"),
+    "granitemoe": ("mlxs.models.granitemoe", "Model", "ModelArgs"),
+    "gpt2": ("mlxs.models.gpt2", "Model", "ModelArgs"),
+    "gpt_bigcode": ("mlxs.models.gpt_bigcode", "Model", "ModelArgs"),
+    "gpt_neox": ("mlxs.models.gpt_neox", "Model", "ModelArgs"),
+    "internlm2": ("mlxs.models.internlm2", "Model", "ModelArgs"),
     "llama": ("mlxs.models.llama", "Model", "ModelArgs"),
+    "mamba": ("mlxs.models.mamba", "Model", "ModelArgs"),
+    "mamba2": ("mlxs.models.mamba2", "Model", "ModelArgs"),
+    "minicpm": ("mlxs.models.minicpm", "Model", "ModelArgs"),
+    "mixtral": ("mlxs.models.mixtral", "Model", "ModelArgs"),
+    "olmoe": ("mlxs.models.olmoe", "Model", "ModelArgs"),
+    "openelm": ("mlxs.models.openelm", "Model", "ModelArgs"),
+    "phi": ("mlxs.models.phi", "Model", "ModelArgs"),
+    "phi3": ("mlxs.models.phi3", "Model", "ModelArgs"),
+    "phimoe": ("mlxs.models.phimoe", "Model", "ModelArgs"),
     "qwen2": ("mlxs.models.qwen", "Model", "ModelArgs"),
+    "qwen2_moe": ("mlxs.models.qwen2_moe", "Model", "ModelArgs"),
+    "qwen3": ("mlxs.models.qwen3", "Model", "ModelArgs"),
+    "qwen3_moe": ("mlxs.models.qwen3_moe", "Model", "ModelArgs"),
+    "stablelm": ("mlxs.models.stablelm", "Model", "ModelArgs"),
+    "starcoder2": ("mlxs.models.starcoder2", "Model", "ModelArgs"),
 }
 
-# Aliases for common model types that use existing architectures
+# Aliases for config.json model_type that map to existing architectures (mlx_lm-compatible)
 _MODEL_REMAPPING: dict[str, str] = {
+    "falcon_mamba": "mamba",
+    "iquestcoder": "llama",
+    "joyai_llm_flash": "deepseek_v3",
+    "kimi_k2": "deepseek_v3",
     "mistral": "llama",
     "qwen3": "qwen2",  # Qwen3 dense uses same architecture as Qwen2
 }

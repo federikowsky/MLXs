@@ -112,6 +112,42 @@ class Llama3RoPE(nn.Module):
         )
 
 
+class DynamicNTKScalingRoPE(nn.Module):
+    """RoPE with Dynamic NTK scaling (InternLM2-style)."""
+
+    def __init__(
+        self,
+        dims: int,
+        max_position_embeddings: int = 2048,
+        traditional: bool = False,
+        base: float = 10000,
+        scale: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.max_position_embeddings = max_position_embeddings
+        self.original_base = base
+        self.dims = dims
+        self.traditional = traditional
+        self.scale = scale
+
+    def __call__(self, x: mx.array, offset: int = 0) -> mx.array:
+        seq_len = x.shape[1] + offset
+        if seq_len > self.max_position_embeddings:
+            base = self.original_base * (
+                (self.scale * seq_len / self.max_position_embeddings) - (self.scale - 1)
+            ) ** (self.dims / (self.dims - 2))
+        else:
+            base = self.original_base
+        return mx.fast.rope(
+            x,
+            self.dims,
+            traditional=self.traditional,
+            base=base,
+            scale=self.scale,
+            offset=offset,
+        )
+
+
 class YarnRoPE(nn.Module):
     """Yarn RoPE — supports yarn, deepseek_yarn, telechat3-yarn."""
 
@@ -249,5 +285,16 @@ def initialize_rope(
 
     if rope_type == "mrope":
         return nn.RoPE(dims, traditional=traditional, base=base)
+
+    if rope_type == "dynamic":
+        scale = scaling_config.get("factor", 2.0)
+        scale = 1 / scale if isinstance(scale, (int, float)) and scale > 1 else 2.0
+        return DynamicNTKScalingRoPE(
+            dims=dims,
+            max_position_embeddings=max_position_embeddings or 32768,
+            traditional=traditional,
+            base=base,
+            scale=scale,
+        )
 
     raise ValueError(f"Unsupported RoPE type: {rope_type}")

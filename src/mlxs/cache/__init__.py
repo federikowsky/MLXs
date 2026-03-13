@@ -1,17 +1,27 @@
 """KV cache module — cache types and factory (§6.2, §9, AC4).
 
-Provides three cache implementations:
+Provides:
 - KVCache: Full-precision, unbounded, chunked pre-allocation.
 - QuantizedKVCache: Reduced memory via quantization.
 - RotatingKVCache: Bounded size with circular rotation.
+- ArraysCache: State arrays for SSM/recurrent models (Mamba, etc.).
+- CacheList: Wrapper of multiple caches per layer (Falcon-H1, Jamba).
 """
 
 from mlxs.cache.arrays import ArraysCache
+from mlxs.cache.cache_list import CacheList
 from mlxs.cache.kv import KVCache
 from mlxs.cache.quantized import QuantizedKVCache
 from mlxs.cache.rotating import RotatingKVCache
 
-__all__ = ["ArraysCache", "KVCache", "QuantizedKVCache", "RotatingKVCache", "create_cache"]
+__all__ = [
+    "ArraysCache",
+    "CacheList",
+    "KVCache",
+    "QuantizedKVCache",
+    "RotatingKVCache",
+    "create_cache",
+]
 
 
 def create_cache(
