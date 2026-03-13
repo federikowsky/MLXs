@@ -18,6 +18,12 @@ def swiglu(gate: mx.array, x: mx.array) -> mx.array:
 
 
 @partial(mx.compile, shapeless=True)
+def relu_squared(x: mx.array) -> mx.array:
+    """ReLU squared: relu(x)^2. Used by Nemotron MLP."""
+    return nn.relu(x).square()
+
+
+@partial(mx.compile, shapeless=True)
 def xielu(
     x: mx.array,
     alpha_p: mx.array,

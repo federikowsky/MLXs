@@ -18,6 +18,7 @@ import mlx.nn as nn
 from mlxs.cache.attention_mask import create_attention_mask
 from mlxs.cache.kv import KVCache
 from mlxs.layers.attention import scaled_dot_product_attention
+from mlxs.layers.norms import GemmaRMSNorm
 from mlxs.models.base import BaseModelArgs
 
 
@@ -36,18 +37,6 @@ class ModelArgs(BaseModelArgs):
     num_key_value_heads: int = 16
     rope_theta: float = 10000.0
     rope_traditional: bool = False
-
-
-class RMSNorm(nn.Module):
-    """Gemma-style RMSNorm: applies (1 + weight) scaling."""
-
-    def __init__(self, dims: int, eps: float = 1e-5) -> None:
-        super().__init__()
-        self.weight = mx.ones((dims,))
-        self.eps = eps
-
-    def __call__(self, x: mx.array) -> mx.array:
-        return mx.fast.rms_norm(x, 1.0 + self.weight, self.eps)
 
 
 class Attention(nn.Module):
@@ -123,8 +112,8 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.self_attn = Attention(args)
         self.mlp = MLP(args.hidden_size, args.intermediate_size)
-        self.input_layernorm = RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.input_layernorm = GemmaRMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.post_attention_layernorm = GemmaRMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
     def __call__(
         self,
@@ -144,10 +133,8 @@ class GemmaModel(nn.Module):
         self.args = args
         self.vocab_size = args.vocab_size
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
-        self.layers = [
-            TransformerBlock(args) for _ in range(args.num_hidden_layers)
-        ]
-        self.norm = RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.layers = [TransformerBlock(args) for _ in range(args.num_hidden_layers)]
+        self.norm = GemmaRMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
     def __call__(
         self,
@@ -201,11 +188,7 @@ class Model(nn.Module):
         return [KVCache() for _ in self.model.layers]
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        return {
-            k: v
-            for k, v in weights.items()
-            if "self_attn.rotary_emb.inv_freq" not in k
-        }
+        return {k: v for k, v in weights.items() if "self_attn.rotary_emb.inv_freq" not in k}
 
     @property
     def layers(self) -> list[TransformerBlock]:

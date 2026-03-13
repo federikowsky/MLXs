@@ -19,19 +19,8 @@ from mlxs.cache.kv import KVCache
 from mlxs.layers.activations import swiglu
 from mlxs.layers.attention import scaled_dot_product_attention
 from mlxs.layers.moe import SwitchGLU
-from mlxs.layers.rope import initialize_rope
+from mlxs.layers.rope import YarnRoPE, initialize_rope
 from mlxs.models.base import BaseModelArgs
-
-
-# ---------------------------------------------------------------------------
-# Yarn helpers (DeepSeek V2 uses its own YarnRoPE variant inline)
-# ---------------------------------------------------------------------------
-
-def _yarn_get_mscale(scale: float = 1.0, mscale: float = 1.0) -> float:
-    if scale <= 1:
-        return 1.0
-    return 0.1 * mscale * math.log(scale) + 1.0
-
 
 # ---------------------------------------------------------------------------
 # Config
@@ -68,68 +57,6 @@ class ModelArgs(BaseModelArgs):
     rope_theta: float = 10000.0
     rope_scaling: dict[str, Any] | None = None
     attention_bias: bool = False
-
-
-# ---------------------------------------------------------------------------
-# DeepSeek V2 YarnRoPE (custom variant with mscale normalization)
-# ---------------------------------------------------------------------------
-
-class DeepseekV2YarnRotaryEmbedding(nn.Module):
-    """Yarn RoPE variant used by DeepSeek V2 attention."""
-
-    def __init__(
-        self,
-        dim: int,
-        max_position_embeddings: int = 2048,
-        base: float = 10000.0,
-        scaling_factor: float = 1.0,
-        original_max_position_embeddings: int = 4096,
-        beta_fast: int = 32,
-        beta_slow: int = 1,
-        mscale: float = 1.0,
-        mscale_all_dim: float = 0.0,
-    ) -> None:
-        super().__init__()
-        self.mscale = _yarn_get_mscale(scaling_factor, mscale) / _yarn_get_mscale(
-            scaling_factor, mscale_all_dim
-        )
-
-        def _find_correction_dim(num_rotations: float) -> float:
-            return (
-                dim * math.log(original_max_position_embeddings / (num_rotations * 2 * math.pi))
-            ) / (2 * math.log(base))
-
-        def _find_correction_range() -> tuple[int, int]:
-            low = math.floor(_find_correction_dim(beta_fast))
-            high = math.ceil(_find_correction_dim(beta_slow))
-            return max(low, 0), min(high, dim - 1)
-
-        def _linear_ramp_mask(min_val: int, max_val: int, d: int) -> mx.array:
-            if min_val == max_val:
-                max_val += 0.001
-            linear_func = (mx.arange(d, dtype=mx.float32) - min_val) / (max_val - min_val)
-            return mx.clip(linear_func, 0, 1)
-
-        freq_extra = base ** (mx.arange(0, dim, 2, dtype=mx.float32) / dim)
-        freq_inter = scaling_factor * base ** (mx.arange(0, dim, 2, dtype=mx.float32) / dim)
-        low, high = _find_correction_range()
-        freq_mask = 1.0 - _linear_ramp_mask(low, high, dim // 2)
-        self._freqs = (freq_inter * freq_extra) / (
-            freq_inter * freq_mask + freq_extra * (1 - freq_mask)
-        )
-
-    def __call__(self, x: mx.array, offset: int = 0) -> mx.array:
-        if self.mscale != 1.0:
-            x = self.mscale * x
-        return mx.fast.rope(
-            x,
-            x.shape[-1],
-            traditional=True,
-            base=None,
-            scale=1.0,
-            offset=offset,
-            freqs=self._freqs,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -185,12 +112,16 @@ class DeepseekV2Attention(nn.Module):
             bias=args.attention_bias,
         )
 
-        # Build RoPE with mscale adjustment
+        # Build RoPE
         if args.rope_scaling is not None:
             mscale_all_dim = args.rope_scaling.get("mscale_all_dim", 0)
             scaling_factor = args.rope_scaling["factor"]
             if mscale_all_dim:
-                mscale = _yarn_get_mscale(scaling_factor, mscale_all_dim)
+                mscale = (
+                    0.1 * mscale_all_dim * math.log(scaling_factor) + 1.0
+                    if scaling_factor > 1
+                    else 1.0
+                )
                 self.scale = self.scale * mscale * mscale
 
             rope_kwargs = {
@@ -204,11 +135,12 @@ class DeepseekV2Attention(nn.Module):
                 ]
                 if key in args.rope_scaling
             }
-            self.rope = DeepseekV2YarnRotaryEmbedding(
-                dim=self.qk_rope_head_dim,
+            self.rope = YarnRoPE(
+                dims=self.qk_rope_head_dim,
+                traditional=True,
                 max_position_embeddings=self.max_position_embeddings,
-                scaling_factor=scaling_factor,
                 base=self.rope_theta,
+                scaling_factor=scaling_factor,
                 **rope_kwargs,
             )
         else:
@@ -443,8 +375,8 @@ class Model(nn.Module):
         return [KVCache() for _ in self.model.layers]
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        for l in range(self.args.num_hidden_layers):
-            prefix = f"model.layers.{l}"
+        for layer_idx in range(self.args.num_hidden_layers):
+            prefix = f"model.layers.{layer_idx}"
             for m in ["gate_proj", "down_proj", "up_proj"]:
                 for k in ["weight", "scales", "biases"]:
                     if f"{prefix}.mlp.experts.0.{m}.{k}" in weights:

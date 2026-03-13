@@ -10,7 +10,9 @@ from mlxs.layers.attention import (
 )
 from mlxs.layers.mla import MultiLinear, QuantizedMultiLinear
 from mlxs.layers.moe import SwitchGLU, SwitchLinear, SwitchMLP
+from mlxs.layers.norms import GemmaRMSNorm
 from mlxs.layers.rope import (
+    DynamicNTKScalingRoPE,
     Llama3RoPE,
     SuScaledRoPE,
     YarnRoPE,
@@ -24,6 +26,8 @@ from mlxs.layers.ssm import (
 )
 
 __all__ = [
+    "DynamicNTKScalingRoPE",
+    "GemmaRMSNorm",
     "Llama3RoPE",
     "MultiLinear",
     "QuantizedMultiLinear",

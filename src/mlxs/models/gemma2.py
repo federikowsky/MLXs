@@ -24,6 +24,7 @@ import mlx.nn as nn
 
 from mlxs.cache.attention_mask import create_attention_mask
 from mlxs.cache.kv import KVCache
+from mlxs.layers.norms import GemmaRMSNorm
 from mlxs.models.base import BaseModelArgs
 
 
@@ -45,18 +46,6 @@ class ModelArgs(BaseModelArgs):
     attn_logit_softcapping: float = 50.0
     final_logit_softcapping: float = 30.0
     query_pre_attn_scalar: float = 144.0
-
-
-class RMSNorm(nn.Module):
-    """Gemma-style RMSNorm: applies (1 + weight) scaling."""
-
-    def __init__(self, dims: int, eps: float = 1e-5) -> None:
-        super().__init__()
-        self.weight = mx.ones((dims,))
-        self.eps = eps
-
-    def __call__(self, x: mx.array) -> mx.array:
-        return mx.fast.rms_norm(x, 1.0 + self.weight, self.eps)
 
 
 class Attention(nn.Module):
@@ -112,9 +101,7 @@ class Attention(nn.Module):
 
         # Manual SDPA with soft-capping (cannot use fused kernel).
         if self.repeats > 1:
-            queries = queries.reshape(
-                B, self.n_kv_heads, self.repeats, L, self.head_dim
-            )
+            queries = queries.reshape(B, self.n_kv_heads, self.repeats, L, self.head_dim)
             keys = mx.expand_dims(keys, 2)
             values = mx.expand_dims(values, 2)
 
@@ -165,14 +152,10 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.self_attn = Attention(args)
         self.mlp = MLP(args.hidden_size, args.intermediate_size)
-        self.input_layernorm = RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
-        self.pre_feedforward_layernorm = RMSNorm(
-            args.hidden_size, eps=args.rms_norm_eps
-        )
-        self.post_feedforward_layernorm = RMSNorm(
-            args.hidden_size, eps=args.rms_norm_eps
-        )
+        self.input_layernorm = GemmaRMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.post_attention_layernorm = GemmaRMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.pre_feedforward_layernorm = GemmaRMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.post_feedforward_layernorm = GemmaRMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
     def __call__(
         self,
@@ -194,10 +177,8 @@ class Gemma2Model(nn.Module):
         self.args = args
         self.vocab_size = args.vocab_size
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
-        self.layers = [
-            TransformerBlock(args) for _ in range(args.num_hidden_layers)
-        ]
-        self.norm = RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.layers = [TransformerBlock(args) for _ in range(args.num_hidden_layers)]
+        self.norm = GemmaRMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
     def __call__(
         self,
@@ -256,11 +237,7 @@ class Model(nn.Module):
         return [KVCache() for _ in self.model.layers]
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        return {
-            k: v
-            for k, v in weights.items()
-            if "self_attn.rotary_emb.inv_freq" not in k
-        }
+        return {k: v for k, v in weights.items() if "self_attn.rotary_emb.inv_freq" not in k}
 
     @property
     def layers(self) -> list[TransformerBlock]:
