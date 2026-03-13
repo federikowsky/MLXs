@@ -15,6 +15,8 @@ def create_causal_mask(
     n: int,
     offset: int = 0,
     window_size: int | None = None,
+    right_padding: mx.array | None = None,
+    left_padding: mx.array | None = None,
 ) -> mx.array:
     """Create a causal attention mask of shape ``(N, N + offset)``.
 
@@ -22,6 +24,8 @@ def create_causal_mask(
         n: Query sequence length.
         offset: Number of past tokens (from KV cache).
         window_size: Optional sliding window size.
+        right_padding: Per-batch right-padding lengths.
+        left_padding: Per-batch left-padding lengths.
 
     Returns:
         Boolean mask where ``mask[i, j] = True`` means position i attends to j.
@@ -33,6 +37,10 @@ def create_causal_mask(
     mask = linds >= rinds
     if window_size is not None:
         mask = mask & (linds < rinds + window_size)
+    if right_padding is not None:
+        mask = mask & (rinds < mx.expand_dims((offset + n) - right_padding, (1, 2, 3)))
+    if left_padding is not None:
+        mask = mask & (mx.expand_dims(left_padding, (1, 2, 3)) <= rinds)
     return mask
 
 

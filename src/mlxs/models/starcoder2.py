@@ -1,11 +1,7 @@
-"""Qwen2 / Qwen3 model architecture (§7.1 Phase 1, AC17).
+"""StarCoder2 model architecture.
 
 Implements ModelProtocol. Compatible with mlx_lm-converted weights.
-Supports GQA, RoPE, SwiGLU, and sliding window attention.
-
-Validates registry extensibility: this file + registry entry is all
-that's needed to add Qwen support. No changes to generate, cache,
-batch, or server.
+Supports GQA with RoPE and LayerNorm.
 """
 
 from __future__ import annotations
@@ -17,7 +13,6 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from mlxs.cache.kv import KVCache
-from mlxs.models.activations import swiglu
 from mlxs.models.base import (
     BaseModelArgs,
     create_attention_mask,
@@ -28,65 +23,40 @@ from mlxs.models.rope import initialize_rope
 
 @dataclass
 class ModelArgs(BaseModelArgs):
-    """Qwen2/3 model configuration (§7.2)."""
+    """StarCoder2 model configuration."""
 
-    model_type: str = "qwen2"
-    hidden_size: int = 4096
-    num_hidden_layers: int = 32
-    intermediate_size: int = 11008
-    num_attention_heads: int = 32
-    rms_norm_eps: float = 1e-6
-    vocab_size: int = 151936
-    head_dim: int | None = None
-    max_position_embeddings: int | None = None
-    num_key_value_heads: int | None = None
-    attention_bias: bool = True  # Qwen uses attention bias by default
-    mlp_bias: bool = False
-    rope_theta: float = 1000000.0
-    rope_traditional: bool = False
-    rope_scaling: dict[str, float | str] | None = None
-    tie_word_embeddings: bool = False  # Qwen2 typically doesn't tie
-    sliding_window: int | None = None
-    use_sliding_window: bool = False
-    max_window_layers: int = 0  # Layers that use sliding window (from bottom)
-
-    def __post_init__(self) -> None:
-        if self.num_key_value_heads is None:
-            self.num_key_value_heads = self.num_attention_heads
-        if self.head_dim is None:
-            self.head_dim = self.hidden_size // self.num_attention_heads
+    model_type: str = "starcoder2"
+    hidden_size: int = 3072
+    num_hidden_layers: int = 30
+    intermediate_size: int = 12288
+    num_attention_heads: int = 24
+    num_key_value_heads: int = 2
+    norm_epsilon: float = 1e-5
+    vocab_size: int = 49152
+    rope_theta: float = 100000.0
+    tie_word_embeddings: bool = True
 
 
 class Attention(nn.Module):
-    """Multi-head attention with GQA and RoPE for Qwen."""
+    """Multi-head attention with GQA and RoPE."""
 
-    def __init__(self, args: ModelArgs, layer_idx: int = 0) -> None:
+    def __init__(self, args: ModelArgs) -> None:
         super().__init__()
         dim = args.hidden_size
         self.n_heads = args.num_attention_heads
         self.n_kv_heads = args.num_key_value_heads
-        self.head_dim = args.head_dim
-        self.scale = self.head_dim**-0.5
-        bias = args.attention_bias
+        head_dim = dim // self.n_heads
+        self.scale = head_dim**-0.5
 
-        self.q_proj = nn.Linear(dim, self.n_heads * self.head_dim, bias=bias)
-        self.k_proj = nn.Linear(dim, self.n_kv_heads * self.head_dim, bias=bias)
-        self.v_proj = nn.Linear(dim, self.n_kv_heads * self.head_dim, bias=bias)
-        self.o_proj = nn.Linear(self.n_heads * self.head_dim, dim, bias=False)
-
-        # Sliding window for lower layers
-        self.use_sliding = (
-            args.use_sliding_window
-            and args.sliding_window is not None
-            and layer_idx < args.max_window_layers
-        )
-        self.sliding_window = args.sliding_window if self.use_sliding else None
+        self.q_proj = nn.Linear(dim, self.n_heads * head_dim, bias=True)
+        self.k_proj = nn.Linear(dim, self.n_kv_heads * head_dim, bias=True)
+        self.v_proj = nn.Linear(dim, self.n_kv_heads * head_dim, bias=True)
+        self.o_proj = nn.Linear(self.n_heads * head_dim, dim, bias=True)
 
         self.rope = initialize_rope(
-            self.head_dim,
+            head_dim,
             base=args.rope_theta,
-            traditional=args.rope_traditional,
-            scaling_config=args.rope_scaling,
+            traditional=False,
         )
 
     def __call__(
@@ -110,41 +80,34 @@ class Attention(nn.Module):
             keys = self.rope(keys)
 
         output = scaled_dot_product_attention(
-            queries,
-            keys,
-            values,
-            cache=cache,
-            scale=self.scale,
-            mask=mask,
+            queries, keys, values, cache=cache, scale=self.scale, mask=mask
         )
         return self.o_proj(output.transpose(0, 2, 1, 3).reshape(B, L, -1))
 
 
 class MLP(nn.Module):
-    """SwiGLU MLP for Qwen."""
+    """GELU MLP."""
 
-    def __init__(self, args: ModelArgs) -> None:
+    def __init__(self, dim: int, hidden_dim: int) -> None:
         super().__init__()
-        dim = args.hidden_size
-        hidden = args.intermediate_size
-        bias = args.mlp_bias
-        self.gate_proj = nn.Linear(dim, hidden, bias=bias)
-        self.down_proj = nn.Linear(hidden, dim, bias=bias)
-        self.up_proj = nn.Linear(dim, hidden, bias=bias)
+        self.c_fc = nn.Linear(dim, hidden_dim, bias=True)
+        self.c_proj = nn.Linear(hidden_dim, dim, bias=True)
 
     def __call__(self, x: mx.array) -> mx.array:
-        return self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))
+        return self.c_proj(nn.gelu(self.c_fc(x)))
 
 
 class TransformerBlock(nn.Module):
-    """Pre-norm transformer block for Qwen."""
+    """Pre-norm transformer block with residual connections."""
 
-    def __init__(self, args: ModelArgs, layer_idx: int = 0) -> None:
+    def __init__(self, args: ModelArgs) -> None:
         super().__init__()
-        self.self_attn = Attention(args, layer_idx=layer_idx)
-        self.mlp = MLP(args)
-        self.input_layernorm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
-        self.post_attention_layernorm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.self_attn = Attention(args)
+        self.mlp = MLP(args.hidden_size, args.intermediate_size)
+        self.input_layernorm = nn.LayerNorm(args.hidden_size, eps=args.norm_epsilon)
+        self.post_attention_layernorm = nn.LayerNorm(
+            args.hidden_size, eps=args.norm_epsilon
+        )
 
     def __call__(
         self,
@@ -156,16 +119,18 @@ class TransformerBlock(nn.Module):
         return h + self.mlp(self.post_attention_layernorm(h))
 
 
-class QwenModel(nn.Module):
-    """Qwen transformer backbone."""
+class Starcoder2Model(nn.Module):
+    """StarCoder2 transformer backbone."""
 
     def __init__(self, args: ModelArgs) -> None:
         super().__init__()
         self.args = args
         self.vocab_size = args.vocab_size
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
-        self.layers = [TransformerBlock(args, layer_idx=i) for i in range(args.num_hidden_layers)]
-        self.norm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.layers = [
+            TransformerBlock(args) for _ in range(args.num_hidden_layers)
+        ]
+        self.norm = nn.LayerNorm(args.hidden_size, eps=args.norm_epsilon)
 
     def __call__(
         self,
@@ -173,6 +138,7 @@ class QwenModel(nn.Module):
         cache: list[KVCache] | None = None,
     ) -> mx.array:
         h = self.embed_tokens(inputs)
+
         if cache is None:
             cache = [None] * len(self.layers)  # type: ignore[list-item]
 
@@ -180,17 +146,18 @@ class QwenModel(nn.Module):
 
         for layer, c in zip(self.layers, cache, strict=True):
             h = layer(h, mask, cache=c)
+
         return self.norm(h)
 
 
 class Model(nn.Module):
-    """Qwen LM head wrapper — satisfies ModelProtocol (§7.3, AC17)."""
+    """StarCoder2 LM head wrapper — satisfies ModelProtocol."""
 
     def __init__(self, args: ModelArgs) -> None:
         super().__init__()
         self.args = args
         self.model_type = args.model_type
-        self.model = QwenModel(args)
+        self.model = Starcoder2Model(args)
         if not args.tie_word_embeddings:
             self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
 
@@ -217,8 +184,6 @@ class Model(nn.Module):
         return [KVCache() for _ in self.model.layers]
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        # Remove rotary embedding inverse frequencies
-        weights = {k: v for k, v in weights.items() if "self_attn.rotary_emb.inv_freq" not in k}
         if self.args.tie_word_embeddings:
             weights.pop("lm_head.weight", None)
         return weights

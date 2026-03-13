@@ -6,11 +6,12 @@ Provides three cache implementations:
 - RotatingKVCache: Bounded size with circular rotation.
 """
 
+from mlxs.cache.arrays import ArraysCache
 from mlxs.cache.kv import KVCache
 from mlxs.cache.quantized import QuantizedKVCache
 from mlxs.cache.rotating import RotatingKVCache
 
-__all__ = ["KVCache", "QuantizedKVCache", "RotatingKVCache", "create_cache"]
+__all__ = ["ArraysCache", "KVCache", "QuantizedKVCache", "RotatingKVCache", "create_cache"]
 
 
 def create_cache(

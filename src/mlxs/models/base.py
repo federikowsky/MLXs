@@ -1,7 +1,8 @@
 """Shared model utilities — base classes and attention helpers.
 
-Provides BaseModelArgs for config deserialization and the
-scaled_dot_product_attention dispatcher used by all architectures.
+Provides BaseModelArgs for config deserialization, attention/SSM mask
+helpers, and the scaled_dot_product_attention dispatcher used by all
+architectures.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import mlx.core as mx
 from mlx.utils import tree_map
 
 from mlxs.cache.attention_mask import create_attention_mask as _create_mask
+from mlxs.cache.attention_mask import create_causal_mask  # noqa: F401 — re-export
 
 
 @dataclass
@@ -48,6 +50,16 @@ def create_attention_mask(
     if return_array or (window_size is not None and n > window_size):
         return _create_mask(n, return_array=True, window_size=window_size)
     return "causal"
+
+
+def create_ssm_mask(
+    h: mx.array,
+    cache: Any = None,
+) -> mx.array | None:
+    """Create SSM mask for state-space models (Mamba, Jamba, etc.)."""
+    if cache is not None and hasattr(cache, "make_mask"):
+        return cache.make_mask(h.shape[1])
+    return None
 
 
 def quantized_scaled_dot_product_attention(
@@ -99,9 +111,12 @@ def scaled_dot_product_attention(
     cache: Any,
     scale: float,
     mask: mx.array | str | None,
+    sinks: mx.array | None = None,
 ) -> mx.array:
     """Dispatch SDPA to quantized or standard path based on cache type."""
     if hasattr(cache, "bits"):
+        if sinks is not None:
+            raise ValueError("Quantized SDPA does not support attention sinks.")
         return quantized_scaled_dot_product_attention(
             queries,
             keys,
@@ -117,4 +132,5 @@ def scaled_dot_product_attention(
         values,
         scale=scale,
         mask=mask,
+        sinks=sinks,
     )
