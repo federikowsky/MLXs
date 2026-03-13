@@ -72,6 +72,8 @@ def _build_options(body: dict[str, Any]) -> GenerateOptions:
         seed=body.get("seed"),
         stop_sequences=tuple(body.get("stop", ())),
         stream=body.get("stream", False),
+        logprobs=body.get("logprobs", False),
+        top_logprobs=body.get("top_logprobs", 0),
     )
 
 

@@ -15,11 +15,13 @@ from typing import Any
 # Lazy imports to avoid loading all model code at startup.
 MODEL_REGISTRY: dict[str, tuple[str, str, str]] = {
     "llama": ("mlxs.models.llama", "Model", "ModelArgs"),
+    "qwen2": ("mlxs.models.qwen", "Model", "ModelArgs"),
 }
 
-# Aliases for common model types that use the Llama architecture
+# Aliases for common model types that use existing architectures
 _MODEL_REMAPPING: dict[str, str] = {
     "mistral": "llama",
+    "qwen3": "qwen2",  # Qwen3 dense uses same architecture as Qwen2
 }
 
 

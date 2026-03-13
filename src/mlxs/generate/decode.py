@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterator
 import mlx.core as mx
 import mlx.nn as nn
 
-from mlxs._types import GenerateOptions, TokenEvent
+from mlxs._types import GenerateOptions, TokenEvent, TokenLogprobs, TopLogprob
 from mlxs.cache.kv import KVCache
 from mlxs.generate.logits import LogitsProcessor
 from mlxs.generate.stop import StopCondition
@@ -56,6 +56,10 @@ def decode_loop(
     # Resolve forward function once (O2 — no per-token dispatch)
     _forward = forward_fn if forward_fn is not None else model
 
+    # Resolve logprobs config once (O2)
+    emit_logprobs = options.logprobs
+    n_top_logprobs = options.top_logprobs
+
     tokens_generated: list[int] = []
     logprobs = first_logits - mx.logsumexp(first_logits, keepdims=True)
     y = sampler(logprobs)
@@ -95,11 +99,34 @@ def decode_loop(
         # Check stop condition
         finish_reason = stop.check(token_id, text)
 
+        # Extract logprobs if requested (FR8)
+        token_logprobs_data = None
+        if emit_logprobs:
+            token_lp = logprobs[token_id].item()
+            top_lps: tuple[TopLogprob, ...] = ()
+            if n_top_logprobs > 0:
+                top_indices = mx.argpartition(logprobs, kth=-n_top_logprobs)[-n_top_logprobs:]
+                top_indices = top_indices[mx.argsort(logprobs[top_indices])[::-1]]
+                mx.eval(top_indices)
+                top_lps = tuple(
+                    TopLogprob(
+                        token_id=int(idx.item()),
+                        token=decoder(int(idx.item())),
+                        logprob=float(logprobs[idx].item()),
+                    )
+                    for idx in top_indices
+                )
+            token_logprobs_data = TokenLogprobs(
+                token_logprob=token_lp,
+                top_logprobs=top_lps,
+            )
+
         # Build and yield token event
         event = TokenEvent(
             token_id=token_id,
             text=text,
             finish_reason=finish_reason,
+            logprobs=token_logprobs_data,
             prompt_tokens=prompt_token_count,
             generation_tokens=n + 1,
         )

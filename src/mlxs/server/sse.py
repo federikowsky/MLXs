@@ -58,6 +58,21 @@ def _build_chunk(
         choice["finish_reason"] = event.finish_reason.name.lower()
         choice["delta"] = {}
 
+    # Include logprobs if present (FR8)
+    if event.logprobs is not None:
+        choice["logprobs"] = {
+            "content": [
+                {
+                    "token": event.text,
+                    "logprob": event.logprobs.token_logprob,
+                    "top_logprobs": [
+                        {"token": tlp.token, "logprob": tlp.logprob}
+                        for tlp in event.logprobs.top_logprobs
+                    ],
+                }
+            ],
+        }
+
     return {
         "id": request_id,
         "object": "chat.completion.chunk",
@@ -65,6 +80,24 @@ def _build_chunk(
         "model": model_id,
         "choices": [choice],
     }
+
+
+def _build_logprobs_for_response(events: list[TokenEvent]) -> dict[str, Any]:
+    """Build logprobs field for non-streaming response if any event has logprobs."""
+    logprobs_content = [
+        {
+            "token": e.text,
+            "logprob": e.logprobs.token_logprob,
+            "top_logprobs": [
+                {"token": tlp.token, "logprob": tlp.logprob} for tlp in e.logprobs.top_logprobs
+            ],
+        }
+        for e in events
+        if e.logprobs is not None
+    ]
+    if logprobs_content:
+        return {"logprobs": {"content": logprobs_content}}
+    return {}
 
 
 def build_completion_response(
@@ -92,6 +125,7 @@ def build_completion_response(
                 "index": 0,
                 "message": {"role": "assistant", "content": text},
                 "finish_reason": finish_reason.name.lower() if finish_reason else None,
+                **_build_logprobs_for_response(events),
             }
         ],
         "usage": {
