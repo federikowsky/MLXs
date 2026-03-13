@@ -30,6 +30,8 @@ def decode_loop(
     logits_processors: list[LogitsProcessor] | None = None,
     options: GenerateOptions,
     prompt_token_count: int,
+    forward_fn: Callable[..., mx.array] | None = None,
+    clear_cache_interval: int = 256,
 ) -> Iterator[TokenEvent]:
     """Run the decode loop, yielding TokenEvent per generated token.
 
@@ -43,10 +45,17 @@ def decode_loop(
         logits_processors: Optional logits processors.
         options: Generation options (for logprobs config).
         prompt_token_count: Number of prompt tokens (for TokenEvent metadata).
+        forward_fn: Optional compiled forward function. Falls back to model()
+            if None (AC12 fallback-safe).
+        clear_cache_interval: Steps between mx.clear_cache() calls (§6.8).
+            0 = disabled. Default: 256.
 
     Yields:
         TokenEvent for each generated token.
     """
+    # Resolve forward function once (O2 — no per-token dispatch)
+    _forward = forward_fn if forward_fn is not None else model
+
     tokens_generated: list[int] = []
     logprobs = first_logits - mx.logsumexp(first_logits, keepdims=True)
     y = sampler(logprobs)
@@ -58,7 +67,7 @@ def decode_loop(
     while True:
         # Start next step computation while we process current token
         if n < options.max_tokens - 1:
-            next_logits = model(y[None], cache=cache)
+            next_logits = _forward(y[None], cache=cache)
             next_logits = next_logits[:, -1, :]
 
             # Apply logits processors if any
@@ -99,14 +108,10 @@ def decode_loop(
         if finish_reason is not None:
             return
 
-        # Periodic cache cleanup
-        if n % 256 == 0:
+        # Periodic cache cleanup (§6.8)
+        if clear_cache_interval > 0 and n % clear_cache_interval == 0:
             mx.clear_cache()
 
         # Advance to next token
         y, logprobs = next_y, next_logprobs
         n += 1
-
-    # Should not reach here, but safety net
-    if stop.generated_count > 0:
-        return

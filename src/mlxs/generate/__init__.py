@@ -29,6 +29,8 @@ def generate(
     *,
     cache: list[KVCache] | None = None,
     prefill_step_size: int = 2048,
+    compile_decode: bool = False,
+    clear_cache_interval: int = 256,
 ) -> Iterator[TokenEvent]:
     """Generate tokens from a prompt (§6.1, FR3).
 
@@ -48,6 +50,10 @@ def generate(
         options: Generation parameters. Defaults to GenerateOptions().
         cache: Optional pre-populated KV cache (e.g. from prompt cache).
         prefill_step_size: Max tokens per prefill chunk.
+        compile_decode: If True, compile the model forward for decode (§6.8).
+            Falls back to uncompiled on failure (AC12).
+        clear_cache_interval: Steps between mx.clear_cache() calls.
+            0 = disabled. Default: 256.
 
     Yields:
         TokenEvent for each generated token. The last event has
@@ -94,6 +100,17 @@ def generate(
         extra_eos_token_ids=options.extra_eos_token_ids,
     )
 
+    # Build compiled forward if requested (§6.8, AC12 fallback-safe)
+    forward_fn = None
+    if compile_decode:
+        try:
+            from mlxs.generate.compile import make_compiled_step
+
+            forward_fn = make_compiled_step(model)
+        except Exception:
+            # Fallback to uncompiled (AC12)
+            forward_fn = None
+
     # Prefill: process prompt through model
     first_logits = chunked_prefill(
         model,
@@ -113,6 +130,8 @@ def generate(
         logits_processors=logits_processors or None,
         options=options,
         prompt_token_count=prompt_token_count,
+        forward_fn=forward_fn,
+        clear_cache_interval=clear_cache_interval,
     )
 
 
