@@ -33,6 +33,9 @@ def generate(
     prefill_step_size: int = 2048,
     compile_decode: bool = False,
     clear_cache_interval: int = 256,
+    quantized_kv_start: int = 0,
+    kv_bits: int | None = None,
+    kv_group_size: int = 64,
     final_cache_out: list[list[KVCache]] | None = None,
 ) -> Iterator[TokenEvent]:
     """Generate tokens from a prompt (§6.1, FR3).
@@ -154,6 +157,9 @@ def generate(
                 prompt_token_count=prompt_token_count,
                 forward_fn=forward_fn,
                 clear_cache_interval=clear_cache_interval,
+                quantized_kv_start=quantized_kv_start,
+                kv_bits=kv_bits,
+                kv_group_size=kv_group_size,
             )
         finally:
             if final_cache_out is not None:

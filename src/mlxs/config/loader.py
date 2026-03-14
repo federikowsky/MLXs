@@ -66,8 +66,16 @@ def resolve(
         _deep_merge(merged, cli_data)
 
     # Build and validate
+    # When strict_validation=False (default), ignore unknown keys (§8.1).
+    # When True, _Frozen's extra="forbid" raises on unknown keys.
+    strict = merged.get("strict_validation", False)
     try:
-        config = AppConfig(**merged)
+        if strict:
+            config = AppConfig(**merged)
+        else:
+            config = _build_lenient(merged)
+    except InvalidConfigError:
+        raise
     except Exception as exc:
         raise InvalidConfigError(f"Configuration validation failed: {exc}") from exc
 
@@ -143,6 +151,59 @@ def _set_nested(d: dict[str, Any], keys: list[str], value: Any) -> None:
     for key in keys[:-1]:
         d = d.setdefault(key, {})
     d[keys[-1]] = value
+
+
+def _build_lenient(merged: dict[str, Any]) -> AppConfig:
+    """Build AppConfig ignoring unknown keys (strict_validation=False, §8.1).
+
+    Strips unknown top-level and section-level keys before validation so that
+    _Frozen's extra="forbid" does not reject them.
+    """
+    from mlxs.config.schema import (
+        AppConfig,
+        BatchConfig,
+        CacheConfig,
+        GenerateConfig,
+        MemoryConfig,
+        ModelConfig,
+        ObservabilityConfig,
+        PromptCacheConfig,
+        ServerConfig,
+        SpeculativeConfig,
+        ToolCallingConfig,
+    )
+
+    section_models: dict[str, type] = {
+        "model": ModelConfig,
+        "generate": GenerateConfig,
+        "memory": MemoryConfig,
+        "cache": CacheConfig,
+        "prompt_cache": PromptCacheConfig,
+        "batch": BatchConfig,
+        "speculative": SpeculativeConfig,
+        "tool_calling": ToolCallingConfig,
+        "server": ServerConfig,
+        "observability": ObservabilityConfig,
+    }
+
+    cleaned: dict[str, Any] = {}
+    app_fields = set(AppConfig.model_fields)
+
+    for key, val in merged.items():
+        if key not in app_fields:
+            logger.debug("Ignoring unknown config key: %s", key)
+            continue
+        if key in section_models and isinstance(val, dict):
+            section_cls = section_models[key]
+            known = set(section_cls.model_fields)
+            cleaned[key] = {k: v for k, v in val.items() if k in known}
+            dropped = set(val) - known
+            for d in dropped:
+                logger.debug("Ignoring unknown config key: %s.%s", key, d)
+        else:
+            cleaned[key] = val
+
+    return AppConfig(**cleaned)
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> None:

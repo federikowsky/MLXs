@@ -41,3 +41,17 @@ def test_qwen3_5_forward() -> None:
     assert logits.shape == (B, T, args.vocab_size)
     assert model.num_layers == 2
     assert model.vocab_size == 256
+
+
+def test_qwen3_5_forward_with_input_embeddings() -> None:
+    """Precomputed embeddings can replace token embedding lookup."""
+    ModelCls, ArgsCls = get_model_classes("qwen3_5")
+    args = ArgsCls.from_dict(MINIMAL_QWEN3_5)
+    model = ModelCls(args)
+    cache = model.make_cache()
+    input_ids = mx.array([[1, 2, 3, 4]])
+    input_embeddings = mx.zeros((1, 4, args.hidden_size), dtype=mx.float32)
+
+    logits = model(input_ids, cache=cache, input_embeddings=input_embeddings)
+
+    assert logits.shape == (1, 4, args.vocab_size)

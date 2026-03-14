@@ -100,12 +100,12 @@ def _rewind_cache(cache: list[KVCache], keep_tokens: int) -> None:
         if hasattr(layer_cache, "rewind"):
             layer_cache.rewind(keep_tokens)
         elif layer_cache.offset > keep_tokens:
-            # Fallback: trim keys/values directly
-            trim = layer_cache.offset - keep_tokens
-            if layer_cache.keys is not None:
-                layer_cache.keys = layer_cache.keys[:, :, :-trim, :]
-                layer_cache.values = layer_cache.values[:, :, :-trim, :]
-                layer_cache.offset = keep_tokens
+            # Use trim(n) which is supported by KVCache, QuantizedKVCache (§6.5)
+            excess = layer_cache.offset - keep_tokens
+            if hasattr(layer_cache, "trim"):
+                layer_cache.trim(excess)
+            else:
+                layer_cache.reset()
 
 
 def speculative_generate(

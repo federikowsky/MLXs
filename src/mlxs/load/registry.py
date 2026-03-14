@@ -103,6 +103,7 @@ MODEL_REGISTRY: dict[str, tuple[str, str, str]] = {
     "qwen3": ("mlxs.models.qwen3", "Model", "ModelArgs"),
     "qwen3_5": ("mlxs.models.qwen3_5", "Model", "ModelArgs"),
     "qwen3_5_moe": ("mlxs.models.qwen3_5_moe", "Model", "ModelArgs"),
+    "qwen3_5_vl": ("mlxs.models.qwen3_5_vl", "Model", "ModelArgs"),
     "qwen3_moe": ("mlxs.models.qwen3_moe", "Model", "ModelArgs"),
     "qwen3_vl_moe": ("mlxs.models.qwen3_vl_moe", "Model", "ModelArgs"),
     "qwen3_next": ("mlxs.models.qwen3_next", "Model", "ModelArgs"),

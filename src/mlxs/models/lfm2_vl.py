@@ -14,8 +14,8 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from mlxs._types import ModelMode
-from mlxs.load.registry import get_model_classes
 from mlxs.models.base import BaseModelArgs
+from mlxs.models.lfm2 import Model as LFM2Model, ModelArgs as LFM2ModelArgs
 
 
 @dataclass
@@ -42,11 +42,10 @@ class Model(nn.Module):
         super().__init__()
         if args.text_config is None:
             raise ValueError("lfm2_vl requires text_config")
-        ModelCls, ArgsCls = get_model_classes("lfm2")
         self.args = args
         self.model_type = args.model_type
         self._mode = model_mode
-        self.language_model = ModelCls(ArgsCls.from_dict(args.text_config))
+        self.language_model = LFM2Model(LFM2ModelArgs.from_dict(args.text_config))
 
         if model_mode != ModelMode.TEXT and args.vision_config:
             from mlxs.models.vision.lfm2_vit import LFM2VisionConfig, LFM2VisionModel

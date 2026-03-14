@@ -16,6 +16,73 @@ from mlxs.config.schema import AppConfig
 
 _SENTINEL = object()
 
+# More space between option and description; bool pairs (--x/--no-x) on one line.
+_HELP_POSITION = 70
+
+
+class _CLIHelpFormatter(argparse.HelpFormatter):
+    """Wider help layout and single-line --flag / --no-flag for booleans."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("max_help_position", _HELP_POSITION)
+        super().__init__(*args, **kwargs)
+
+    def add_arguments(self, actions: list[argparse.Action]) -> None:
+        """Merge consecutive store_true/store_false (same dest) into one line."""
+        actions_list = list(actions)
+        i = 0
+        while i < len(actions_list):
+            act = actions_list[i]
+            next_act = actions_list[i + 1] if i + 1 < len(actions_list) else None
+            if (
+                next_act is not None
+                and type(act).__name__ == "_StoreTrueAction"
+                and type(next_act).__name__ == "_StoreFalseAction"
+                and getattr(act, "dest", None) == getattr(next_act, "dest", None)
+            ):
+                opts = ", ".join(act.option_strings + next_act.option_strings)
+                opts_plain = getattr(self, "_decolor", lambda s: s)(opts)
+                inv_len = len(opts_plain) + self._current_indent
+                self._action_max_length = max(self._action_max_length, inv_len)
+                self._add_item(self._format_merged_bool_pair, [act, next_act])
+                i += 2
+            else:
+                self.add_argument(act)
+                i += 1
+
+    def _format_merged_bool_pair(
+        self, action_true: argparse.Action, action_false: argparse.Action
+    ) -> str:
+        """Single line for --flag, --no-flag with shared help."""
+        help_position = min(
+            self._action_max_length + 2,
+            self._max_help_position,
+        )
+        help_width = max(self._width - help_position, 11)
+        action_width = help_position - self._current_indent - 2
+        opts = ", ".join(action_true.option_strings + action_false.option_strings)
+        opts_no_color = getattr(self, "_decolor", lambda s: s)(opts)
+        if len(opts_no_color) <= action_width:
+            action_header = (
+                " " * self._current_indent
+                + opts_no_color.ljust(action_width)
+                + "  "
+            )
+        else:
+            action_header = " " * self._current_indent + opts + "\n"
+        help_text = self._expand_help(action_true)
+        if help_text and help_text.strip():
+            help_lines = self._split_lines(help_text, help_width)
+            first_indent = 0 if len(opts_no_color) <= action_width else help_position
+            parts = [
+                action_header,
+                " " * first_indent + help_lines[0] + "\n",
+            ]
+            for line in help_lines[1:]:
+                parts.append(" " * help_position + line + "\n")
+            return self._join_parts(parts)
+        return self._join_parts([action_header, "\n"])
+
 # (flag_name, config_key, kind, default, help_text)
 # kind: str, int, float, bool, bool_false, choice, str_list, int_list
 _CLI_SPECS: list[tuple[str, str, str, Any, str]] = [
@@ -236,11 +303,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mlxs",
         description="MLXs inference server and interactive chat.",
+        formatter_class=_CLIHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="subcommand", required=True, help="Subcommand")
 
     for cmd in ("serve", "chat"):
-        sub = subparsers.add_parser(cmd, help=_subcommand_help(cmd))
+        sub = subparsers.add_parser(
+            cmd,
+            help=_subcommand_help(cmd),
+            formatter_class=_CLIHelpFormatter,
+        )
         if cmd == "chat":
             sub.description = (
                 "Run the docked chat shell by default or pass `QUERY` for one-shot mode."

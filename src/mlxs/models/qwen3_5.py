@@ -21,7 +21,6 @@ from mlxs.layers.gated_delta import gated_delta_update
 from mlxs.layers.rope import initialize_rope
 from mlxs.models.base import BaseModelArgs
 
-
 # ----- Model args -----
 
 
@@ -310,8 +309,9 @@ class Qwen35Model(nn.Module):
         self,
         inputs: mx.array,
         cache: list[KVCache | ArraysCache] | None = None,
+        input_embeddings: mx.array | None = None,
     ) -> mx.array:
-        h = self.embed_tokens(inputs)
+        h = input_embeddings if input_embeddings is not None else self.embed_tokens(inputs)
         if cache is None:
             cache = [None] * len(self.layers)  # type: ignore[list-item]
         fa_mask = create_attention_mask(h, cache[self._fa_idx])
@@ -337,9 +337,10 @@ class Model(nn.Module):
         self,
         inputs: mx.array,
         cache: list[KVCache | ArraysCache] | None = None,
+        input_embeddings: mx.array | None = None,
         **_kwargs: Any,
     ) -> mx.array:
-        out = self.model(inputs, cache)
+        out = self.model(inputs, cache, input_embeddings=input_embeddings)
         if self.args.tie_word_embeddings:
             return self.model.embed_tokens.as_linear(out)
         return self.lm_head(out)
@@ -376,10 +377,26 @@ class Model(nn.Module):
         for k, v in list(weights.items()):
             if "conv1d.weight" in k and v.shape[-1] != 1:
                 weights[k] = v.moveaxis(2, 1)
-            if should_shift_norm_weights and any(k.endswith(sfx) for sfx in norm_keys) and v.ndim == 1:
+            if (
+                should_shift_norm_weights
+                and any(k.endswith(sfx) for sfx in norm_keys)
+                and v.ndim == 1
+            ):
                 weights[k] = v + 1.0
         return weights
 
     @property
     def layers(self) -> list[DecoderLayer]:
         return self.model.layers
+
+
+__all__ = [
+    "MLP",
+    "Attention",
+    "DecoderLayer",
+    "GatedDeltaNet",
+    "Model",
+    "ModelArgs",
+    "Qwen35Model",
+    "RMSNormGated",
+]
