@@ -1,12 +1,15 @@
 """High-level model and tokenizer loading (FR1, FR11, AC10).
 
-Entry points for loading a complete model+tokenizer from a local path.
+Entry points for loading a complete model+tokenizer. model_path can be a local
+directory or a Hugging Face model id (resolved automatically). Supports multiple
+weight formats (safetensors, PARO, etc.) via formats registry.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -16,7 +19,26 @@ from mlxs.load.registry import get_model_classes
 from mlxs.load.tokenizer import TokenizerWrapper, load_hf_tokenizer
 from mlxs.load.weights import load_config, load_weights
 
+if TYPE_CHECKING:
+    from mlxs.config.schema import ModelConfig
+
 logger = logging.getLogger(__name__)
+
+
+def load_model_and_tokenizer(
+    model_path: str | Path,
+    model_config: ModelConfig,
+) -> tuple[nn.Module, TokenizerWrapper]:
+    """Load model and tokenizer according to config weight_format (FR1, §7.2).
+
+    model_path can be a local directory or a Hugging Face model id; it is
+    resolved once before format detection. Optional model_config.model_hf_revision
+    and model_config.model_hf_token control HF resolution. Dispatches to the
+    appropriate loader (safetensors, paro, etc.). Use from the composition root
+    when format-aware loading is desired.
+    """
+    from mlxs.load.formats import load_model_and_tokenizer as _load_by_format
+    return _load_by_format(model_path, model_config)
 
 
 def load_model(

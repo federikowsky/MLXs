@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from mlxs._types import MemoryCeilingPolicy, ModelMode, PaddingSide, StreamPolicy
+from mlxs._types import (
+    MemoryCeilingPolicy,
+    ModelMode,
+    PaddingSide,
+    StreamPolicy,
+    WeightFormat,
+)
 from mlxs.config.schema import (
     AppConfig,
     BatchConfig,
@@ -36,6 +42,9 @@ class TestAppConfigDefaults:
         assert m.lazy_load is True
         assert m.preload is False
         assert m.model_mode == ModelMode.AUTO
+        assert m.weight_format == WeightFormat.AUTO
+        assert m.model_hf_revision is None
+        assert m.model_hf_token is None
 
     def test_generate_defaults(self) -> None:
         g = GenerateConfig()

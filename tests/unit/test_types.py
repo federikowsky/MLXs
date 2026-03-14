@@ -20,6 +20,7 @@ from mlxs._types import (
     TokenLogprobs,
     ToolCallResult,
     TopLogprob,
+    WeightFormat,
 )
 
 # =============================================================================
@@ -52,6 +53,13 @@ class TestEnums:
     def test_padding_side_values(self) -> None:
         assert PaddingSide.LEFT.value == "left"
         assert PaddingSide.RIGHT.value == "right"
+
+    def test_weight_format_values(self) -> None:
+        assert WeightFormat.AUTO.value == "auto"
+        assert WeightFormat.SAFETENSORS.value == "safetensors"
+        assert WeightFormat.PARO.value == "paro"
+        assert WeightFormat.AWQ.value == "awq"
+        assert WeightFormat.GPTQ.value == "gptq"
 
 
 # =============================================================================

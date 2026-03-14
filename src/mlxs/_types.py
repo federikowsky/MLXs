@@ -9,10 +9,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
 
 
 class FinishReason(Enum):
@@ -52,6 +48,20 @@ class PaddingSide(Enum):
 
     LEFT = "left"
     RIGHT = "right"
+
+
+class WeightFormat(str, Enum):
+    """Weight/quantization format for model loading (FR1, §7.2).
+
+    Extensible for future backends (AWQ, GPTQ, etc.). Only SAFETENSORS and
+    PARO are implemented; others raise a clear error when selected.
+    """
+
+    AUTO = "auto"
+    SAFETENSORS = "safetensors"
+    PARO = "paro"
+    AWQ = "awq"
+    GPTQ = "gptq"
 
 
 @dataclass(frozen=True, slots=True)
