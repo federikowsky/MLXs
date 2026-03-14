@@ -27,7 +27,13 @@ _CLI_SPECS: list[tuple[str, str, str, Any, str]] = [
     ("lazy-load", "model.lazy_load", "bool", True, "Load model on first use"),
     ("preload", "model.preload", "bool", False, "Load model at startup"),
     ("model-mode", "model.model_mode", "choice", "auto", "Execution mode: text, multimodal, auto"),
-    ("weight-format", "model.weight_format", "choice", "auto", "Format: auto, safetensors, paro, awq, gptq"),
+    (
+        "weight-format",
+        "model.weight_format",
+        "choice",
+        "auto",
+        "Format: auto, safetensors, paro, awq, gptq",
+    ),
     ("model-hf-revision", "model.model_hf_revision", "str", None, "Hugging Face repo revision"),
     ("model-hf-token", "model.model_hf_token", "str", None, "Hugging Face token for gated repos"),
     # generate
@@ -38,12 +44,36 @@ _CLI_SPECS: list[tuple[str, str, str, Any, str]] = [
     ("min-p", "generate.min_p", "float", 0.0, "Min-p sampling (0=disabled)"),
     ("seed", "generate.seed", "int", None, "Random seed"),
     ("prefill-step-size", "generate.prefill_step_size", "int", 2048, "Prefill chunk size"),
-    ("clear-cache-interval", "generate.clear_cache_interval", "int", 256, "mx.clear_cache every N tokens (0=never)"),
+    (
+        "clear-cache-interval",
+        "generate.clear_cache_interval",
+        "int",
+        256,
+        "mx.clear_cache every N tokens (0=never)",
+    ),
     ("stream", "generate.stream", "bool", True, "Stream tokens by default"),
     ("compile-decode", "generate.compile_decode", "bool", False, "Use mx.compile on decode"),
-    ("warmup-after-load", "generate.warmup_after_load", "bool", False, "Warm graph after model load"),
-    ("stream-policy", "generate.stream_policy", "choice", "single", "Stream policy: single, overlap"),
-    ("repetition-penalty", "generate.repetition_penalty", "float", 1.0, "Repetition penalty (1.0=disabled)"),
+    (
+        "warmup-after-load",
+        "generate.warmup_after_load",
+        "bool",
+        False,
+        "Warm graph after model load",
+    ),
+    (
+        "stream-policy",
+        "generate.stream_policy",
+        "choice",
+        "single",
+        "Stream policy: single, overlap",
+    ),
+    (
+        "repetition-penalty",
+        "generate.repetition_penalty",
+        "float",
+        1.0,
+        "Repetition penalty (1.0=disabled)",
+    ),
     ("logprobs", "generate.logprobs", "bool", False, "Return logprobs in stream"),
     ("top-logprobs", "generate.top_logprobs", "int", 0, "Top logprobs per token (0=disabled)"),
     # memory
@@ -53,34 +83,118 @@ _CLI_SPECS: list[tuple[str, str, str, Any, str]] = [
     ("kv-bits", "cache.kv_bits", "int", None, "KV cache quantization bits"),
     ("kv-group-size", "cache.kv_group_size", "int", 64, "Group size for quantized KV"),
     ("quantized-kv-start", "cache.quantized_kv_start", "int", 0, "Start quantizing after N steps"),
-    ("kv-rotating-keep", "cache.kv_rotating_keep", "int", None, "Tokens to keep in rotating cache"),
+    (
+        "kv-rotating-keep",
+        "cache.kv_rotating_keep",
+        "int",
+        None,
+        "Tokens to keep in rotating cache",
+    ),
     # prompt_cache
     ("prompt-cache-enabled", "prompt_cache.enabled", "bool", True, "Enable prompt prefix caching"),
     ("prompt-cache-max-entries", "prompt_cache.max_entries", "int", 100, "Max cached prefixes"),
     ("prompt-cache-max-bytes", "prompt_cache.max_bytes", "int", None, "Max bytes for cached KV"),
-    ("prompt-cache-trim-on-rss-gb", "prompt_cache.trim_on_rss_gb", "float", None, "Trim when RSS exceeds (GB)"),
-    ("prompt-cache-trim-on-pressure", "prompt_cache.trim_on_pressure", "int", None, "Trim on memory pressure (1,2,4)"),
-    ("prompt-cache-trim-keep-entries", "prompt_cache.trim_keep_entries", "int", 1, "Min entries to keep on trim"),
+    (
+        "prompt-cache-trim-on-rss-gb",
+        "prompt_cache.trim_on_rss_gb",
+        "float",
+        None,
+        "Trim when RSS exceeds (GB)",
+    ),
+    (
+        "prompt-cache-trim-on-pressure",
+        "prompt_cache.trim_on_pressure",
+        "int",
+        None,
+        "Trim on memory pressure (1,2,4)",
+    ),
+    (
+        "prompt-cache-trim-keep-entries",
+        "prompt_cache.trim_keep_entries",
+        "int",
+        1,
+        "Min entries to keep on trim",
+    ),
     ("prompt-cache-trim-step", "prompt_cache.trim_step", "int", 1, "Entries to remove per trim"),
-    ("prompt-cache-target-rss-ratio", "prompt_cache.target_rss_ratio", "float", 0.9, "Trim until RSS < max*ratio"),
-    ("prompt-cache-on-memory-ceiling", "prompt_cache.on_memory_ceiling", "choice", "trim_cache", "Policy: trim_cache, reject_only, shutdown"),
+    (
+        "prompt-cache-target-rss-ratio",
+        "prompt_cache.target_rss_ratio",
+        "float",
+        0.9,
+        "Trim until RSS < max*ratio",
+    ),
+    (
+        "prompt-cache-on-memory-ceiling",
+        "prompt_cache.on_memory_ceiling",
+        "choice",
+        "trim_cache",
+        "Policy: trim_cache, reject_only, shutdown",
+    ),
     ("prompt-cache-persist", "prompt_cache.persist_path", "str", None, "Path to persist cache"),
     # batch
-    ("batch-prefill-batch-size", "batch.prefill_batch_size", "int", 1, "Max prompts per prefill batch"),
-    ("batch-completion-batch-size", "batch.completion_batch_size", "int", 4, "Max concurrent decode sequences"),
-    ("batch-prefill-step-size", "batch.prefill_step_size", "int", 2048, "Batched prefill chunk size"),
+    (
+        "batch-prefill-batch-size",
+        "batch.prefill_batch_size",
+        "int",
+        1,
+        "Max prompts per prefill batch",
+    ),
+    (
+        "batch-completion-batch-size",
+        "batch.completion_batch_size",
+        "int",
+        4,
+        "Max concurrent decode sequences",
+    ),
+    (
+        "batch-prefill-step-size",
+        "batch.prefill_step_size",
+        "int",
+        2048,
+        "Batched prefill chunk size",
+    ),
     ("batch-padding-side", "batch.padding_side", "choice", "left", "Padding: left, right"),
-    ("batch-time-budget-ms", "batch.time_budget_ms", "int", 100, "Time budget per batch step (ms)"),
+    (
+        "batch-time-budget-ms",
+        "batch.time_budget_ms",
+        "int",
+        100,
+        "Time budget per batch step (ms)",
+    ),
     ("batch-max-batch-size", "batch.max_batch_size", "int", 8, "Hard limit on batch size"),
     # speculative
-    ("draft-model", "speculative.draft_model_path", "str", None, "Path to draft model (disables if unset)"),
-    ("num-draft-tokens", "speculative.num_draft_tokens", "int", 5, "Draft tokens per verification step"),
+    (
+        "draft-model",
+        "speculative.draft_model_path",
+        "str",
+        None,
+        "Path to draft model (disables if unset)",
+    ),
+    (
+        "num-draft-tokens",
+        "speculative.num_draft_tokens",
+        "int",
+        5,
+        "Draft tokens per verification step",
+    ),
     # tool_calling
-    ("tool-call-parser", "tool_calling.tool_call_parser", "str", "generic", "Parser: generic, qwen, or model key"),
+    (
+        "tool-call-parser",
+        "tool_calling.tool_call_parser",
+        "str",
+        "generic",
+        "Parser: generic, qwen, or model key",
+    ),
     # server
     ("host", "server.host", "str", "127.0.0.1", "Bind address"),
     ("port", "server.port", "int", 8080, "Listen port"),
-    ("max-concurrent-requests", "server.max_concurrent_requests", "int", 16, "Max concurrent requests"),
+    (
+        "max-concurrent-requests",
+        "server.max_concurrent_requests",
+        "int",
+        16,
+        "Max concurrent requests",
+    ),
     ("max-queue-size", "server.max_queue_size", "int", 64, "Max pending requests (0=unbounded)"),
     ("request-timeout", "server.request_timeout", "float", 300.0, "Request timeout (seconds)"),
     ("workers", "server.workers", "int", 1, "Number of workers"),
@@ -93,14 +207,15 @@ _CLI_SPECS: list[tuple[str, str, str, Any, str]] = [
 ]
 
 
-def parse_argv(argv: list[str] | None = None) -> tuple[str, AppConfig]:
-    """Parse argv into subcommand and resolved AppConfig.
+def parse_argv(argv: list[str] | None = None) -> tuple[str, AppConfig, str | None]:
+    """Parse argv into subcommand, resolved AppConfig, and optional chat query.
 
     Args:
         argv: Command-line arguments. Defaults to sys.argv[1:].
 
     Returns:
-        (subcommand, config) where subcommand is "serve" or "chat".
+        `(subcommand, config, chat_query)` where subcommand is "serve" or "chat".
+        `chat_query` is only set for `mlxs chat QUERY`.
 
     Raises:
         SystemExit: On parse error or invalid config (argparse or resolve).
@@ -113,7 +228,8 @@ def parse_argv(argv: list[str] | None = None) -> tuple[str, AppConfig]:
     cli_overrides = _collect_overrides(args)
 
     config = resolve(config_path=config_path, cli_overrides=cli_overrides or None)
-    return subcommand, config
+    chat_query = getattr(args, "query", None) if subcommand == "chat" else None
+    return subcommand, config, chat_query
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -125,6 +241,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     for cmd in ("serve", "chat"):
         sub = subparsers.add_parser(cmd, help=_subcommand_help(cmd))
+        if cmd == "chat":
+            sub.description = (
+                "Run the docked chat shell by default or pass `QUERY` for one-shot mode."
+            )
         sub.add_argument(
             "--config",
             dest="config_path",
@@ -141,6 +261,14 @@ def _build_parser() -> argparse.ArgumentParser:
             metavar="KEY=VALUE",
             help="Extra config override (e.g. server.port=8081). May be repeated.",
         )
+        if cmd == "chat":
+            sub.add_argument(
+                "query",
+                nargs="?",
+                default=None,
+                metavar="QUERY",
+                help="Single query (one-shot); if omitted, run the interactive shell.",
+            )
         _add_explicit_flags(sub)
 
     return parser
@@ -155,7 +283,7 @@ def _add_explicit_flags(sub: argparse.ArgumentParser) -> None:
         "prompt_cache.on_memory_ceiling": ["trim_cache", "reject_only", "shutdown"],
     }
     bool_dests: list[str] = []
-    for flag, config_key, kind, default, help_text in _CLI_SPECS:
+    for flag, config_key, kind, _default, help_text in _CLI_SPECS:
         dest = config_key.replace(".", "_").replace("-", "_")
         arg_name = "--" + flag
         if kind == "str":
@@ -167,12 +295,16 @@ def _add_explicit_flags(sub: argparse.ArgumentParser) -> None:
         elif kind == "bool":
             group = sub.add_mutually_exclusive_group()
             group.add_argument(arg_name, dest=dest, action="store_true", help=help_text)
-            group.add_argument("--no-" + flag, dest=dest, action="store_false", help="Disable (default)")
+            group.add_argument(
+                "--no-" + flag, dest=dest, action="store_false", help="Disable (default)"
+            )
             bool_dests.append(dest)
         elif kind == "choice":
             opts = choices_map.get(config_key)
             if opts:
-                sub.add_argument(arg_name, dest=dest, choices=opts, default=_SENTINEL, help=help_text)
+                sub.add_argument(
+                    arg_name, dest=dest, choices=opts, default=_SENTINEL, help=help_text
+                )
             else:
                 sub.add_argument(arg_name, dest=dest, default=_SENTINEL, help=help_text)
         else:
@@ -202,7 +334,7 @@ def _subcommand_help(cmd: str) -> str:
     if cmd == "serve":
         return "Start the HTTP server."
     if cmd == "chat":
-        return "Start interactive multi-turn chat (streaming)."
+        return "Start the docked chat shell or run a one-shot query."
     return ""
 
 
@@ -222,21 +354,45 @@ def build_cli_arguments_md() -> str:
         ("Observability (observability.*)", "observability", []),
         ("Root", "root", []),
     ]
-    header = """<!-- Generated from src/mlxs/config/cli.py _CLI_SPECS. Regenerate: python -c \"from pathlib import Path; from mlxs.config.cli import build_cli_arguments_md; Path('docs/cli-arguments.md').write_text(build_cli_arguments_md())\" -->
-
-# CLI arguments — full reference
-
-All configuration options can be passed via explicit flags. Flags are available for both `mlxs serve` and `mlxs chat` unless noted. Values are merged with config file and env (CLI overrides win).
-
-"""
+    header = (
+        "<!-- Generated from src/mlxs/config/cli.py _CLI_SPECS. Regenerate: "
+        'python -c "from pathlib import Path; from mlxs.config.cli import '
+        "build_cli_arguments_md; "
+        "Path('docs/cli-arguments.md').write_text(build_cli_arguments_md())\" -->\n\n"
+        "# CLI arguments — full reference\n\n"
+        "All configuration options can be passed via explicit flags. "
+        "Flags are available for both `mlxs serve` and `mlxs chat` unless noted. "
+        "Values are merged with config file and env (CLI overrides win).\n\n"
+        "`mlxs chat` runs the interactive docked shell by default. "
+        "Use `mlxs chat QUERY` for one-shot mode.\n"
+        "In a TTY, the shell includes slash commands, completion, "
+        "and `@file` attachments.\n\n"
+    )
     lines = [header]
+    lines.append("## Chat usage\n\n")
+    lines.append("| Command | Description |\n")
+    lines.append("|---------|-------------|\n")
+    lines.append("| `mlxs chat` | Start the interactive docked chat shell. |\n")
+    lines.append("| `mlxs chat QUERY` | Run one turn and exit. |\n\n")
+    lines.append(
+        "Interactive mode includes slash commands such as "
+        "`/help`, `/model`, `/history`, `/export`, `/new`, `/clear`, "
+        "`/retry`, `/system`, `/stats`, and `/quit`, plus `@file` attachments.\n\n",
+    )
+    lines.append("---\n\n")
     for title, section_key, extra_flags in sections_order:
         if section_key == "config":
             lines.append("## Config file\n\n")
             lines.append("| Flag | Type | Default | Description |\n")
             lines.append("|------|------|---------|-------------|\n")
-            lines.append("| `--config` | path | - | Path to YAML config file. Overrides CONFIG_PATH env. |\n\n")
-            lines.append("Generic overrides (any key): `-o section.key=value` (e.g. `-o server.port=9090`). May be repeated.\n\n---\n\n")
+            lines.append(
+                "| `--config` | path | - | Path to YAML config file. "
+                "Overrides CONFIG_PATH env. |\n\n"
+            )
+            lines.append(
+                "Generic overrides (any key): `-o section.key=value` "
+                "(e.g. `-o server.port=9090`). May be repeated.\n\n---\n\n"
+            )
             continue
         items = [
             (flag, config_key, kind, default, help_text)
@@ -248,7 +404,7 @@ All configuration options can be passed via explicit flags. Flags are available 
         lines.append(f"## {title}\n\n")
         lines.append("| Flag | Type | Default | Description |\n")
         lines.append("|------|------|---------|-------------|\n")
-        for flag, config_key, kind, default, help_text in items:
+        for flag, _config_key, kind, default, help_text in items:
             default_str = str(default) if default != "" else '""'
             if default is None:
                 default_str = "None"
@@ -262,7 +418,9 @@ All configuration options can be passed via explicit flags. Flags are available 
             lines.append(f"| `--{flag}` | {type_str} | {default_str} | {help_text} |\n")
         if section_key == "generate":
             lines.append("| `--stop` | str (repeat) | - | Stop sequence. May be repeated. |\n")
-            lines.append("| `--extra-eos-token-ids` | str | - | Comma-separated token ids (e.g. 1,2,3). |\n")
+            lines.append(
+                "| `--extra-eos-token-ids` | str | - | Comma-separated token ids (e.g. 1,2,3). |\n"
+            )
         lines.append("\n---\n\n")
     return "".join(lines).rstrip() + "\n"
 
@@ -280,7 +438,7 @@ def _collect_overrides(args: argparse.Namespace) -> dict[str, Any]:
             continue
         overrides[key] = value.strip()
 
-    for flag, config_key, kind, default, _ in _CLI_SPECS:
+    for _flag, config_key, _kind, _default, _ in _CLI_SPECS:
         dest = config_key.replace(".", "_").replace("-", "_")
         val = getattr(args, dest, _SENTINEL)
         if val is _SENTINEL:

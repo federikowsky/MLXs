@@ -106,15 +106,39 @@ class TestExtractMedia:
         with pytest.raises(InvalidPromptError, match="Unsupported"):
             extract_media_from_messages(msgs)
 
-    def test_audio_not_yet_supported(self) -> None:
-        """Audio content type raises not-yet-supported error."""
+    def test_audio_extraction(self) -> None:
+        """input_audio content type is extracted into MediaItem."""
+        audio_b64 = base64.b64encode(b"fake_audio_data").decode("ascii")
         msgs = [
             {"role": "user", "content": [
-                {"type": "audio", "audio": {}},
+                {"type": "text", "text": "What is this sound?"},
+                {"type": "input_audio", "input_audio": {
+                    "data": audio_b64, "format": "wav",
+                }},
             ]},
         ]
-        with pytest.raises(InvalidPromptError, match="not yet supported"):
-            extract_media_from_messages(msgs)
+        text_msgs, media = extract_media_from_messages(msgs)
+        assert len(media) == 1
+        assert media[0].media_type == "audio"
+        assert media[0].mime_type == "audio/wav"
+        assert media[0].data == b"fake_audio_data"
+        assert "<audio>" in text_msgs[0]["content"]
+
+    def test_video_url_extraction(self) -> None:
+        """video_url data URL is extracted into MediaItem."""
+        video_b64 = base64.b64encode(b"fake_video_data").decode("ascii")
+        data_url = f"data:video/mp4;base64,{video_b64}"
+        msgs = [
+            {"role": "user", "content": [
+                {"type": "text", "text": "What happens in this video?"},
+                {"type": "video_url", "video_url": {"url": data_url}},
+            ]},
+        ]
+        text_msgs, media = extract_media_from_messages(msgs)
+        assert len(media) == 1
+        assert media[0].media_type == "video"
+        assert media[0].mime_type == "video/mp4"
+        assert "<video>" in text_msgs[0]["content"]
 
     def test_none_content_passthrough(self) -> None:
         """Messages with None content pass through."""

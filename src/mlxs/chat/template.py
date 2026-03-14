@@ -3,12 +3,13 @@
 Centralises chat template logic so both the CLI chat and the HTTP route
 use the same, correct pipeline.  Two entry points:
 
-- ``build_prompt_ids``: tokenize=True path (CLI / TUI) -- no intermediate string.
+- ``build_prompt_ids``: tokenize=True path for the CLI chat -- no intermediate string.
 - ``build_prompt_str``: tokenize=False path (HTTP route, needed for media embedding).
 
 Plus helpers:
 - ``collect_stop_token_ids``: discover model-specific termination tokens.
 - ``sanitize_assistant_text``: strip leaked special markers from decoded text.
+- ``StreamingTextSanitizer``: strip leaked markers while streaming chunk-by-chunk.
 """
 
 from __future__ import annotations
@@ -29,13 +30,13 @@ _KNOWN_STOP_MARKERS: tuple[str, ...] = (
 )
 
 # Regex to strip any special markers from decoded assistant text.
-_MARKER_RE = re.compile(r"<\|[a-z_]+\|>")
+_MARKER_RE = re.compile(r"<\|[^|>]+\|>")
 
 
 def build_prompt_ids(tokenizer: Any, messages: list[dict[str, str]]) -> list[int]:
     """Build prompt token ids from messages using tokenize=True (no intermediate string).
 
-    This is the correct pipeline for CLI/TUI chat: apply_chat_template returns
+    This is the correct pipeline for the CLI chat: apply_chat_template returns
     token ids directly, avoiding the double-format bug.
 
     Falls back to a structured prompt if apply_chat_template is unavailable.
@@ -121,6 +122,36 @@ def sanitize_assistant_text(text: str) -> str:
     return cleaned.rstrip()
 
 
+class StreamingTextSanitizer:
+    """Sanitize streamed chunks without leaking partial special markers."""
+
+    __slots__ = ("_pending",)
+
+    def __init__(self) -> None:
+        self._pending = ""
+
+    def feed(self, text: str) -> str:
+        """Return the safe text that can be printed immediately."""
+        if not text:
+            return ""
+        self._pending += text
+        hold_back = _pending_marker_prefix_len(self._pending)
+        emit_upto = len(self._pending) - hold_back
+        if emit_upto <= 0:
+            return ""
+        emit = self._pending[:emit_upto]
+        self._pending = self._pending[emit_upto:]
+        return _MARKER_RE.sub("", emit)
+
+    def flush(self) -> str:
+        """Return any remaining safe text after the stream ends."""
+        if not self._pending:
+            return ""
+        tail = sanitize_assistant_text(self._pending)
+        self._pending = ""
+        return tail
+
+
 def _build_fallback_ids(tokenizer: Any, messages: list[dict[str, str]]) -> list[int]:
     """Structured fallback: build prompt string then tokenize."""
     prompt_str = _build_fallback_str(messages)
@@ -136,3 +167,16 @@ def _build_fallback_str(messages: list[dict[str, str]]) -> str:
         parts.append(f"{role}: {content}")
     parts.append("Assistant:")
     return "\n".join(parts)
+
+
+def _pending_marker_prefix_len(text: str) -> int:
+    """Longest suffix of ``text`` that may be the start of a stop marker."""
+    best = 0
+    for marker in _KNOWN_STOP_MARKERS:
+        max_prefix = min(len(text), len(marker) - 1)
+        for size in range(max_prefix, 0, -1):
+            if text.endswith(marker[:size]):
+                if size > best:
+                    best = size
+                break
+    return best

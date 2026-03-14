@@ -29,12 +29,8 @@ def main() -> None:
 
 
 def _main() -> None:
-    # Check for --simple-chat before parse_argv (it's not in the config schema)
-    simple_chat = "--simple-chat" in sys.argv
-    argv = [a for a in sys.argv[1:] if a != "--simple-chat"]
-
     try:
-        subcommand, config = parse_argv(argv)
+        subcommand, config, chat_query = parse_argv(sys.argv[1:])
     except SystemExit as e:
         sys.exit(e.code if e.code is not None else 1)
 
@@ -49,7 +45,7 @@ def _main() -> None:
     if subcommand == "serve":
         _run_serve(config)
     elif subcommand == "chat":
-        _run_chat(config, simple_chat=simple_chat)
+        _run_chat(config, initial_query=chat_query)
     else:
         print(f"Unknown subcommand: {subcommand}", file=sys.stderr)
         sys.exit(1)
@@ -69,20 +65,15 @@ def _run_serve(config: AppConfig) -> None:
     uvicorn.run(app, host=host, port=port)
 
 
-def _run_chat(config: AppConfig, *, simple_chat: bool = False) -> None:
-    """Start interactive chat — TUI by default, --simple-chat for old loop."""
+def _run_chat(config: AppConfig, *, initial_query: str | None = None) -> None:
+    """Start the CLI chat REPL or run a single one-shot query."""
     from mlxs.server.deps import create_dependencies
 
     deps = create_dependencies(config)
+    from mlxs.server.chat import run_chat_loop
 
-    if simple_chat:
-        from mlxs.server.chat import run_chat_loop
-        run_chat_loop(deps)
-    else:
-        from mlxs.ui.tui.app import run_tui
-        run_tui(deps)
+    run_chat_loop(deps, initial_query=initial_query)
 
 
 if __name__ == "__main__":
     main()
-

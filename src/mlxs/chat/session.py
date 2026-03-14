@@ -42,7 +42,10 @@ class ChatMessage:
 
     def as_prompt_dict(self) -> dict[str, str]:
         """Return the minimal dict expected by chat template functions."""
-        return {"role": self.role, "content": self.content}
+        return {
+            "role": self.role,
+            "content": _prompt_content(self.role, self.content, self.metadata),
+        }
 
 
 @dataclass(slots=True)
@@ -59,8 +62,12 @@ class ChatSession:
 
     # -- Mutation helpers --------------------------------------------------
 
-    def add_user_message(self, content: str) -> ChatMessage:
-        msg = ChatMessage(role="user", content=content)
+    def add_user_message(
+        self,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> ChatMessage:
+        msg = ChatMessage(role="user", content=content, metadata=metadata or {})
         self.messages.append(msg)
         self._touch()
         return msg
@@ -96,6 +103,24 @@ class ChatSession:
         self.messages.clear()
         self._touch()
 
+    def set_system_message(self, content: str) -> None:
+        """Insert or replace the leading system message."""
+        text = content.strip()
+        if self.messages and self.messages[0].role == "system":
+            if text:
+                self.messages[0].content = text
+            else:
+                self.messages.pop(0)
+        elif text:
+            self.messages.insert(0, ChatMessage(role="system", content=text))
+        self._touch()
+
+    def system_message(self) -> str | None:
+        """Return the current system message, if present."""
+        if self.messages and self.messages[0].role == "system":
+            return self.messages[0].content
+        return None
+
     def prompt_messages(self) -> list[dict[str, str]]:
         """Return messages in the format expected by template functions."""
         return [m.as_prompt_dict() for m in self.messages]
@@ -125,6 +150,34 @@ class ChatSession:
             "messages": [m.to_dict() for m in self.messages],
         }
 
+    def to_markdown(self) -> str:
+        """Render the session as a Markdown transcript."""
+        lines = [
+            f"# {self.title}",
+            "",
+            f"- Session: `{self.session_id}`",
+            f"- Model: `{self.model_path or 'default'}`",
+            f"- Created: `{self.created_at}`",
+            f"- Updated: `{self.updated_at}`",
+            "",
+        ]
+        for message in self.messages:
+            heading = {
+                "assistant": "Assistant",
+                "system": "System",
+                "user": "User",
+            }.get(message.role, message.role.capitalize())
+            lines.append(f"## {heading}")
+            lines.append("")
+            lines.append(message.content.rstrip())
+            attachments = _attachment_metadata(message.metadata)
+            if attachments:
+                lines.append("")
+                lines.append("Attached files:")
+                lines.extend(f"- `{attachment['path']}`" for attachment in attachments)
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ChatSession:
         return cls(
@@ -148,3 +201,39 @@ class ChatSession:
 def _now_iso() -> str:
     """Current UTC time as ISO-8601 string."""
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _attachment_metadata(metadata: dict[str, Any]) -> list[dict[str, str]]:
+    attachments = metadata.get("attachments")
+    if not isinstance(attachments, list):
+        return []
+    return [
+        attachment
+        for attachment in attachments
+        if isinstance(attachment, dict)
+        and isinstance(attachment.get("path"), str)
+        and isinstance(attachment.get("content"), str)
+    ]
+
+
+def _prompt_content(role: str, content: str, metadata: dict[str, Any]) -> str:
+    if role != "user":
+        return content
+    attachments = _attachment_metadata(metadata)
+    if not attachments:
+        return content
+
+    parts = [content.rstrip(), "", "Attached files:"]
+    for attachment in attachments:
+        path = attachment["path"]
+        body = attachment["content"].rstrip()
+        parts.extend(
+            (
+                f"[file] {path}",
+                "----- BEGIN FILE -----",
+                body,
+                "----- END FILE -----",
+                "",
+            )
+        )
+    return "\n".join(parts).rstrip()

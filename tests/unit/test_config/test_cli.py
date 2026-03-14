@@ -18,8 +18,9 @@ class TestParseArgvSubcommand:
         mock_resolve.return_value = AppConfig()
         from mlxs.config.cli import parse_argv
 
-        sub, _ = parse_argv(["serve"])
+        sub, _, chat_query = parse_argv(["serve"])
         assert sub == "serve"
+        assert chat_query is None
         mock_resolve.assert_called_once()
         call_kw = mock_resolve.call_args.kwargs
         assert call_kw["config_path"] is None
@@ -30,8 +31,18 @@ class TestParseArgvSubcommand:
         mock_resolve.return_value = AppConfig()
         from mlxs.config.cli import parse_argv
 
-        sub, _ = parse_argv(["chat"])
+        sub, _, chat_query = parse_argv(["chat"])
         assert sub == "chat"
+        assert chat_query is None
+
+    @patch("mlxs.config.cli.resolve")
+    def test_chat_query_is_returned(self, mock_resolve: MagicMock) -> None:
+        mock_resolve.return_value = AppConfig()
+        from mlxs.config.cli import parse_argv
+
+        sub, _, chat_query = parse_argv(["chat", "write a haiku"])
+        assert sub == "chat"
+        assert chat_query == "write a haiku"
 
     @patch("mlxs.config.cli.resolve")
     def test_config_path_passed_to_resolve(self, mock_resolve: MagicMock, tmp_path: Path) -> None:
