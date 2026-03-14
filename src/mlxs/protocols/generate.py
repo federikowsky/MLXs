@@ -31,6 +31,7 @@ class GenerateProtocol(Protocol):
         options: GenerateOptions,
         *,
         cache: list[CacheProtocol] | None = None,
+        input_embeddings: mx.array | None = None,
     ) -> Iterator[TokenEvent]:
         """Generate tokens from prompt.
 
@@ -40,6 +41,9 @@ class GenerateProtocol(Protocol):
             prompt: Input text or pre-tokenized ids.
             options: Generation parameters (temperature, top_p, etc.).
             cache: Optional pre-populated KV cache (e.g. from prompt cache).
+            input_embeddings: Pre-computed embeddings ``(T, D)`` from
+                multimodal preprocessing. When provided, used instead of
+                ``embed_tokens`` during prefill (§7.4).
 
         Yields:
             TokenEvent for each generated token, with finish_reason set on

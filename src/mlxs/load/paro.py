@@ -76,15 +76,6 @@ def load_paro_model_and_tokenizer(
         raise ModelLoadError(f"PARO load failed for {model_path}: {exc}") from exc
 
     tokenizer = getattr(processor, "tokenizer", processor)
-    try:
-        from transformers import PreTrainedTokenizerBase
-        if not isinstance(tokenizer, PreTrainedTokenizerBase):
-            raise ModelLoadError(
-                f"PARO processor did not expose a HuggingFace tokenizer: {type(tokenizer)}"
-            )
-    except ImportError:
-        raise ModelLoadError("PARO path requires 'transformers' for tokenizer wrapper.") from None
-
     adapter = _ParoModelAdapter(model)
     wrapper = TokenizerWrapper(tokenizer)
     logger.info("Loaded PARO model and tokenizer from %s", path_str)
@@ -109,7 +100,8 @@ class _ParoModelAdapter(nn.Module):
         cache: list[CacheProtocol] | None = None,
         mask: mx.array | None = None,
     ) -> mx.array:
-        return self._inner(input_ids, cache=cache, mask=mask)
+        # mlx_lm models build mask internally; do not pass mask (unsupported kwarg).
+        return self._inner(input_ids, cache=cache)
 
     def make_cache(self) -> list[CacheProtocol]:
         return self._inner.make_cache()

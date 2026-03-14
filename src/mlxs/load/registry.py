@@ -79,6 +79,7 @@ MODEL_REGISTRY: dict[str, tuple[str, str, str]] = {
     "olmo3": ("mlxs.models.olmo3", "Model", "ModelArgs"),
     "olmoe": ("mlxs.models.olmoe", "Model", "ModelArgs"),
     "openelm": ("mlxs.models.openelm", "Model", "ModelArgs"),
+    "ouro": ("mlxs.models.ouro", "Model", "ModelArgs"),
     "ernie4_5_moe": ("mlxs.models.ernie4_5_moe", "Model", "ModelArgs"),
     "ernie4_5": ("mlxs.models.ernie4_5", "Model", "ModelArgs"),
     "exaone": ("mlxs.models.exaone", "Model", "ModelArgs"),

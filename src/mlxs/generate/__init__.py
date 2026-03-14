@@ -11,6 +11,7 @@ from collections.abc import Iterator
 import mlx.core as mx
 import mlx.nn as nn
 
+from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
 from mlxs.cache.kv import KVCache
 from mlxs.generate.decode import decode_loop
@@ -28,9 +29,11 @@ def generate(
     options: GenerateOptions | None = None,
     *,
     cache: list[KVCache] | None = None,
+    input_embeddings: mx.array | None = None,
     prefill_step_size: int = 2048,
     compile_decode: bool = False,
     clear_cache_interval: int = 256,
+    final_cache_out: list[list[KVCache]] | None = None,
 ) -> Iterator[TokenEvent]:
     """Generate tokens from a prompt (§6.1, FR3).
 
@@ -49,11 +52,16 @@ def generate(
         prompt: Input text or pre-tokenized token ids.
         options: Generation parameters. Defaults to GenerateOptions().
         cache: Optional pre-populated KV cache (e.g. from prompt cache).
+        input_embeddings: Pre-computed embeddings ``(T, D)`` from
+            multimodal preprocessing (§7.4). When provided, used instead
+            of ``embed_tokens`` during prefill.
         prefill_step_size: Max tokens per prefill chunk.
         compile_decode: If True, compile the model forward for decode (§6.8).
             Falls back to uncompiled on failure (AC12).
         clear_cache_interval: Steps between mx.clear_cache() calls.
             0 = disabled. Default: 256.
+        final_cache_out: If provided, the list is appended with the KV cache
+            after generation completes (for prompt_cache.put). Plan-chat-cli.
 
     Yields:
         TokenEvent for each generated token. The last event has
@@ -67,6 +75,18 @@ def generate(
 
     if not prompt_tokens:
         raise ValueError("Prompt must not be empty")
+
+    # Validate input_embeddings shape (§7.4)
+    if input_embeddings is not None:
+        if input_embeddings.ndim != 2:
+            raise InvalidPromptError(
+                f"input_embeddings must be 2-D (T, D), got shape {input_embeddings.shape}"
+            )
+        if input_embeddings.shape[0] != len(prompt_tokens):
+            raise InvalidPromptError(
+                f"input_embeddings length ({input_embeddings.shape[0]}) must match "
+                f"prompt length ({len(prompt_tokens)})"
+            )
 
     prompt_array = mx.array(prompt_tokens)
     prompt_token_count = len(prompt_tokens)
@@ -117,22 +137,29 @@ def generate(
         prompt_array,
         cache,
         prefill_step_size=prefill_step_size,
+        input_embeddings=input_embeddings,
     )
 
-    # Decode: generate tokens one at a time
-    yield from decode_loop(
-        model,
-        cache,
-        first_logits,
-        sampler=sampler,
-        stop=stop,
-        decoder=tokenizer.decode,
-        logits_processors=logits_processors or None,
-        options=options,
-        prompt_token_count=prompt_token_count,
-        forward_fn=forward_fn,
-        clear_cache_interval=clear_cache_interval,
-    )
+    def _gen() -> Iterator[TokenEvent]:
+        try:
+            yield from decode_loop(
+                model,
+                cache,
+                first_logits,
+                sampler=sampler,
+                stop=stop,
+                decoder=tokenizer.decode,
+                logits_processors=logits_processors or None,
+                options=options,
+                prompt_token_count=prompt_token_count,
+                forward_fn=forward_fn,
+                clear_cache_interval=clear_cache_interval,
+            )
+        finally:
+            if final_cache_out is not None:
+                final_cache_out.append(cache)
+
+    return _gen()
 
 
 __all__ = ["generate"]

@@ -151,8 +151,9 @@ class Qwen3Model(nn.Module):
         self,
         inputs: mx.array,
         cache: list[KVCache] | None = None,
+        input_embeddings: mx.array | None = None,
     ) -> mx.array:
-        h = self.embed_tokens(inputs)
+        h = input_embeddings if input_embeddings is not None else self.embed_tokens(inputs)
 
         if cache is None:
             cache = [None] * len(self.layers)  # type: ignore[list-item]
@@ -179,9 +180,10 @@ class Model(nn.Module):
         self,
         inputs: mx.array,
         cache: list[KVCache] | None = None,
+        input_embeddings: mx.array | None = None,
         **_kwargs: Any,
     ) -> mx.array:
-        out = self.model(inputs, cache)
+        out = self.model(inputs, cache, input_embeddings=input_embeddings)
         if self.args.tie_word_embeddings:
             return self.model.embed_tokens.as_linear(out)
         return self.lm_head(out)

@@ -58,6 +58,12 @@ class TestResolveHfId:
 class TestResolveFailure:
     """Resolution failures raise ModelLoadError."""
 
+    def test_empty_path_raises_model_load_error(self) -> None:
+        with pytest.raises(ModelLoadError, match="Model path is required"):
+            resolve_model_path("")
+        with pytest.raises(ModelLoadError, match="Model path is required"):
+            resolve_model_path("   ")
+
     def test_invalid_hf_id_raises_model_load_error(self) -> None:
         with patch("huggingface_hub.snapshot_download") as snap:
             snap.side_effect = Exception("Repo not found")

@@ -47,9 +47,10 @@ def load_weights(model_path: Path, model: nn.Module) -> None:
     if hasattr(model, "sanitize"):
         weights = model.sanitize(weights)
 
-    # Apply quantization config if present
+    # Apply quantization config if present (skip for Ouro: pre-quantized weights
+    # are dequantized in model.sanitize and loaded as full precision)
     config = load_config(model_path)
-    if "quantization" in config:
+    if "quantization" in config and config.get("model_type") != "ouro":
         q = config["quantization"]
         nn.quantize(
             model,

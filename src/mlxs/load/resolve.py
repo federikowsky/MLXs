@@ -25,8 +25,12 @@ def resolve_model_path(
     optional revision and token) and returns the cache path. Never logs token.
 
     Raises:
-        ModelLoadError: If path is neither a local directory nor a valid HF id.
+        ModelLoadError: If path is empty or neither a local directory nor a valid HF id.
     """
+    if not model_path or not str(model_path).strip():
+        raise ModelLoadError(
+            "Model path is required. Use --model <path-or-hf-id> or set model.model_path in config."
+        )
     path = Path(model_path)
     if path.is_dir():
         return path

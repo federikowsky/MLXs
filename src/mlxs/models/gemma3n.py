@@ -420,8 +420,13 @@ class Gemma3nBackbone(nn.Module):
         self,
         inputs: mx.array,
         cache: list[KVCache | RotatingKVCache | None] | None = None,
+        input_embeddings: mx.array | None = None,
     ) -> mx.array:
-        h = self.embed_tokens(inputs) * (self.hidden_size**0.5)
+        h = (
+            input_embeddings
+            if input_embeddings is not None
+            else self.embed_tokens(inputs) * (self.hidden_size**0.5)
+        )
         per_layer_inputs = self._project_per_layer_inputs(h, self._get_per_layer_inputs(inputs))
         if cache is None:
             cache = [None] * len(self.layers)
@@ -506,9 +511,10 @@ class Model(nn.Module):
         *,
         cache: list[KVCache | RotatingKVCache] | None = None,
         mask: mx.array | None = None,
+        input_embeddings: mx.array | None = None,
         **_kwargs: Any,
     ) -> mx.array:
-        return self.model(input_ids, cache=cache)
+        return self.model(input_ids, cache=cache, input_embeddings=input_embeddings)
 
     @property
     def num_layers(self) -> int:

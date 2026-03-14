@@ -29,6 +29,7 @@ class ModelProtocol(Protocol):
         *,
         cache: list[CacheProtocol] | None = None,
         mask: mx.array | None = None,
+        input_embeddings: mx.array | None = None,
     ) -> mx.array:
         """Run forward pass, return logits ``(B, T, V)``.
 
@@ -36,6 +37,8 @@ class ModelProtocol(Protocol):
             input_ids: Token ids ``(B, T)`` — batch x sequence length.
             cache: Per-layer KV cache objects. Updated in-place.
             mask: Attention mask ``(B, 1, T, S)`` or ``None`` for causal.
+            input_embeddings: Pre-computed embeddings ``(B, T, D)``. When
+                provided, used instead of ``embed_tokens(input_ids)`` (§7.4).
 
         Returns:
             Logits tensor of shape ``(B, T, vocab_size)``.

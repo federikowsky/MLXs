@@ -22,6 +22,11 @@ class TestRegistryHappyPath:
         assert model_cls.__name__ == "Model"
         assert args_cls.__name__ == "ModelArgs"
 
+    def test_ouro_registered(self) -> None:
+        model_cls, args_cls = get_model_classes("ouro")
+        assert model_cls.__name__ == "Model"
+        assert args_cls.__name__ == "ModelArgs"
+
 
 class TestRegistryAliases:
     def test_mistral_resolves_to_llama(self) -> None:

@@ -44,12 +44,18 @@ class PromptCacheProtocol(Protocol):
         self,
         model_id: str,
         token_ids: tuple[int, ...],
+        *,
+        media_hash: str | None = None,
     ) -> tuple[list[CacheProtocol] | None, int]:
         """Look up the longest cached prefix for the given token sequence.
 
         Args:
             model_id: Identifier for the model (to avoid cross-model hits).
             token_ids: Full prompt token sequence.
+            media_hash: Optional hash of media content (§7.4). When provided,
+                only entries with the same media_hash are matched, preventing
+                cache hits when different images share the same placeholder
+                token sequence.
 
         Returns:
             Tuple of (cache_state, prefix_length):
@@ -63,6 +69,8 @@ class PromptCacheProtocol(Protocol):
         model_id: str,
         token_ids: tuple[int, ...],
         cache_state: list[CacheProtocol],
+        *,
+        media_hash: str | None = None,
     ) -> None:
         """Store a prefix and its KV cache state.
 
@@ -73,6 +81,9 @@ class PromptCacheProtocol(Protocol):
             model_id: Identifier for the model.
             token_ids: Prefix token sequence.
             cache_state: KV caches to store.
+            media_hash: Optional hash of media content (§7.4). When provided,
+                the entry is keyed by (model_id, token_ids, media_hash) to
+                disambiguate identical token sequences with different media.
         """
         ...
 

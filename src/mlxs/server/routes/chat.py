@@ -13,7 +13,13 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
+from mlxs.server.media import (
+    extract_media_from_messages,
+    load_image,
+    process_media_inputs,
+)
 from mlxs.server.sse import build_completion_response, token_events_to_sse
 
 logger = logging.getLogger(__name__)
@@ -47,18 +53,50 @@ async def chat_completions(request: Request) -> Response:
     # Get dependencies from app state
     deps = request.app.state.deps
 
+    # Extract media from messages (§7.4, FR12)
     try:
-        # Apply chat template to get prompt
-        prompt = _apply_chat_template(deps.tokenizer, messages)
+        text_messages, media_items = extract_media_from_messages(messages)
+    except InvalidPromptError as exc:
+        return JSONResponse(
+            {"error": {"message": str(exc)}}, status_code=400,
+        )
+
+    try:
+        prompt = _apply_chat_template(deps.tokenizer, text_messages)
     except Exception as exc:
         return JSONResponse(
             {"error": {"message": f"Failed to apply chat template: {exc}"}},
             status_code=400,
         )
 
+    # Process media if present (§7.4)
+    input_embeddings = None
+    if media_items:
+        try:
+            image_items = [m for m in media_items if m.media_type == "image"]
+            max_images = deps.config.model.max_images_per_request
+            if len(image_items) > max_images:
+                msg = f"Too many images: {len(image_items)} > {max_images}"
+                return JSONResponse(
+                    {"error": {"message": msg}}, status_code=400,
+                )
+            images = [load_image(item) for item in image_items]
+            prompt_tokens = deps.tokenizer.encode(prompt)
+            import mlx.core as mx
+            input_ids = mx.array(prompt_tokens)[None]  # (1, T)
+            _, input_embeddings, _ = process_media_inputs(
+                deps.model, images, input_ids,
+                image_max_pixels=deps.config.model.image_max_pixels,
+                image_min_pixels=deps.config.model.image_min_pixels,
+            )
+        except InvalidPromptError as exc:
+            return JSONResponse(
+                {"error": {"message": str(exc)}}, status_code=400,
+            )
+
     if stream:
-        return await _stream_response(deps, prompt, options, model_id)
-    return await _non_stream_response(deps, prompt, options, model_id)
+        return await _stream_response(deps, prompt, options, model_id, input_embeddings)
+    return await _non_stream_response(deps, prompt, options, model_id, input_embeddings)
 
 
 def _build_options(body: dict[str, Any]) -> GenerateOptions:
@@ -90,16 +128,19 @@ async def _stream_response(
     prompt: str,
     options: GenerateOptions,
     model_id: str,
+    input_embeddings: Any = None,
 ) -> Response:
     """Handle streaming (SSE) response."""
     from sse_starlette.sse import EventSourceResponse
 
     async def event_generator():
-        # Run generate in thread to avoid blocking event loop (Plan §A1)
         loop = asyncio.get_event_loop()
         events = await loop.run_in_executor(
             None,
-            lambda: list(deps.generate_fn(deps.model, deps.tokenizer, prompt, options)),
+            lambda: list(deps.generate_fn(
+                deps.model, deps.tokenizer, prompt, options,
+                input_embeddings=input_embeddings,
+            )),
         )
 
         for sse_chunk in token_events_to_sse(iter(events), model_id=model_id):
@@ -113,12 +154,16 @@ async def _non_stream_response(
     prompt: str,
     options: GenerateOptions,
     model_id: str,
+    input_embeddings: Any = None,
 ) -> JSONResponse:
     """Handle non-streaming response."""
     loop = asyncio.get_event_loop()
     events: list[TokenEvent] = await loop.run_in_executor(
         None,
-        lambda: list(deps.generate_fn(deps.model, deps.tokenizer, prompt, options)),
+        lambda: list(deps.generate_fn(
+            deps.model, deps.tokenizer, prompt, options,
+            input_embeddings=input_embeddings,
+        )),
     )
 
     response = build_completion_response(events, model_id=model_id)

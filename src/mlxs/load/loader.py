@@ -15,6 +15,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from mlxs._errors import ModelLoadError
+from mlxs._types import ModelMode
 from mlxs.load.registry import get_model_classes
 from mlxs.load.tokenizer import TokenizerWrapper, load_hf_tokenizer
 from mlxs.load.weights import load_config, load_weights
@@ -45,6 +46,7 @@ def load_model(
     model_path: str | Path,
     *,
     lazy: bool = False,
+    model_mode: ModelMode = ModelMode.AUTO,
 ) -> nn.Module:
     """Load a model from a local path.
 
@@ -54,6 +56,8 @@ def load_model(
     Args:
         model_path: Local directory containing config.json + *.safetensors.
         lazy: If True, defer weight loading (FR11). Weights load on first forward.
+        model_mode: TEXT, MULTIMODAL, or AUTO. AUTO resolves to MULTIMODAL
+            if config.json contains vision_config, otherwise TEXT (§7.4).
 
     Returns:
         Model instance (satisfies ModelProtocol).
@@ -77,8 +81,30 @@ def load_model(
     except ValueError as exc:
         raise ModelLoadError(str(exc)) from exc
 
+    # Resolve AUTO mode (§7.4)
+    resolved_mode = model_mode
+    if model_mode == ModelMode.AUTO:
+        has_vision = "vision_config" in config or "visual_config" in config
+        resolved_mode = ModelMode.MULTIMODAL if has_vision else ModelMode.TEXT
+
+    # Validate MULTIMODAL requires vision_config
+    if resolved_mode == ModelMode.MULTIMODAL:
+        if "vision_config" not in config and "visual_config" not in config:
+            raise ModelLoadError(
+                f"model_mode=multimodal requested but {model_type} config.json "
+                f"has no vision_config. This model does not support vision."
+            )
+
     args = ModelArgsClass.from_dict(config)
-    model = ModelClass(args)
+
+    # Pass model_mode if the constructor accepts it
+    import inspect
+
+    sig = inspect.signature(ModelClass.__init__)
+    if "model_mode" in sig.parameters:
+        model = ModelClass(args, model_mode=resolved_mode)
+    else:
+        model = ModelClass(args)
 
     if lazy:
         logger.info("Lazy load enabled — weights deferred until first call")
@@ -90,7 +116,10 @@ def load_model(
         raise ModelLoadError(str(exc)) from exc
 
     mx.eval(model.parameters())
-    logger.info("Model loaded: %s (%s) from %s", model_type, ModelClass.__name__, path)
+    logger.info(
+        "Model loaded: %s (%s) mode=%s from %s",
+        model_type, ModelClass.__name__, resolved_mode.value, path,
+    )
     return model
 
 

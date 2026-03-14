@@ -247,8 +247,9 @@ class LlamaModel(nn.Module):
         self,
         inputs: mx.array,
         cache: list[KVCache | ChunkedKVCache] | None = None,
+        input_embeddings: mx.array | None = None,
     ) -> mx.array:
-        h = self.embed_tokens(inputs)
+        h = input_embeddings if input_embeddings is not None else self.embed_tokens(inputs)
         if cache is None:
             cache = [None] * len(self.layers)  # type: ignore[list-item]
 
@@ -299,9 +300,10 @@ class Model(nn.Module):
         *,
         cache: list[KVCache | ChunkedKVCache] | None = None,
         mask: mx.array | None = None,
+        input_embeddings: mx.array | None = None,
         **_kwargs: Any,
     ) -> mx.array:
-        out = self.model(input_ids, cache)
+        out = self.model(input_ids, cache, input_embeddings=input_embeddings)
         return self.lm_head(out)
 
     @property

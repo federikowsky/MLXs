@@ -102,7 +102,7 @@ def _load_safetensors(path: Path, model_config: ModelConfig) -> tuple[nn.Module,
     from mlxs.load.loader import load_model, load_tokenizer
 
     lazy = model_config.lazy_load and not model_config.preload
-    model = load_model(path, lazy=lazy)
+    model = load_model(path, lazy=lazy, model_mode=model_config.model_mode)
     tokenizer = load_tokenizer(path, trust_remote_code=model_config.trust_remote_code)
     return model, tokenizer
 

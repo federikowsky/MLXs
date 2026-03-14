@@ -57,3 +57,4 @@ logs/
 # Uncomment if you do not commit fixture models:
 # tests/fixtures/models/
 CLAUDE.md
+scripts/smoke_ouro.py

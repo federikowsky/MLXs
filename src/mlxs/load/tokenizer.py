@@ -1,6 +1,8 @@
-"""Tokenizer loading — HF tokenizer wrapper (FR2, §7.2).
+"""Tokenizer loading — protocol-compatible wrapper (FR2, §7.2).
 
-Wraps HuggingFace tokenizer with the minimal interface needed by generate.
+Wraps any tokenizer-like object (HuggingFace, mlx_lm, etc.) with the minimal
+interface needed by generate: encode, decode, eos_token_id, vocab_size,
+and optionally apply_chat_template (with fallback when missing).
 """
 
 from __future__ import annotations
@@ -9,26 +11,31 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
 
-class TokenizerWrapper:
-    """Thin wrapper around HF tokenizer satisfying TokenizerProtocol.
+def _fallback_chat_template(messages: list[dict[str, Any]]) -> str:
+    """Concatenate message contents when no chat template is available."""
+    return "\n".join(m.get("content", "") for m in messages)
 
-    Exposes only the interface needed by generate and batch — encode,
-    decode, eos_token_id, vocab_size.
+
+class TokenizerWrapper:
+    """Thin wrapper around any tokenizer satisfying TokenizerProtocol.
+
+    Accepts HuggingFace PreTrainedTokenizerBase or any object with encode,
+    decode, eos_token_id, vocab_size; optionally apply_chat_template.
     """
 
     __slots__ = ("_tokenizer",)
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase) -> None:
+    def __init__(self, tokenizer: Any) -> None:
         self._tokenizer = tokenizer
 
     def encode(self, text: str) -> list[int]:
         """Encode text to token ids (with special tokens)."""
-        return self._tokenizer.encode(text)
+        return list(self._tokenizer.encode(text))
 
     def decode(self, token_ids: list[int] | int) -> str:
         """Decode token ids to text."""
@@ -38,15 +45,15 @@ class TokenizerWrapper:
 
     @property
     def eos_token_id(self) -> int | None:
-        return self._tokenizer.eos_token_id
+        return getattr(self._tokenizer, "eos_token_id", None)
 
     @property
     def vocab_size(self) -> int:
         return self._tokenizer.vocab_size
 
     @property
-    def inner(self) -> PreTrainedTokenizerBase:
-        """Access the underlying HF tokenizer for advanced operations."""
+    def inner(self) -> Any:
+        """Access the underlying tokenizer for advanced operations."""
         return self._tokenizer
 
     def apply_chat_template(
@@ -57,13 +64,15 @@ class TokenizerWrapper:
         add_generation_prompt: bool = True,
         **kwargs: Any,
     ) -> str | list[int]:
-        """Apply chat template if available."""
-        return self._tokenizer.apply_chat_template(
-            messages,
-            tokenize=tokenize,
-            add_generation_prompt=add_generation_prompt,
-            **kwargs,
-        )
+        """Apply chat template if available; otherwise fallback to concatenating contents."""
+        if hasattr(self._tokenizer, "apply_chat_template"):
+            return self._tokenizer.apply_chat_template(
+                messages,
+                tokenize=tokenize,
+                add_generation_prompt=add_generation_prompt,
+                **kwargs,
+            )
+        return _fallback_chat_template(messages)
 
 
 def load_hf_tokenizer(

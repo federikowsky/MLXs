@@ -19,6 +19,7 @@ def chunked_prefill(
     cache: list[KVCache],
     *,
     prefill_step_size: int = 2048,
+    input_embeddings: mx.array | None = None,
 ) -> mx.array:
     """Run prefill on a prompt, processing in chunks.
 
@@ -30,6 +31,8 @@ def chunked_prefill(
         prompt_tokens: 1-D token array (not batched).
         cache: KV cache list (one per layer).
         prefill_step_size: Maximum tokens per prefill chunk.
+        input_embeddings: Pre-computed embeddings ``(T, D)`` from
+            multimodal preprocessing (§7.4). Sliced in sync with tokens.
 
     Returns:
         Logits array of shape (1, vocab_size) from the last prompt token.
@@ -42,12 +45,20 @@ def chunked_prefill(
         remaining = (total - offset) - 1
         n = min(prefill_step_size, remaining)
         chunk = prompt_tokens[offset : offset + n]
-        model(chunk[None], cache=cache)
+        if input_embeddings is not None:
+            chunk_embeds = input_embeddings[offset : offset + n]
+            model(chunk[None], cache=cache, input_embeddings=chunk_embeds[None])
+        else:
+            model(chunk[None], cache=cache)
         mx.eval([c.state for c in cache if c.state is not None])
         offset += n
         mx.clear_cache()
 
     # Process the last token and return its logits
     last_token = prompt_tokens[offset:]
-    logits = model(last_token[None], cache=cache)
+    if input_embeddings is not None:
+        last_embed = input_embeddings[offset:]
+        logits = model(last_token[None], cache=cache, input_embeddings=last_embed[None])
+    else:
+        logits = model(last_token[None], cache=cache)
     return logits[:, -1, :]

@@ -28,7 +28,19 @@ class _CacheEntry:
     prefix_tokens: tuple[int, ...]
     cache_state: list[Any]  # list[CacheProtocol]
     size_bytes: int
+    media_hash: str | None = None
     access_count: int = 0
+
+
+def _trie_model_key(model_id: str, media_hash: str | None) -> str:
+    """Compose model_id and media_hash into a single trie key.
+
+    This ensures entries with different media content are stored
+    separately in the trie even if their token sequences are identical.
+    """
+    if media_hash is None:
+        return model_id
+    return f"{model_id}::media:{media_hash}"
 
 
 class _PrefixTrie:
@@ -129,13 +141,16 @@ class LRUPromptCache:
         self,
         model_id: str,
         token_ids: tuple[int, ...],
+        *,
+        media_hash: str | None = None,
     ) -> tuple[list[Any] | None, int]:
         """Look up the longest cached prefix.
 
         Returns a deep copy of the cache state so modifications by the
         caller don't corrupt the cached entry.
         """
-        entry_key, prefix_len = self._trie.longest_prefix(model_id, token_ids)
+        trie_key = _trie_model_key(model_id, media_hash)
+        entry_key, prefix_len = self._trie.longest_prefix(trie_key, token_ids)
 
         if entry_key is None or entry_key not in self._entries:
             self._miss_count += 1
@@ -156,12 +171,15 @@ class LRUPromptCache:
         model_id: str,
         token_ids: tuple[int, ...],
         cache_state: list[Any],
+        *,
+        media_hash: str | None = None,
     ) -> None:
         """Store a prefix and its KV cache state.
 
         Evicts LRU entries if limits are exceeded.
         """
-        key = (model_id, token_ids)
+        trie_key = _trie_model_key(model_id, media_hash)
+        key = (trie_key, token_ids)
 
         # Calculate size
         size_bytes = sum(getattr(c, "state_size_bytes", 0) for c in cache_state)
@@ -182,10 +200,11 @@ class LRUPromptCache:
             prefix_tokens=token_ids,
             cache_state=copy.deepcopy(cache_state),
             size_bytes=size_bytes,
+            media_hash=media_hash,
         )
 
         self._entries[key] = entry
-        self._trie.insert(model_id, token_ids)
+        self._trie.insert(trie_key, token_ids)
         self._total_bytes += size_bytes
 
         # Evict if over count limit
@@ -227,7 +246,8 @@ class LRUPromptCache:
         if not self._entries:
             return
         _key, entry = self._entries.popitem(last=False)
-        self._trie.remove(entry.model_id, entry.prefix_tokens)
+        trie_key = _trie_model_key(entry.model_id, entry.media_hash)
+        self._trie.remove(trie_key, entry.prefix_tokens)
         self._total_bytes -= entry.size_bytes
         self._eviction_count += 1
         logger.debug(

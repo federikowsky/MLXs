@@ -68,6 +68,19 @@ class ModelConfig(_Frozen):
         default=None,
         description="Hugging Face token for gated/private repos. Prefer HF_TOKEN env for security. Never logged.",
     )
+    image_max_pixels: int | None = Field(
+        default=None,
+        description="Max total pixels per image before resize. None = model default (FR12).",
+    )
+    image_min_pixels: int | None = Field(
+        default=None,
+        description="Min total pixels per image. None = model default (FR12).",
+    )
+    max_images_per_request: int = Field(
+        default=4,
+        ge=1,
+        description="Maximum images per request (memory bound) (FR12).",
+    )
 
 
 class GenerateConfig(_Frozen):
