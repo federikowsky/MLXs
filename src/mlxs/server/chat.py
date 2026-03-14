@@ -1,8 +1,10 @@
-"""Interactive chat loop — multi-turn CLI chat with streaming and prompt cache (plan-chat-cli).
+"""Interactive chat loop — multi-turn CLI chat with streaming and prompt cache.
 
-Uses the same deps as the server (model, tokenizer, generate_fn, prompt_cache).
-Streams tokens to stdout and maintains conversation history; uses prompt_cache
-for KV reuse across turns.
+Simple fallback chat (--simple-chat).  Uses the same deps as the server
+(model, tokenizer, generate_fn, prompt_cache).  Streams tokens to stdout
+and maintains conversation history; uses prompt_cache for KV reuse.
+
+The new default chat experience is the Textual TUI (ui/tui/app.py).
 """
 
 from __future__ import annotations
@@ -12,9 +14,13 @@ import sys
 from typing import Any
 
 from mlxs._types import GenerateOptions
+from mlxs.chat.template import (
+    build_prompt_ids,
+    collect_stop_token_ids,
+    sanitize_assistant_text,
+)
 from mlxs.config.schema import GenerateConfig
 from mlxs.server.deps import Dependencies
-from mlxs.server.routes.chat import _apply_chat_template
 
 logger = logging.getLogger(__name__)
 
@@ -23,18 +29,21 @@ def run_chat_loop(
     deps: Dependencies,
     options: GenerateOptions | None = None,
 ) -> None:
-    """Run the interactive multi-turn chat loop.
+    """Run the interactive multi-turn chat loop (simple/fallback mode).
 
-    Reads user input, appends to messages, builds prompt via chat template,
-    uses prompt_cache for prefix reuse when possible, calls generate_fn,
-    streams tokens to stdout, appends assistant reply, updates prompt cache.
+    Reads user input, appends to messages, builds prompt via chat template
+    (tokenize=True — no double-format), uses prompt_cache for prefix reuse,
+    calls generate_fn, streams tokens to stdout, appends sanitised assistant
+    reply, updates prompt cache.
+
     Exits on empty input, /quit, or KeyboardInterrupt.
-
-    Args:
-        deps: Wired dependencies (model, tokenizer, generate_fn, prompt_cache).
-        options: Override generation options. If None, built from deps.config.generate.
     """
-    gen_opts = options if options is not None else _options_from_config(deps.config.generate)
+    # Discover extra stop tokens once at startup
+    extra_stop_ids = collect_stop_token_ids(deps.tokenizer)
+
+    gen_opts = options if options is not None else _options_from_config(
+        deps.config.generate, extra_stop_ids=extra_stop_ids,
+    )
     messages: list[dict[str, str]] = []
     model_id = _model_id_for_cache(deps)
 
@@ -55,26 +64,26 @@ def run_chat_loop(
 
         messages.append({"role": "user", "content": line})
 
+        # Build prompt as token ids directly (no intermediate string)
         try:
-            prompt_str = _apply_chat_template(deps.tokenizer, messages)
+            prompt_token_ids = build_prompt_ids(deps.tokenizer, messages)
         except Exception as exc:
             print(f"Error applying chat template: {exc}", file=sys.stderr)
             messages.pop()
             continue
 
-        prompt_token_ids = deps.tokenizer.encode(prompt_str)
         if not prompt_token_ids:
             messages.pop()
             continue
 
         cache_state, prefix_len = deps.prompt_cache.get(model_id, tuple(prompt_token_ids))
         suffix_len = len(prompt_token_ids) - prefix_len
-        prompt_for_gen: str | list[int]
+        prompt_for_gen: list[int]
         if cache_state is not None and prefix_len > 0 and suffix_len > 0:
             prompt_for_gen = list(prompt_token_ids[prefix_len:])
             cache_for_gen = cache_state
         else:
-            prompt_for_gen = prompt_str
+            prompt_for_gen = prompt_token_ids
             cache_for_gen = None
 
         final_cache_ref: list[Any] = []
@@ -119,14 +128,19 @@ def run_chat_loop(
             new_prefix = tuple(prompt_token_ids) + tuple(generated_ids)
             deps.prompt_cache.put(model_id, new_prefix, cache_to_put)
 
-        full_response = deps.tokenizer.decode(generated_ids)
+        full_response = sanitize_assistant_text(deps.tokenizer.decode(generated_ids))
         messages.append({"role": "assistant", "content": full_response})
 
     logger.info("Chat exiting.")
 
 
-def _options_from_config(c: GenerateConfig) -> GenerateOptions:
-    """Build GenerateOptions from GenerateConfig."""
+def _options_from_config(
+    c: GenerateConfig,
+    *,
+    extra_stop_ids: tuple[int, ...] = (),
+) -> GenerateOptions:
+    """Build GenerateOptions from GenerateConfig, merging discovered stop ids."""
+    merged_eos = tuple(sorted(set(c.extra_eos_token_ids) | set(extra_stop_ids)))
     return GenerateOptions(
         max_tokens=c.max_tokens,
         temperature=c.temperature,
@@ -135,7 +149,7 @@ def _options_from_config(c: GenerateConfig) -> GenerateOptions:
         min_p=c.min_p,
         seed=c.seed,
         stop_sequences=c.stop_sequences,
-        extra_eos_token_ids=c.extra_eos_token_ids,
+        extra_eos_token_ids=merged_eos,
         repetition_penalty=c.repetition_penalty,
         logprobs=c.logprobs,
         top_logprobs=c.top_logprobs,
@@ -153,4 +167,3 @@ def _read_line() -> str | None:
         return input()
     except EOFError:
         return None
-

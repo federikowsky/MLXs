@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse, Response
 
 from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
+from mlxs.chat.template import build_prompt_str
 from mlxs.server.media import (
     extract_media_from_messages,
     load_image,
@@ -62,7 +63,7 @@ async def chat_completions(request: Request) -> Response:
         )
 
     try:
-        prompt = _apply_chat_template(deps.tokenizer, text_messages)
+        prompt = build_prompt_str(deps.tokenizer, text_messages)
     except Exception as exc:
         return JSONResponse(
             {"error": {"message": f"Failed to apply chat template: {exc}"}},
@@ -114,13 +115,6 @@ def _build_options(body: dict[str, Any]) -> GenerateOptions:
         top_logprobs=body.get("top_logprobs", 0),
     )
 
-
-def _apply_chat_template(tokenizer: Any, messages: list[dict]) -> str:
-    """Apply chat template to messages, returning the formatted prompt string."""
-    if hasattr(tokenizer, "apply_chat_template"):
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    # Fallback: concatenate message contents
-    return "\n".join(m.get("content", "") for m in messages)
 
 
 async def _stream_response(
