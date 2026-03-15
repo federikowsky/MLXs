@@ -163,8 +163,12 @@ class YarnRoPE(nn.Module):
         beta_slow: int = 1,
         mscale: float = 1,
         mscale_all_dim: float = 0,
+        attn_factor: float | None = None,
     ) -> None:
         super().__init__()
+
+        if attn_factor is not None:
+            mscale = float(attn_factor)
 
         def yarn_find_correction_dim(num_rotations: float) -> float:
             return (
@@ -261,6 +265,7 @@ def initialize_rope(
                 "beta_slow",
                 "mscale",
                 "mscale_all_dim",
+                "attn_factor",
             ]
             if key in scaling_config
         }

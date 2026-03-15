@@ -134,7 +134,6 @@ _MODEL_REMAPPING: dict[str, str] = {
     "nemotron-nas": "nemotron_nas",
     "phi3_small": "phi3small",
     "qwen2_5_vl": "qwen2_vl",
-    "qwen3": "qwen2",  # Qwen3 dense uses same architecture as Qwen2
 }
 
 
