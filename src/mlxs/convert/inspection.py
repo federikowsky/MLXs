@@ -49,8 +49,16 @@ def inspect_source(
         _raise_unsupported_weight_layout(resolved_path)
 
     tensor_infos = _inspect_weight_files(weight_files)
-    tokenizer_artifacts = _collect_artifacts(resolved_path, _TOKENIZER_FILENAMES)
-    multimodal_artifacts = _collect_artifacts(resolved_path, _MULTIMODAL_FILENAMES)
+    tokenizer_artifacts = _collect_artifacts(
+        resolved_path,
+        _TOKENIZER_FILENAMES,
+        allow_generic_json_match=True,
+    )
+    multimodal_artifacts = _collect_artifacts(
+        resolved_path,
+        _MULTIMODAL_FILENAMES,
+        allow_generic_json_match=False,
+    )
     custom_code_indicators = _detect_custom_code_indicators(resolved_path, config)
 
     warnings: list[str] = []
@@ -133,7 +141,12 @@ def _tensor_info_from_handle(handle: Any, name: str, file_name: str) -> TensorIn
     return TensorInfo(name=name, shape=shape, dtype=dtype_value, file=file_name)
 
 
-def _collect_artifacts(resolved_path: Path, allowed_names: set[str]) -> tuple[str, ...]:
+def _collect_artifacts(
+    resolved_path: Path,
+    allowed_names: set[str],
+    *,
+    allow_generic_json_match: bool,
+) -> tuple[str, ...]:
     artifacts: list[str] = []
     for entry in sorted(resolved_path.iterdir()):
         if not entry.is_file():
@@ -141,7 +154,7 @@ def _collect_artifacts(resolved_path: Path, allowed_names: set[str]) -> tuple[st
         if entry.name in allowed_names:
             artifacts.append(entry.name)
             continue
-        if entry.name.endswith(".json") and (
+        if allow_generic_json_match and entry.name.endswith(".json") and (
             "tokenizer" in entry.name or "processor" in entry.name or "template" in entry.name
         ):
             artifacts.append(entry.name)

@@ -167,9 +167,9 @@ def _check_runtime_smoke_load(
         if canonical_ir.topology.multimodal:
             from mlxs._types import ModelMode
 
-            load_model(output_dir, lazy=True, model_mode=ModelMode.MULTIMODAL)
+            load_model(output_dir, lazy=False, model_mode=ModelMode.MULTIMODAL)
         else:
-            load_model(output_dir, lazy=True)
+            load_model(output_dir, lazy=False)
     except Exception as exc:
         checks.append(
             VerificationCheck(

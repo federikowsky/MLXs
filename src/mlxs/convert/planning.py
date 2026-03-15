@@ -152,7 +152,16 @@ def _mapping_for_target(
         tensor = context.source_tensors.get(candidate)
         if tensor is None:
             continue
-        transforms = list(_shape_adjustments(candidate, tensor.shape, target_name, target_shape))
+        transforms = list(
+            _shape_adjustments(
+                candidate,
+                tensor.shape,
+                target_name,
+                target_shape,
+                context,
+                canonical_ir,
+            )
+        )
         context.used_source_names.add(candidate)
         return TensorTargetPlan(
             target_name=target_name,
@@ -162,6 +171,8 @@ def _mapping_for_target(
 
     specialized = (
         _stack_triplet_experts(target_name, context, canonical_ir)
+        or _stack_named_experts(target_name, context, canonical_ir)
+        or _split_switch_mlp_input_linear(target_name, context)
         or _split_gate_up_proj(target_name, context)
         or _split_shared_mlp(target_name, context)
         or _split_feed_forward_experts(target_name, context)
@@ -186,13 +197,26 @@ def _alias_candidates(target_name: str) -> tuple[str, ...]:
         candidates.add(target_name[len("model."):])
     if "vision_tower." in target_name:
         candidates.add(target_name.replace("vision_tower.", "visual.", 1))
+        candidates.add(target_name.replace("vision_tower.", "model.visual.", 1))
         candidates.add(target_name.replace("vision_tower.", "model.vision_encoder.", 1))
         candidates.add(target_name.replace("vision_tower.", "vision_tower.vision_model.", 1))
     if "multi_modal_projector." in target_name:
         candidates.add(target_name.replace("multi_modal_projector.", "model.vision_projection.", 1))
     if target_name.startswith("language_model.model."):
         candidates.add(target_name.replace("language_model.model.", "model.language_model.", 1))
-    return tuple(candidate for candidate in candidates if candidate)
+    expanded = set(candidates)
+    for candidate in list(candidates):
+        if ".mlp.fc1." in candidate:
+            expanded.add(candidate.replace(".mlp.fc1.", ".mlp.linear_fc1.", 1))
+        if ".mlp.fc2." in candidate:
+            expanded.add(candidate.replace(".mlp.fc2.", ".mlp.linear_fc2.", 1))
+        if ".merger.ln_q." in candidate:
+            expanded.add(candidate.replace(".merger.ln_q.", ".merger.norm.", 1))
+        if ".merger.mlp.0." in candidate:
+            expanded.add(candidate.replace(".merger.mlp.0.", ".merger.linear_fc1.", 1))
+        if ".merger.mlp.2." in candidate:
+            expanded.add(candidate.replace(".merger.mlp.2.", ".merger.linear_fc2.", 1))
+    return tuple(candidate for candidate in expanded if candidate)
 
 
 def _shape_adjustments(
@@ -200,6 +224,8 @@ def _shape_adjustments(
     source_shape: tuple[int, ...],
     target_name: str,
     target_shape: tuple[int, ...],
+    context: PlanningContext,
+    canonical_ir: CanonicalIR,
 ) -> list[TensorTransform]:
     transforms: list[TensorTransform] = []
     if _needs_conv_axis_move(source_name, source_shape, target_shape):
@@ -211,6 +237,19 @@ def _shape_adjustments(
                 note="Normalize conv weight layout to runtime schema",
             )
         )
+    elif permutation := _patch_conv_permutation(
+        source_name,
+        target_name,
+        source_shape,
+        target_shape,
+    ):
+        transforms.append(
+            TensorTransform(
+                kind=TensorTransformKind.TRANSPOSE,
+                permutation=permutation,
+                note="Normalize vision patch convolution layout to runtime schema",
+            )
+        )
     elif source_shape != target_shape and len(source_shape) == len(target_shape) and tuple(
         reversed(source_shape)
     ) == target_shape:
@@ -219,6 +258,14 @@ def _shape_adjustments(
                 kind=TensorTransformKind.TRANSPOSE,
                 permutation=tuple(range(len(source_shape) - 1, -1, -1)),
                 note="Reverse axes to fit runtime schema",
+            )
+        )
+    if _needs_qwen35_norm_shift(target_name, context, canonical_ir):
+        transforms.append(
+            TensorTransform(
+                kind=TensorTransformKind.ADD,
+                scalar=1.0,
+                note="Restore runtime norm baseline after Qwen3.5-style source normalization",
             )
         )
     return transforms
@@ -236,6 +283,26 @@ def _needs_conv_axis_move(
     moved = list(source_shape)
     moved[1], moved[2] = moved[2], moved[1]
     return tuple(moved) == target_shape
+
+
+def _patch_conv_permutation(
+    source_name: str,
+    target_name: str,
+    source_shape: tuple[int, ...],
+    target_shape: tuple[int, ...],
+) -> tuple[int, ...] | None:
+    if not any(
+        marker in source_name or marker in target_name
+        for marker in ("patch_conv.weight", "patch_embed.proj.weight")
+    ):
+        return None
+    if len(source_shape) not in {4, 5} or len(source_shape) != len(target_shape):
+        return None
+    permutation = (0, *range(2, len(source_shape)), 1)
+    permuted = tuple(source_shape[index] for index in permutation)
+    if permuted == target_shape:
+        return tuple(int(index) for index in permutation)
+    return None
 
 
 def _stack_triplet_experts(
@@ -278,6 +345,101 @@ def _stack_triplet_experts(
     )
 
 
+def _stack_named_experts(
+    target_name: str,
+    context: PlanningContext,
+    canonical_ir: CanonicalIR,
+) -> TensorTargetPlan | None:
+    if ".switch_mlp." not in target_name:
+        return None
+    matched = next(
+        (
+            projection
+            for projection in ("gate_proj", "down_proj", "up_proj")
+            if f".switch_mlp.{projection}." in target_name
+        ),
+        None,
+    )
+    if matched is None:
+        return None
+    suffix = target_name.rsplit(".", 1)[-1]
+    target_prefix = target_name.split(".switch_mlp.", 1)[0]
+    expert_count = _expert_count(canonical_ir)
+    if expert_count <= 0:
+        return None
+    source_names = tuple(
+        f"{target_prefix}.experts.{index}.{matched}.{suffix}"
+        for index in range(expert_count)
+    )
+    if not all(name in context.source_tensors for name in source_names):
+        return None
+    return TensorTargetPlan(
+        target_name=target_name,
+        source_names=source_names,
+        transforms=(
+            TensorTransform(
+                kind=TensorTransformKind.STACK,
+                axis=0,
+                note="Stack per-expert tensors into runtime switch_mlp tensor",
+            ),
+        ),
+    )
+
+
+def _split_switch_mlp_input_linear(
+    target_name: str,
+    context: PlanningContext,
+) -> TensorTargetPlan | None:
+    if ".switch_mlp.gate_proj.weight" in target_name:
+        source_name = target_name.replace(
+            ".switch_mlp.gate_proj.weight",
+            ".input_linear.weight",
+        )
+        if source_name in context.source_tensors:
+            return TensorTargetPlan(
+                target_name=target_name,
+                source_names=(source_name,),
+                transforms=(
+                    TensorTransform(
+                        kind=TensorTransformKind.SLICE,
+                        axis=-2,
+                        slice_start=0,
+                        slice_stop=None,
+                        note="Split switch MLP input_linear first half",
+                    ),
+                ),
+                note="switch_mlp_input_linear_split",
+            )
+    if ".switch_mlp.up_proj.weight" in target_name:
+        source_name = target_name.replace(
+            ".switch_mlp.up_proj.weight",
+            ".input_linear.weight",
+        )
+        if source_name in context.source_tensors:
+            return TensorTargetPlan(
+                target_name=target_name,
+                source_names=(source_name,),
+                transforms=(
+                    TensorTransform(
+                        kind=TensorTransformKind.SLICE,
+                        axis=-2,
+                        slice_start=None,
+                        slice_stop=None,
+                        note="Split switch MLP input_linear second half",
+                    ),
+                ),
+                note="switch_mlp_input_linear_split",
+            )
+    if ".switch_mlp.down_proj.weight" in target_name:
+        source_name = target_name.replace(
+            ".switch_mlp.down_proj.weight",
+            ".output_linear.weight",
+        )
+        if source_name in context.source_tensors:
+            return TensorTargetPlan(target_name=target_name, source_names=(source_name,))
+    return None
+
+
 def _split_gate_up_proj(target_name: str, context: PlanningContext) -> TensorTargetPlan | None:
     replacements = (
         (
@@ -294,12 +456,13 @@ def _split_gate_up_proj(target_name: str, context: PlanningContext) -> TensorTar
     for target_suffix, source_suffix, is_gate in replacements:
         if not target_name.endswith(target_suffix):
             continue
-        source_name = target_name[: -len(target_suffix)] + source_suffix
-        if source_name not in context.source_tensors:
-            source_name_weight = f"{source_name}.weight"
-            if source_name_weight not in context.source_tensors:
-                return None
-            source_name = source_name_weight
+        source_name = _resolve_source_name(
+            context,
+            target_name[: -len(target_suffix)] + source_suffix,
+            allow_weight_suffix=True,
+        )
+        if source_name is None:
+            return None
         return TensorTargetPlan(
             target_name=target_name,
             source_names=(source_name,),
@@ -317,6 +480,19 @@ def _split_gate_up_proj(target_name: str, context: PlanningContext) -> TensorTar
                 ),
             ),
             note="gate_up_split",
+        )
+    if target_name.endswith(".switch_mlp.down_proj.weight"):
+        source_name = _resolve_source_name(
+            context,
+            target_name[: -len(".switch_mlp.down_proj.weight")] + ".experts.down_proj",
+            allow_weight_suffix=True,
+        )
+        if source_name is None:
+            return None
+        return TensorTargetPlan(
+            target_name=target_name,
+            source_names=(source_name,),
+            note="expert_down_proj_alias",
         )
     return None
 
@@ -440,6 +616,70 @@ def _expert_count(canonical_ir: CanonicalIR) -> int:
     if isinstance(value, int) and value > 0:
         return value
     return 0
+
+
+def _resolve_source_name(
+    context: PlanningContext,
+    source_name: str,
+    *,
+    allow_weight_suffix: bool = False,
+) -> str | None:
+    candidates = list(_alias_candidates(source_name))
+    if allow_weight_suffix:
+        candidates.extend(
+            candidate if candidate.endswith(".weight") else f"{candidate}.weight"
+            for candidate in list(candidates)
+        )
+    for candidate in candidates:
+        if candidate in context.source_tensors:
+            return candidate
+    return None
+
+
+def _needs_qwen35_norm_shift(
+    target_name: str,
+    context: PlanningContext,
+    canonical_ir: CanonicalIR,
+) -> bool:
+    if not _is_norm_target(target_name):
+        return False
+    tensor_names = context.source_tensors.keys()
+    if not any("linear_attn." in name for name in tensor_names):
+        return False
+    if not any("self_attn." in name for name in tensor_names):
+        return False
+    if not any(
+        ("conv1d.weight" in name or "conv_1d.weight" in name) and info.shape[-1] != 1
+        for name, info in context.source_tensors.items()
+    ):
+        return False
+    config = canonical_ir.conversion.canonical_output_config
+    return (canonical_ir.topology.ssm_hybrid or canonical_ir.topology.multimodal) and (
+        _config_contains(config, "partial_rotary_factor") or _config_contains(
+        config,
+        "rope_parameters",
+    )
+    )
+
+
+def _is_norm_target(target_name: str) -> bool:
+    norm_suffixes = (
+        ".input_layernorm.weight",
+        ".post_attention_layernorm.weight",
+        "model.norm.weight",
+        ".q_norm.weight",
+        ".k_norm.weight",
+    )
+    return any(target_name.endswith(suffix) for suffix in norm_suffixes)
+
+
+def _config_contains(config: dict[str, Any], key: str) -> bool:
+    if key in config:
+        return True
+    for value in config.values():
+        if isinstance(value, dict) and _config_contains(value, key):
+            return True
+    return False
 
 
 def _runtime_model_mode(canonical_ir: CanonicalIR) -> str:

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any
 
 
-class SourceKind(str, Enum):
+class SourceKind(StrEnum):
     LOCAL = "local"
     HF_REPO = "hf_repo"
 
 
-class MacroTemplate(str, Enum):
+class MacroTemplate(StrEnum):
     DECODER_DENSE = "decoder_dense"
     DECODER_MOE = "decoder_moe"
     ENCODER_DECODER = "encoder_decoder"
@@ -20,18 +20,18 @@ class MacroTemplate(str, Enum):
     SSM_HYBRID = "ssm_hybrid"
 
 
-class Modality(str, Enum):
+class Modality(StrEnum):
     TEXT = "text"
     MULTIMODAL = "multimodal"
 
 
-class DensityKind(str, Enum):
+class DensityKind(StrEnum):
     DENSE = "dense"
     MOE = "moe"
     HYBRID = "hybrid"
 
 
-class ConversionPhase(str, Enum):
+class ConversionPhase(StrEnum):
     INSPECTION = "inspection"
     NORMALIZATION = "normalization"
     PLANNING = "planning"
@@ -39,18 +39,19 @@ class ConversionPhase(str, Enum):
     VERIFICATION = "verification"
 
 
-class VerificationMode(str, Enum):
+class VerificationMode(StrEnum):
     REQUIRED = "required"
     BASIC = "basic"
     SKIP = "skip"
 
 
-class ModelAssistanceMode(str, Enum):
+class ModelAssistanceMode(StrEnum):
     DISABLED = "disabled"
     OPTIONAL = "optional"
 
 
-class TensorTransformKind(str, Enum):
+class TensorTransformKind(StrEnum):
+    ADD = "add"
     CAST = "cast"
     CONCAT = "concat"
     MOVE_AXIS = "move_axis"
@@ -60,7 +61,7 @@ class TensorTransformKind(str, Enum):
     TRANSPOSE = "transpose"
 
 
-class VerificationStatus(str, Enum):
+class VerificationStatus(StrEnum):
     PASSED = "passed"
     FAILED = "failed"
     SKIPPED = "skipped"
@@ -228,6 +229,7 @@ class RuntimeTensorSchemaEntry:
 @dataclass(frozen=True, slots=True)
 class TensorTransform:
     kind: TensorTransformKind
+    scalar: float | None = None
     axis: int | None = None
     permutation: tuple[int, ...] | None = None
     source_axis: int | None = None

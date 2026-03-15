@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterable
 from typing import Any
 
@@ -82,7 +83,9 @@ def normalize_inspection(
     tokenizer_type = _detect_tokenizer_type(inspection.tokenizer_artifacts)
     tokenizer_specials = _collect_special_tokens(config)
     is_supported = (
-        runtime_target_model_type is not None and macro_template in _SUPPORTED_RUNTIME_TEMPLATES
+        runtime_target_model_type is not None
+        and macro_template in _SUPPORTED_RUNTIME_TEMPLATES
+        and _runtime_supports_modality(runtime_target_model_type, topology.multimodal)
     )
     architecture_label = runtime_target_model_type or config.get("model_type", "unknown")
 
@@ -170,9 +173,43 @@ def _resolve_runtime_target_model_type(config: dict[str, Any]) -> str | None:
     if source_model_type is None:
         return None
     canonical = _MODEL_REMAPPING.get(source_model_type, source_model_type)
+    if _has_multimodal_config(config):
+        multimodal_candidates = []
+        if canonical.endswith("_moe"):
+            multimodal_candidates.append(canonical.replace("_moe", "_vl_moe"))
+        multimodal_candidates.append(f"{canonical}_vl")
+        for candidate in multimodal_candidates:
+            if candidate in MODEL_REGISTRY:
+                return candidate
     if canonical in MODEL_REGISTRY:
         return canonical
     return source_model_type
+
+
+def _runtime_supports_modality(runtime_target_model_type: str, multimodal: bool) -> bool:
+    if not multimodal:
+        return True
+
+    from mlxs.load.registry import get_model_classes
+
+    try:
+        ModelClass, _ = get_model_classes(runtime_target_model_type)
+    except ValueError:
+        return False
+    signature = inspect.signature(ModelClass.__init__)
+    return "model_mode" in signature.parameters
+
+
+def _has_multimodal_config(config: dict[str, Any]) -> bool:
+    multimodal_keys = {
+        "vision_config",
+        "visual_config",
+        "image_token_id",
+        "video_token_id",
+        "vision_start_token_id",
+        "vision_end_token_id",
+    }
+    return any(key in config for key in multimodal_keys)
 
 
 def _select_macro_template(

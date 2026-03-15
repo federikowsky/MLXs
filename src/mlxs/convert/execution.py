@@ -5,6 +5,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+import mlx.core as mx
+
 from mlxs.convert.diagnostics import write_manifest
 from mlxs.convert.errors import (
     IncompatibleTensorShapeError,
@@ -56,18 +58,10 @@ def write_failure_manifest(output_dir: Path, manifest: ConversionManifest) -> Pa
 
 
 def _load_source_weights(inspection: InspectionReport) -> dict[str, Any]:
-    try:
-        from safetensors.numpy import load_file
-    except ImportError as exc:
-        raise SerializationFailureError(
-            "safetensors is required to load conversion sources",
-            phase=ConversionPhase.EXECUTION,
-        ) from exc
-
     tensors: dict[str, Any] = {}
     for file_name in inspection.shard_files:
         file_path = inspection.resolved_path / file_name
-        tensors.update(load_file(str(file_path)))
+        tensors.update(mx.load(str(file_path)))
     return tensors
 
 
@@ -115,12 +109,16 @@ def _apply_transform(value: Any, transform: Any) -> Any:
             phase=ConversionPhase.EXECUTION,
         ) from exc
 
+    backend = _transform_backend(value)
+
     if transform.kind == TensorTransformKind.STACK:
         if not isinstance(value, list):
             raise InvalidTransformRequestError(
                 "STACK transform expects multiple tensors",
                 phase=ConversionPhase.EXECUTION,
             )
+        if backend == "mlx":
+            return mx.stack(value, axis=transform.axis or 0)
         return np.stack(value, axis=transform.axis or 0)
 
     if transform.kind == TensorTransformKind.CONCAT:
@@ -129,18 +127,34 @@ def _apply_transform(value: Any, transform: Any) -> Any:
                 "CONCAT transform expects multiple tensors",
                 phase=ConversionPhase.EXECUTION,
             )
+        if backend == "mlx":
+            return mx.concatenate(value, axis=transform.axis or 0)
         return np.concatenate(value, axis=transform.axis or 0)
 
+    if transform.kind == TensorTransformKind.ADD:
+        scalar = 0.0 if transform.scalar is None else transform.scalar
+        if backend == "mlx":
+            return value + scalar
+        return value + np.asarray(scalar, dtype=value.dtype)
+
     if transform.kind == TensorTransformKind.MOVE_AXIS:
+        if backend == "mlx":
+            return mx.moveaxis(value, transform.source_axis, transform.target_axis)
         return np.moveaxis(value, transform.source_axis, transform.target_axis)
 
     if transform.kind == TensorTransformKind.TRANSPOSE:
+        if backend == "mlx":
+            return mx.transpose(value, axes=transform.permutation)
         return np.transpose(value, axes=transform.permutation)
 
     if transform.kind == TensorTransformKind.RESHAPE:
+        if backend == "mlx":
+            return mx.reshape(value, shape=transform.shape)
         return np.reshape(value, newshape=transform.shape)
 
     if transform.kind == TensorTransformKind.CAST:
+        if backend == "mlx":
+            return value.astype(_mlx_dtype(transform.dtype))
         return value.astype(transform.dtype)
 
     if transform.kind == TensorTransformKind.SLICE:
@@ -185,17 +199,9 @@ def _write_weight_files(
     tensors: dict[str, Any],
     max_shard_bytes: int | None,
 ) -> tuple[list[str], str | None]:
-    try:
-        from safetensors.numpy import save_file
-    except ImportError as exc:
-        raise SerializationFailureError(
-            "safetensors is required to write conversion outputs",
-            phase=ConversionPhase.EXECUTION,
-        ) from exc
-
     if max_shard_bytes is None or not tensors:
         file_name = "model.safetensors"
-        save_file(tensors, str(destination / file_name))
+        mx.save_safetensors(str(destination / file_name), _to_mlx_tensors(tensors))
         return [file_name], None
 
     shards: list[dict[str, Any]] = []
@@ -217,7 +223,7 @@ def _write_weight_files(
     total = len(shards)
     for index, shard in enumerate(shards, start=1):
         file_name = f"model-{index:05d}-of-{total:05d}.safetensors"
-        save_file(shard, str(destination / file_name))
+        mx.save_safetensors(str(destination / file_name), _to_mlx_tensors(shard))
         weight_files.append(file_name)
         for name in shard:
             weight_map[name] = file_name
@@ -226,6 +232,28 @@ def _write_weight_files(
     index_payload = {"metadata": {"total_size": sum(int(t.nbytes) for t in tensors.values())}, "weight_map": weight_map}
     (destination / index_name).write_text(json.dumps(index_payload, indent=2, sort_keys=True))
     return weight_files, index_name
+
+
+def _transform_backend(value: Any) -> str:
+    sample = value[0] if isinstance(value, list) and value else value
+    module = type(sample).__module__
+    return "mlx" if module.startswith("mlx.") else "numpy"
+
+
+def _to_mlx_tensors(tensors: dict[str, Any]) -> dict[str, mx.array]:
+    result: dict[str, mx.array] = {}
+    for name, value in tensors.items():
+        result[name] = value if _transform_backend(value) == "mlx" else mx.array(value)
+    return result
+
+
+def _mlx_dtype(dtype_name: str | None) -> Any:
+    if dtype_name is None:
+        return None
+    name = str(dtype_name).split(".")[-1]
+    if hasattr(mx, name):
+        return getattr(mx, name)
+    return dtype_name
 
 
 def _copy_artifacts(
