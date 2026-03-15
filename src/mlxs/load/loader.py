@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -22,14 +22,19 @@ from mlxs.load.weights import load_config, load_weights
 
 if TYPE_CHECKING:
     from mlxs.config.schema import ModelConfig
+    ModuleT = Any
+else:
+    ModuleT = nn.Module
 
 logger = logging.getLogger(__name__)
+
+_DEFERRED_MULTIMODAL_MODEL_TYPES = {"qwen3_5_moe"}
 
 
 def load_model_and_tokenizer(
     model_path: str | Path,
     model_config: ModelConfig,
-) -> tuple[nn.Module, TokenizerWrapper]:
+) -> tuple[ModuleT, TokenizerWrapper]:
     """Load model and tokenizer according to config weight_format (FR1, §7.2).
 
     model_path can be a local directory or a Hugging Face model id; it is
@@ -47,7 +52,7 @@ def load_model(
     *,
     lazy: bool = False,
     model_mode: ModelMode = ModelMode.AUTO,
-) -> nn.Module:
+) -> ModuleT:
     """Load a model from a local path.
 
     Reads config.json, resolves the architecture via the registry,
@@ -93,6 +98,11 @@ def load_model(
             raise ModelLoadError(
                 f"model_mode=multimodal requested but {model_type} config.json "
                 f"has no vision_config. This model does not support vision."
+            )
+        if model_type in _DEFERRED_MULTIMODAL_MODEL_TYPES:
+            raise ModelLoadError(
+                f"{model_type} exposes multimodal-compatible config fields, "
+                "but multimodal runtime support is intentionally deferred."
             )
 
     args = ModelArgsClass.from_dict(config)

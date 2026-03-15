@@ -1,7 +1,8 @@
-"""Qwen3.5 hybrid model (linear/SSM + full attention) — ModelProtocol.
+"""Qwen3.5 family model — text-only and multimodal config-driven pilot.
 
-Alternating GatedDeltaNet (linear) and full attention every full_attention_interval.
-Uses ArraysCache(size=2) for linear layers, KVCache for attention. Port from mlx_lm.
+Alternating GatedDeltaNet (linear) and full attention every
+``full_attention_interval``. In multimodal mode, the same language backbone is
+paired with a SigLIP vision tower for image/video placeholder merging.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
+from mlxs._types import ModelMode
 from mlxs.cache.arrays import ArraysCache
 from mlxs.cache.attention_mask import create_attention_mask, create_ssm_mask
 from mlxs.cache.kv import KVCache
@@ -19,14 +21,29 @@ from mlxs.layers.activations import swiglu
 from mlxs.layers.attention import scaled_dot_product_attention
 from mlxs.layers.gated_delta import gated_delta_update
 from mlxs.layers.rope import initialize_rope
-from mlxs.models.base import BaseModelArgs
+from mlxs.models.multimodal_shared import (
+    MediaBranch,
+    MultimodalArgsMixin,
+    build_dual_mode_components,
+    prepare_multimodal_inputs,
+)
+from mlxs.models.vision.siglip_builder import build_siglip_vision_tower
+
+_VISION_PREFIXES = (
+    "visual.",
+    "vision_tower.",
+    "vision_model.",
+    "multi_modal_projector.",
+    "mm_projector.",
+)
+_VISION_EXACT = ("visual", "vision_tower", "vision_model")
 
 # ----- Model args -----
 
 
 @dataclass
-class ModelArgs(BaseModelArgs):
-    """Qwen3.5 text model configuration (flat, from config.json)."""
+class ModelArgs(MultimodalArgsMixin[dict[str, Any]]):
+    """Qwen3.5 family config: flat text-only or nested multimodal config."""
 
     model_type: str = "qwen3_5"
     hidden_size: int = 4096
@@ -50,6 +67,16 @@ class ModelArgs(BaseModelArgs):
     partial_rotary_factor: float = 0.25
     rope_scaling: dict[str, Any] | None = None
     rope_parameters: dict[str, Any] | None = None
+    image_token_id: int | None = 248056
+    video_token_id: int | None = 248057
+
+    @classmethod
+    def from_dict(cls, params: dict[str, Any]) -> ModelArgs:
+        return cls.from_flat_or_nested(
+            params,
+            default_model_type=params.get("model_type", "qwen3_5"),
+            vision_config_keys=("vision_config", "visual_config"),
+        )
 
     def __post_init__(self) -> None:
         if self.head_dim is None:
@@ -61,6 +88,13 @@ class ModelArgs(BaseModelArgs):
             self.partial_rotary_factor = params.get("partial_rotary_factor", 0.25)
             self.rope_theta = params.get("rope_theta", 100000.0)
             self.rope_scaling = params
+
+    def resolved_text_args(self) -> ModelArgs:
+        """Resolve the language-side config for nested multimodal layouts."""
+
+        if self.text_config:
+            return type(self).from_dict(self.text_config)
+        return self
 
 
 # ----- RMSNormGated (model-specific, not in layers/norms) -----
@@ -322,16 +356,81 @@ class Qwen35Model(nn.Module):
         return self.norm(h)
 
 
-class Model(nn.Module):
-    """Qwen3.5 LM head wrapper — satisfies ModelProtocol."""
+def _build_language_components(
+    args: ModelArgs,
+) -> tuple[Qwen35Model, nn.Linear | None]:
+    model = Qwen35Model(args)
+    lm_head = (
+        None
+        if args.tie_word_embeddings
+        else nn.Linear(args.hidden_size, args.vocab_size, bias=False)
+    )
+    return model, lm_head
 
-    def __init__(self, args: ModelArgs) -> None:
+
+def _sanitize_text_weights(
+    weights: dict[str, Any],
+    *,
+    tie_word_embeddings: bool,
+) -> dict[str, Any]:
+    has_mtp_weights = any("mtp." in key for key in weights)
+    has_unsanitized_conv1d = any(
+        "conv1d.weight" in key and value.shape[-1] != 1
+        for key, value in weights.items()
+    )
+    should_shift_norm_weights = has_mtp_weights or has_unsanitized_conv1d
+    sanitized = {key: value for key, value in weights.items() if "mtp." not in key}
+    if tie_word_embeddings:
+        sanitized.pop("lm_head.weight", None)
+        sanitized.pop("language_model.lm_head.weight", None)
+
+    norm_keys = (
+        ".input_layernorm.weight",
+        ".post_attention_layernorm.weight",
+        "model.norm.weight",
+        ".q_norm.weight",
+        ".k_norm.weight",
+    )
+    for key, value in list(sanitized.items()):
+        if "conv1d.weight" in key and value.shape[-1] != 1:
+            sanitized[key] = value.moveaxis(2, 1)
+        if (
+            should_shift_norm_weights
+            and any(key.endswith(suffix) for suffix in norm_keys)
+            and value.ndim == 1
+        ):
+            sanitized[key] = value + 1.0
+    return sanitized
+
+
+class Model(nn.Module):
+    """Qwen3.5 family wrapper — text-only or multimodal via config + model_mode."""
+
+    def __init__(
+        self,
+        args: ModelArgs,
+        *,
+        model_mode: ModelMode = ModelMode.TEXT,
+    ) -> None:
         super().__init__()
-        self.args = args
+        self.config = args
         self.model_type = args.model_type
-        self.model = Qwen35Model(args)
-        if not args.tie_word_embeddings:
-            self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
+        self._image_token_id = args.image_token_id
+        self._video_token_id = args.video_token_id
+
+        text_args = args.resolved_text_args()
+        self.args = text_args
+
+        components = build_dual_mode_components(
+            model_mode=model_mode,
+            language_builder=lambda: _build_language_components(text_args),
+            vision_config=args.vision_config,
+            vision_builder=build_siglip_vision_tower,
+        )
+        self._mode = components.model_mode
+        self.model, self.lm_head = components.language_model
+        if components.vision_tower is not None:
+            self.vision_tower = components.vision_tower
 
     def __call__(
         self,
@@ -343,7 +442,57 @@ class Model(nn.Module):
         out = self.model(inputs, cache, input_embeddings=input_embeddings)
         if self.args.tie_word_embeddings:
             return self.model.embed_tokens.as_linear(out)
+        if self.lm_head is None:
+            raise ValueError("lm_head is required when tie_word_embeddings is False")
         return self.lm_head(out)
+
+    def prepare_inputs(
+        self,
+        input_ids: mx.array,
+        *,
+        pixel_values: mx.array | None = None,
+        image_grid_thw: mx.array | None = None,
+        video_pixel_values: mx.array | None = None,
+        **kwargs: Any,
+    ) -> tuple[mx.array, mx.array | None]:
+        if not self.supports_vision or (pixel_values is None and video_pixel_values is None):
+            return input_ids, None
+
+        image_branch = None
+        if pixel_values is not None and self._image_token_id is not None:
+            image_branch = MediaBranch(
+                values=pixel_values,
+                placeholder_token_id=self._image_token_id,
+                encode=self._encode_media,
+                encoder_kwargs={"grid_thw": image_grid_thw},
+            )
+
+        video_branch = None
+        if video_pixel_values is not None and self._video_token_id is not None:
+            video_branch = MediaBranch(
+                values=video_pixel_values,
+                placeholder_token_id=self._video_token_id,
+                encode=self._encode_media,
+                encoder_kwargs={"grid_thw": kwargs.get("video_grid_thw", image_grid_thw)},
+            )
+
+        return prepare_multimodal_inputs(
+            input_ids,
+            embed_tokens=self.model.embed_tokens,
+            image_branch=image_branch,
+            video_branch=video_branch,
+        )
+
+    def _encode_media(
+        self,
+        pixel_values: mx.array,
+        *,
+        grid_thw: mx.array | None = None,
+    ) -> mx.array:
+        dtype = self.vision_tower.patch_embed.proj.weight.dtype
+        media = pixel_values.astype(dtype)
+        grid = grid_thw if grid_thw is not None else mx.array([[1, 1, 1]])
+        return self.vision_tower(media, grid)
 
     @property
     def num_layers(self) -> int:
@@ -359,35 +508,76 @@ class Model(nn.Module):
         ]
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        has_mtp_weights = any("mtp." in k for k in weights)
-        has_unsanitized_conv1d = any(
-            "conv1d.weight" in k and v.shape[-1] != 1 for k, v in weights.items()
-        )
-        should_shift_norm_weights = has_mtp_weights or has_unsanitized_conv1d
-        weights = {k: v for k, v in weights.items() if "mtp." not in k}
-        if self.args.tie_word_embeddings:
-            weights.pop("lm_head.weight", None)
-        norm_keys = (
-            ".input_layernorm.weight",
-            ".post_attention_layernorm.weight",
-            "model.norm.weight",
-            ".q_norm.weight",
-            ".k_norm.weight",
-        )
-        for k, v in list(weights.items()):
-            if "conv1d.weight" in k and v.shape[-1] != 1:
-                weights[k] = v.moveaxis(2, 1)
-            if (
-                should_shift_norm_weights
-                and any(k.endswith(sfx) for sfx in norm_keys)
-                and v.ndim == 1
+        if self._mode == ModelMode.TEXT:
+            filtered = {
+                key: value
+                for key, value in weights.items()
+                if key not in _VISION_EXACT
+                and not any(key.startswith(prefix) for prefix in _VISION_PREFIXES)
+            }
+            if self.model_type in {"qwen3_5", "qwen3_5_vl"}:
+                filtered = {
+                    (
+                        key[len("language_model.") :]
+                        if key.startswith("language_model.")
+                        else key
+                    ): value
+                    for key, value in filtered.items()
+                }
+            return _sanitize_text_weights(
+                filtered,
+                tie_word_embeddings=self.args.tie_word_embeddings,
+            )
+
+        language_weights: dict[str, Any] = {}
+        vision_weights: dict[str, Any] = {}
+        for key, value in weights.items():
+            if key.startswith(("multi_modal_projector.", "mm_projector.")):
+                continue
+            if key.startswith("visual."):
+                key = f"vision_tower.{key[len('visual.') :]}"
+            elif key.startswith("vision_model."):
+                key = f"vision_tower.{key[len('vision_model.') :]}"
+
+            if key.startswith("vision_tower."):
+                vision_weights[key] = value
+            elif (
+                self.model_type in {"qwen3_5", "qwen3_5_vl"}
+                and key.startswith("language_model.")
             ):
-                weights[k] = v + 1.0
-        return weights
+                language_weights[key[len("language_model.") :]] = value
+            else:
+                language_weights[key] = value
+
+        sanitized_language = _sanitize_text_weights(
+            language_weights,
+            tie_word_embeddings=self.args.tie_word_embeddings,
+        )
+        if hasattr(self, "vision_tower"):
+            vision_weights = self.vision_tower.sanitize(vision_weights)
+        return sanitized_language | vision_weights
 
     @property
     def layers(self) -> list[DecoderLayer]:
         return self.model.layers
+
+    @property
+    def supports_vision(self) -> bool:
+        return self._mode != ModelMode.TEXT and hasattr(self, "vision_tower")
+
+    @property
+    def supports_audio(self) -> bool:
+        return False
+
+    @property
+    def image_token_id(self) -> int | None:
+        return self._image_token_id if self.supports_vision else None
+
+    @property
+    def language_model(self) -> Model:
+        """Compatibility alias for legacy wrapper-style access patterns."""
+
+        return self
 
 
 __all__ = [

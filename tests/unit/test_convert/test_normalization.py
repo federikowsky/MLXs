@@ -6,7 +6,7 @@ from mlxs.convert.normalization import normalize_inspection
 from mlxs.convert.types import ConversionOptions, InspectionReport, SourceKind, TensorInfo
 
 
-def _inspection(config: dict, tensor_names: list[str]) -> InspectionReport:
+def _inspection(config: dict[str, object], tensor_names: list[str]) -> InspectionReport:
     return InspectionReport(
         source_kind=SourceKind.LOCAL,
         source_id="fixture",
@@ -99,7 +99,48 @@ def test_normalize_multimodal_decoder() -> None:
 
     assert ir.identity.macro_template.value == "multimodal_decoder"
     assert ir.topology.multimodal is True
+    assert ir.identity.runtime_target_model_type == "qwen2"
+    assert ir.conversion.canonical_output_config["model_type"] == "qwen2"
     assert "visual->vision_tower" in ir.tensor_layout.naming_aliases_discovered
+
+
+def test_normalize_qwen3_5_moe_multimodal_stays_deferred() -> None:
+    inspection = _inspection(
+        {
+            "model_type": "qwen3_5_moe",
+            "text_config": {
+                "hidden_size": 64,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 4,
+                "num_key_value_heads": 2,
+                "intermediate_size": 128,
+                "vocab_size": 256,
+                "linear_num_value_heads": 4,
+                "linear_num_key_heads": 2,
+                "linear_key_head_dim": 16,
+                "linear_value_head_dim": 16,
+                "linear_conv_kernel_dim": 4,
+                "full_attention_interval": 2,
+                "num_experts": 2,
+                "num_experts_per_tok": 1,
+                "decoder_sparse_step": 1,
+                "shared_expert_intermediate_size": 64,
+                "moe_intermediate_size": 64,
+            },
+            "vision_config": {"hidden_size": 64},
+            "image_token_id": 151655,
+        },
+        [
+            "language_model.model.layers.0.linear_attn.conv1d.weight",
+            "vision_tower.patch_embed.proj.weight",
+        ],
+    )
+
+    ir = normalize_inspection(inspection)
+
+    assert ir.identity.macro_template.value == "multimodal_decoder"
+    assert ir.identity.runtime_target_model_type == "qwen3_5_moe"
+    assert ir.identity.supported_by_runtime is False
 
 
 def test_normalize_ssm_hybrid() -> None:

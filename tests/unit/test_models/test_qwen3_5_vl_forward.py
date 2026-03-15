@@ -57,6 +57,15 @@ def test_qwen3_5_vl_forward() -> None:
     assert model.supports_vision is False
 
 
+def test_qwen3_5_vl_registry_uses_unified_qwen3_5_classes() -> None:
+    """Legacy qwen3_5_vl registry key resolves to the unified qwen3_5 implementation."""
+    vl_model_cls, vl_args_cls = get_model_classes("qwen3_5_vl")
+    qwen_model_cls, qwen_args_cls = get_model_classes("qwen3_5")
+
+    assert vl_model_cls is qwen_model_cls
+    assert vl_args_cls is qwen_args_cls
+
+
 def test_qwen3_5_vl_prepare_inputs_multimodal() -> None:
     """MULTIMODAL mode merges image features into the text embedding stream."""
     ModelCls, ArgsCls = get_model_classes("qwen3_5_vl")
@@ -87,3 +96,26 @@ def test_qwen3_5_vl_prepare_inputs_multimodal() -> None:
     assert input_embeddings is not None
     assert input_embeddings.shape == (1, 4, MINIMAL_QWEN3_5_VL["hidden_size"])
     assert logits.shape == (1, 4, model.vocab_size)
+
+
+def test_qwen3_5_vl_prepare_inputs_video_path() -> None:
+    """Legacy qwen3_5_vl key still supports the video-specific prepare path."""
+    ModelCls, ArgsCls = get_model_classes("qwen3_5_vl")
+    args = ArgsCls.from_dict(
+        {
+            **MINIMAL_QWEN3_5_VL,
+            "vision_config": MINIMAL_VISION_CONFIG,
+        }
+    )
+    model = ModelCls(args, model_mode=ModelMode.MULTIMODAL)
+    input_ids = mx.array([[1, args.video_token_id, 2, 3]])
+
+    prepared_ids, input_embeddings = model.prepare_inputs(
+        input_ids,
+        video_pixel_values=mx.zeros((1, 3, 1, 1), dtype=mx.float32),
+        video_grid_thw=mx.array([[1, 1, 1]]),
+    )
+
+    assert mx.array_equal(prepared_ids, input_ids)
+    assert input_embeddings is not None
+    assert input_embeddings.shape == (1, 4, MINIMAL_QWEN3_5_VL["hidden_size"])

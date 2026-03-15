@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import inspect
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import mlx.core as mx
 import numpy as np
@@ -51,7 +52,7 @@ def _make_tokenizer(path: Path) -> None:
         )
     )
     tokenizer.pre_tokenizer = Whitespace()
-    hf = PreTrainedTokenizerFast(
+    hf = PreTrainedTokenizerFast(  # type: ignore[no-untyped-call]
         tokenizer_object=tokenizer,
         bos_token="<bos>",
         eos_token="<eos>",
@@ -62,9 +63,10 @@ def _make_tokenizer(path: Path) -> None:
 
 def _deterministic_array(name: str, shape: tuple[int, ...]) -> np.ndarray:
     size = int(np.prod(shape)) if shape else 1
-    base = (sum(ord(c) for c in name) % 37) / 250.0
+    base = np.float32((sum(ord(c) for c in name) % 37) / 250.0)
     value = np.arange(size, dtype=np.float32).reshape(shape if shape else (1,))
-    value = value / max(size, 1) / 10.0 + base
+    scale = np.float32(max(size, 1) * 10.0)
+    value = value / scale + base
     return value.reshape(shape) if shape else np.array(base, dtype=np.float32)
 
 
@@ -225,6 +227,14 @@ def _qwen_vl_source(
     return source
 
 
+def _qwen_vl_named_experts_source(
+    reference: dict[str, np.ndarray],
+    config: dict[str, Any],
+) -> dict[str, np.ndarray]:
+    source = _named_experts_source(reference, config)
+    return _qwen_vl_source(source, config)
+
+
 def _pixtral_source(
     reference: dict[str, np.ndarray],
     _config: dict[str, Any],
@@ -287,7 +297,7 @@ _QWEN35_NORM_SUFFIXES = (
 
 def _shift_qwen35_norm(name: str, value: np.ndarray) -> np.ndarray:
     if any(name.endswith(suffix) for suffix in _QWEN35_NORM_SUFFIXES) and value.ndim == 1:
-        return value - np.array(1.0, dtype=value.dtype)
+        return np.asarray(value - np.array(1.0, dtype=value.dtype))
     return value
 
 
@@ -542,7 +552,7 @@ SUPPORTED_CASES = (
     ),
     RuntimeCase(
         name="qwen2_vl",
-        runtime_target="qwen2_vl",
+        runtime_target="qwen2",
         macro_template="multimodal_decoder",
         config={
             "model_type": "qwen2_vl",
@@ -578,7 +588,7 @@ SUPPORTED_CASES = (
     ),
     RuntimeCase(
         name="qwen3_vl",
-        runtime_target="qwen3_vl",
+        runtime_target="qwen3",
         macro_template="multimodal_decoder",
         config={
             "model_type": "qwen3_vl",
@@ -610,6 +620,45 @@ SUPPORTED_CASES = (
             "video_token_id": 30,
         },
         source_builder=_qwen_vl_source,
+        multimodal=True,
+    ),
+    RuntimeCase(
+        name="qwen3_vl_moe",
+        runtime_target="qwen3_moe",
+        macro_template="multimodal_decoder",
+        config={
+            "model_type": "qwen3_vl_moe",
+            "text_config": {
+                "model_type": "qwen3_moe",
+                "hidden_size": 8,
+                "num_hidden_layers": 1,
+                "intermediate_size": 16,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "head_dim": 4,
+                "vocab_size": 32,
+                "tie_word_embeddings": False,
+                "max_position_embeddings": 32,
+                "num_experts": 2,
+                "num_experts_per_tok": 1,
+                "moe_intermediate_size": 4,
+            },
+            "vision_config": {
+                "depth": 1,
+                "embed_dim": 8,
+                "hidden_size": 8,
+                "num_heads": 2,
+                "image_size": 4,
+                "patch_size": 2,
+                "in_channels": 3,
+                "mlp_ratio": 2.0,
+                "spatial_merge_size": 1,
+                "temporal_patch_size": 1,
+            },
+            "image_token_id": 31,
+            "video_token_id": 30,
+        },
+        source_builder=_qwen_vl_named_experts_source,
         multimodal=True,
     ),
     RuntimeCase(
@@ -650,7 +699,7 @@ SUPPORTED_CASES = (
     ),
     RuntimeCase(
         name="lfm2_vl",
-        runtime_target="lfm2_vl",
+        runtime_target="lfm2",
         macro_template="multimodal_decoder",
         config={
             "model_type": "lfm2_vl",
@@ -836,7 +885,7 @@ SUPPORTED_CASES = (
     ),
     RuntimeCase(
         name="qwen3_5_vl",
-        runtime_target="qwen3_5_vl",
+        runtime_target="qwen3_5",
         macro_template="multimodal_decoder",
         config={
             "model_type": "qwen3_5_vl",
@@ -973,6 +1022,44 @@ def test_convert_source_e2e_runtime(case: RuntimeCase, tmp_path: Path) -> None:
                 ),
             },
             "multimodal_encoder_decoder",
+        ),
+        (
+            "qwen3_5_moe_multimodal_deferred",
+            {
+                "model_type": "qwen3_5_moe",
+                "text_config": {
+                    "model_type": "qwen3_5_moe",
+                    "hidden_size": 8,
+                    "intermediate_size": 16,
+                    "num_hidden_layers": 1,
+                    "num_attention_heads": 2,
+                    "num_key_value_heads": 1,
+                    "vocab_size": 32,
+                    "linear_num_value_heads": 4,
+                    "linear_num_key_heads": 2,
+                    "linear_key_head_dim": 4,
+                    "linear_value_head_dim": 4,
+                    "linear_conv_kernel_dim": 3,
+                    "tie_word_embeddings": False,
+                    "head_dim": 4,
+                    "full_attention_interval": 1,
+                    "max_position_embeddings": 32,
+                    "num_experts": 2,
+                    "num_experts_per_tok": 1,
+                    "decoder_sparse_step": 1,
+                    "shared_expert_intermediate_size": 16,
+                    "moe_intermediate_size": 8,
+                },
+                "vision_config": {"hidden_size": 8},
+                "image_token_id": 31,
+            },
+            {
+                "language_model.model.embed_tokens.weight": np.ones((32, 8), dtype=np.float32),
+                "language_model.model.layers.0.linear_attn.in_proj_qkv.weight": np.ones(
+                    (24, 8), dtype=np.float32,
+                ),
+            },
+            "multimodal_decoder",
         ),
     ],
 )

@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import base64
 
+import mlx.core as mx
 import pytest
 
 from mlxs._errors import InvalidPromptError
-from mlxs.server.media import MediaItem, extract_media_from_messages, load_image
+from mlxs.server.media import (
+    MediaItem,
+    _preprocess_images,
+    extract_media_from_messages,
+    load_image,
+    process_video_inputs,
+)
 
 
 def _make_b64_image(fmt: str = "jpeg") -> str:
@@ -83,7 +90,7 @@ class TestExtractMedia:
                 {"type": "image_url", "image_url": {"url": data_url}},
             ]},
         ]
-        text_msgs, media = extract_media_from_messages(msgs)
+        _text_msgs, media = extract_media_from_messages(msgs)
         assert len(media) == 2
 
     def test_non_data_url_raises(self) -> None:
@@ -178,3 +185,208 @@ class TestLoadImage:
         item = MediaItem(media_type="image", data=b"not_an_image", mime_type="image/jpeg")
         with pytest.raises(InvalidPromptError, match="Failed to load"):
             load_image(item)
+
+
+class _VideoModel:
+    def __init__(self, model_type: str) -> None:
+        self.model_type = model_type
+        self.calls: list[dict[str, object]] = []
+
+    def prepare_inputs(self, input_ids, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls.append(kwargs)
+        return input_ids, None
+
+
+def test_preprocess_images_routes_qwen3_5_to_qwen_vl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """qwen3_5 image routing uses the Qwen VL preprocessing branch."""
+    calls: list[tuple[object, object, object, object]] = []
+
+    def fake_preprocess_qwen_vl(images, vision_cfg, max_pixels=None, min_pixels=None):  # type: ignore[no-untyped-def]
+        calls.append((images, vision_cfg, max_pixels, min_pixels))
+        return "pixel_values", "grid"
+
+    monkeypatch.setattr(
+        "mlxs.models.vision.image_processing.preprocess_qwen_vl",
+        fake_preprocess_qwen_vl,
+    )
+
+    pixel_values, extra_kwargs = _preprocess_images("qwen3_5", [object()])
+
+    assert pixel_values == "pixel_values"
+    assert extra_kwargs == {"image_grid_thw": "grid"}
+    assert calls and calls[0][1] == {
+        "patch_size": 14,
+        "temporal_patch_size": 2,
+        "spatial_merge_size": 2,
+    }
+
+
+@pytest.mark.parametrize("model_type", ["pixtral", "mistral3"])
+def test_preprocess_images_routes_pixtral_family_to_pixtral_branch(
+    monkeypatch: pytest.MonkeyPatch,
+    model_type: str,
+) -> None:
+    """Pixtral-style families keep using preprocess_pixtral in server/media."""
+    calls: list[tuple[object, object]] = []
+
+    def fake_preprocess_pixtral(images, max_pixels=None):  # type: ignore[no-untyped-def]
+        calls.append((images, max_pixels))
+        return "pixel_values", [(4, 4)]
+
+    monkeypatch.setattr(
+        "mlxs.models.vision.image_processing.preprocess_pixtral",
+        fake_preprocess_pixtral,
+    )
+
+    pixel_values, extra_kwargs = _preprocess_images(model_type, [object()])
+
+    assert pixel_values == "pixel_values"
+    assert extra_kwargs == {"image_sizes": [(4, 4)]}
+    assert len(calls) == 1
+    assert calls[0][1] is None
+
+
+@pytest.mark.parametrize("model_type", ["qwen2", "qwen3", "qwen3_moe"])
+def test_preprocess_images_routes_canonical_qwen_families_to_qwen_vl(
+    monkeypatch: pytest.MonkeyPatch,
+    model_type: str,
+) -> None:
+    """Canonical unified Qwen family keys use the Qwen VL preprocessing branch."""
+    calls: list[tuple[object, object, object, object]] = []
+
+    def fake_preprocess_qwen_vl(images, vision_cfg, max_pixels=None, min_pixels=None):  # type: ignore[no-untyped-def]
+        calls.append((images, vision_cfg, max_pixels, min_pixels))
+        return "pixel_values", "grid"
+
+    monkeypatch.setattr(
+        "mlxs.models.vision.image_processing.preprocess_qwen_vl",
+        fake_preprocess_qwen_vl,
+    )
+
+    pixel_values, extra_kwargs = _preprocess_images(model_type, [object()])
+
+    assert pixel_values == "pixel_values"
+    assert extra_kwargs == {"image_grid_thw": "grid"}
+    assert calls and calls[0][1] == {
+        "patch_size": 14,
+        "temporal_patch_size": 2,
+        "spatial_merge_size": 2,
+    }
+
+
+def test_preprocess_images_routes_lfm2_to_standard_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lfm2 keeps using preprocess_standard; patchification stays model-local."""
+    calls: list[list[object]] = []
+
+    def fake_preprocess_standard(images):  # type: ignore[no-untyped-def]
+        calls.append(images)
+        return "pixel_values"
+
+    monkeypatch.setattr(
+        "mlxs.models.vision.image_processing.preprocess_standard",
+        fake_preprocess_standard,
+    )
+
+    pixel_values, extra_kwargs = _preprocess_images("lfm2", [object()])
+
+    assert pixel_values == "pixel_values"
+    assert extra_kwargs == {}
+    assert len(calls) == 1
+
+
+def test_preprocess_images_keeps_qwen3_5_moe_out_of_qwen_vl_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deferred qwen3_5_moe must not be routed through the Qwen VL preprocess path."""
+    standard_calls: list[list[object]] = []
+    qwen_calls: list[list[object]] = []
+
+    def fake_preprocess_standard(images):  # type: ignore[no-untyped-def]
+        standard_calls.append(images)
+        return "pixel_values"
+
+    def fake_preprocess_qwen_vl(images, vision_cfg, max_pixels=None, min_pixels=None):  # type: ignore[no-untyped-def]
+        qwen_calls.append(images)
+        return "unexpected", "unexpected"
+
+    monkeypatch.setattr(
+        "mlxs.models.vision.image_processing.preprocess_standard",
+        fake_preprocess_standard,
+    )
+    monkeypatch.setattr(
+        "mlxs.models.vision.image_processing.preprocess_qwen_vl",
+        fake_preprocess_qwen_vl,
+    )
+
+    pixel_values, extra_kwargs = _preprocess_images("qwen3_5_moe", [object()])
+
+    assert pixel_values == "pixel_values"
+    assert extra_kwargs == {}
+    assert len(standard_calls) == 1
+    assert not qwen_calls
+
+
+def test_process_video_inputs_uses_video_kwargs_for_qwen3_5(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qwen3_5 video routing uses video_pixel_values + video_grid_thw."""
+    monkeypatch.setattr(
+        "mlxs.models.vision.video_processing.extract_video_frames",
+        lambda *args, **kwargs: ["frame"],
+    )
+    monkeypatch.setattr(
+        "mlxs.models.vision.video_processing.preprocess_video_qwen_vl",
+        lambda *args, **kwargs: ("video_pixels", "video_grid"),
+    )
+
+    model = _VideoModel("qwen3_5")
+    input_ids_out, input_embeddings, media_hash = process_video_inputs(
+        model,
+        [MediaItem(media_type="video", data=b"video-bytes", mime_type="video/mp4")],
+        input_ids=mx.array([[1, 2]]),
+    )
+
+    assert mx.array_equal(input_ids_out, mx.array([[1, 2]]))
+    assert input_embeddings is None
+    assert media_hash is not None
+    assert model.calls == [
+        {
+            "video_pixel_values": "video_pixels",
+            "video_grid_thw": "video_grid",
+        }
+    ]
+
+
+@pytest.mark.parametrize("model_type", ["qwen2", "qwen3", "qwen3_moe"])
+def test_process_video_inputs_uses_image_kwargs_for_canonical_qwen_families(
+    monkeypatch: pytest.MonkeyPatch,
+    model_type: str,
+) -> None:
+    """Canonical unified Qwen family keys use the shared Qwen VL video branch."""
+    monkeypatch.setattr(
+        "mlxs.models.vision.video_processing.extract_video_frames",
+        lambda *args, **kwargs: ["frame"],
+    )
+    monkeypatch.setattr(
+        "mlxs.models.vision.video_processing.preprocess_video_qwen_vl",
+        lambda *args, **kwargs: ("video_pixels", "video_grid"),
+    )
+
+    model = _VideoModel(model_type)
+    input_ids_out, input_embeddings, media_hash = process_video_inputs(
+        model,
+        [MediaItem(media_type="video", data=b"video-bytes", mime_type="video/mp4")],
+        input_ids=mx.array([[1, 2]]),
+    )
+
+    assert mx.array_equal(input_ids_out, mx.array([[1, 2]]))
+    assert input_embeddings is None
+    assert media_hash is not None
+    assert model.calls == [
+        {
+            "pixel_values": "video_pixels",
+            "image_grid_thw": "video_grid",
+        }
+    ]
