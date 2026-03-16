@@ -42,42 +42,6 @@ class TestRegistryAliases:
         assert model_cls.__module__ == "mlxs.models.qwen3"
         assert args_cls.__module__ == "mlxs.models.qwen3"
 
-    def test_qwen3_5_vl_resolves_to_qwen3_5(self) -> None:
-        """Legacy qwen3_5_vl key resolves to the unified qwen3_5 implementation."""
-        model_cls, args_cls = get_model_classes("qwen3_5_vl")
-        qwen35_model_cls, qwen35_args_cls = get_model_classes("qwen3_5")
-        assert model_cls is qwen35_model_cls
-        assert args_cls is qwen35_args_cls
-
-    def test_qwen2_vl_resolves_to_qwen2(self) -> None:
-        """Legacy qwen2_vl key resolves to the unified qwen2 implementation."""
-        model_cls, args_cls = get_model_classes("qwen2_vl")
-        qwen_model_cls, qwen_args_cls = get_model_classes("qwen2")
-        assert model_cls is qwen_model_cls
-        assert args_cls is qwen_args_cls
-
-    def test_qwen3_vl_resolves_to_qwen3(self) -> None:
-        """Legacy qwen3_vl key resolves to the unified qwen3 implementation."""
-        model_cls, args_cls = get_model_classes("qwen3_vl")
-        qwen_model_cls, qwen_args_cls = get_model_classes("qwen3")
-        assert model_cls is qwen_model_cls
-        assert args_cls is qwen_args_cls
-
-    def test_qwen3_vl_moe_resolves_to_qwen3_moe(self) -> None:
-        """Legacy qwen3_vl_moe key resolves to the unified qwen3_moe implementation."""
-        model_cls, args_cls = get_model_classes("qwen3_vl_moe")
-        qwen_model_cls, qwen_args_cls = get_model_classes("qwen3_moe")
-        assert model_cls is qwen_model_cls
-        assert args_cls is qwen_args_cls
-
-    def test_lfm2_vl_resolves_to_lfm2(self) -> None:
-        """Legacy lfm2_vl key resolves to the unified lfm2 implementation."""
-        model_cls, args_cls = get_model_classes("lfm2_vl")
-        lfm2_model_cls, lfm2_args_cls = get_model_classes("lfm2")
-        assert model_cls is lfm2_model_cls
-        assert args_cls is lfm2_args_cls
-
-
 class TestRegistryNegativePath:
     def test_unknown_model_raises(self) -> None:
         with pytest.raises(ValueError, match="Unsupported model_type"):
@@ -89,6 +53,14 @@ class TestRegistryNegativePath:
         msg = str(exc_info.value)
         assert "llama" in msg
         assert "qwen2" in msg
+
+    @pytest.mark.parametrize(
+        "legacy_model_type",
+        ["qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_vl_moe", "qwen3_5_vl", "lfm2_vl"],
+    )
+    def test_removed_legacy_model_types_raise(self, legacy_model_type: str) -> None:
+        with pytest.raises(ValueError, match=f"Unsupported model_type '{legacy_model_type}'"):
+            get_model_classes(legacy_model_type)
 
 
 class TestRegistryExtensibility:

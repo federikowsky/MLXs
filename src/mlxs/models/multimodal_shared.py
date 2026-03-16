@@ -182,7 +182,7 @@ def prepare_multimodal_inputs(
     """Shared image/video merge skeleton for multimodal wrappers.
 
     The order is stable and explicit: image branch first, then video branch.
-    This preserves the existing `qwen3_5_vl` style path without baking in any
+    This preserves the existing `qwen3_5` image-then-video path without baking in any
     family-specific assumptions.
     """
 

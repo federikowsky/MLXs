@@ -28,9 +28,6 @@ else:
 
 logger = logging.getLogger(__name__)
 
-_DEFERRED_MULTIMODAL_MODEL_TYPES = {"qwen3_5_moe"}
-
-
 def load_model_and_tokenizer(
     model_path: str | Path,
     model_config: ModelConfig,
@@ -93,18 +90,15 @@ def load_model(
         resolved_mode = ModelMode.MULTIMODAL if has_vision else ModelMode.TEXT
 
     # Validate MULTIMODAL requires vision_config
-    if resolved_mode == ModelMode.MULTIMODAL:
-        if "vision_config" not in config and "visual_config" not in config:
-            raise ModelLoadError(
-                f"model_mode=multimodal requested but {model_type} config.json "
-                f"has no vision_config. This model does not support vision."
-            )
-        if model_type in _DEFERRED_MULTIMODAL_MODEL_TYPES:
-            raise ModelLoadError(
-                f"{model_type} exposes multimodal-compatible config fields, "
-                "but multimodal runtime support is intentionally deferred."
-            )
-
+    if (
+        resolved_mode == ModelMode.MULTIMODAL
+        and "vision_config" not in config
+        and "visual_config" not in config
+    ):
+        raise ModelLoadError(
+            f"model_mode=multimodal requested but {model_type} config.json "
+            f"has no vision_config. This model does not support vision."
+        )
     args = ModelArgsClass.from_dict(config)
 
     # Pass model_mode if the constructor accepts it

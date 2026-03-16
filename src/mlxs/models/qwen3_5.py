@@ -515,7 +515,7 @@ class Model(nn.Module):
                 if key not in _VISION_EXACT
                 and not any(key.startswith(prefix) for prefix in _VISION_PREFIXES)
             }
-            if self.model_type in {"qwen3_5", "qwen3_5_vl"}:
+            if self.model_type == "qwen3_5":
                 filtered = {
                     (
                         key[len("language_model.") :]
@@ -541,10 +541,7 @@ class Model(nn.Module):
 
             if key.startswith("vision_tower."):
                 vision_weights[key] = value
-            elif (
-                self.model_type in {"qwen3_5", "qwen3_5_vl"}
-                and key.startswith("language_model.")
-            ):
+            elif self.model_type == "qwen3_5" and key.startswith("language_model."):
                 language_weights[key[len("language_model.") :]] = value
             else:
                 language_weights[key] = value

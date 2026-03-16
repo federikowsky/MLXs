@@ -1,8 +1,8 @@
-"""SigLIP / Qwen2-VL vision encoder — ported from mlx-vlm (§7.4, FR12).
+"""SigLIP / Qwen multimodal vision encoder — ported from mlx-vlm (§7.4, FR12).
 
 Conv3d patch embedding, 2D rotary position embeddings, block-diagonal
-attention, and spatial patch merger. Used by: qwen2_vl, qwen3_vl,
-qwen3_vl_moe.
+attention, and spatial patch merger. Used by: qwen2, qwen3, qwen3_moe,
+qwen3_5.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import mlx.nn as nn
 class VisionConfig:
     """Vision encoder configuration (from config.json ``vision_config``)."""
 
-    model_type: str = "qwen2_vl"
+    model_type: str = "siglip"
     depth: int = 32
     embed_dim: int = 1280
     hidden_size: int = 1536
@@ -69,7 +69,10 @@ class VisionRotaryEmbedding(nn.Module):
         inv_freq = 1.0 / (
             self.theta ** (mx.arange(0, self.dim, 2, dtype=mx.float32) / self.dim)
         )
-        seq = mx.arange(seqlen if isinstance(seqlen, int) else seqlen.tolist(), dtype=inv_freq.dtype)
+        seq = mx.arange(
+            seqlen if isinstance(seqlen, int) else seqlen.tolist(),
+            dtype=inv_freq.dtype,
+        )
         return mx.outer(seq, inv_freq)
 
 
@@ -154,7 +157,7 @@ class VisionAttention(nn.Module):
             mx.split(t, cu_seqlens[1:-1].tolist(), axis=2) for t in (q, k, v)
         ]
         attn_outputs = []
-        for qi, ki, vi in zip(*splits):
+        for qi, ki, vi in zip(*splits, strict=True):
             out = mx.fast.scaled_dot_product_attention(qi, ki, vi, scale=self.scale, mask=None)
             attn_outputs.append(out)
         output = mx.concatenate(attn_outputs, axis=2)
@@ -275,7 +278,11 @@ class SigLIPVisionModel(nn.Module):
         cu_seqlens = self._compute_cu_seqlens(grid_thw)
 
         for block in self.blocks:
-            hidden_states = block(hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
+            hidden_states = block(
+                hidden_states,
+                cu_seqlens=cu_seqlens,
+                rotary_pos_emb=rotary_pos_emb,
+            )
 
         return self.merger(hidden_states)
 

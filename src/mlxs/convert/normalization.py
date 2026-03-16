@@ -59,18 +59,11 @@ _REQUIRED_FIELDS_BY_TEMPLATE: dict[MacroTemplate, tuple[str, ...]] = {
 
 _CONVERGED_RUNTIME_TARGETS: dict[str, str] = {
     "lfm2": "lfm2",
-    "lfm2_vl": "lfm2",
     "qwen2": "qwen2",
-    "qwen2_vl": "qwen2",
     "qwen3": "qwen3",
     "qwen3_5": "qwen3_5",
-    "qwen3_5_vl": "qwen3_5",
     "qwen3_moe": "qwen3_moe",
-    "qwen3_vl": "qwen3",
-    "qwen3_vl_moe": "qwen3_moe",
 }
-
-_DEFERRED_MULTIMODAL_BOUNDARY_TARGETS = {"qwen3_5_moe"}
 
 
 def normalize_inspection(
@@ -83,7 +76,12 @@ def normalize_inspection(
     matched_config_keys = tuple(sorted(config.keys()))
     runtime_target_model_type = _resolve_runtime_target_model_type(config)
     macro_template, ambiguity_flags = _select_macro_template(inspection, runtime_target_model_type)
-    topology = _build_topology(inspection, config, macro_template)
+    topology = _build_topology(
+        inspection,
+        config,
+        macro_template=macro_template,
+        runtime_target_model_type=runtime_target_model_type,
+    )
     canonical_values = _canonical_config_values(config)
     required_fields = _REQUIRED_FIELDS_BY_TEMPLATE[macro_template]
     missing = tuple(field for field in required_fields if canonical_values.get(field) is None)
@@ -195,8 +193,6 @@ def _resolve_runtime_target_model_type(config: dict[str, Any]) -> str | None:
     if canonical in _CONVERGED_RUNTIME_TARGETS:
         return _CONVERGED_RUNTIME_TARGETS[canonical]
     if _has_multimodal_config(config):
-        if canonical in _DEFERRED_MULTIMODAL_BOUNDARY_TARGETS:
-            return canonical
         multimodal_candidates: list[str] = []
         if canonical.endswith("_moe"):
             multimodal_candidates.append(canonical.replace("_moe", "_vl_moe"))
@@ -277,7 +273,9 @@ def _select_macro_template(
 def _build_topology(
     inspection: InspectionReport,
     config: dict[str, Any],
+    *,
     macro_template: MacroTemplate,
+    runtime_target_model_type: str | None,
 ) -> IRTopology:
     attention_heads = _value_from_nested(config, "num_attention_heads")
     kv_heads = _value_from_nested(config, "num_key_value_heads", "num_kv_heads", "n_kv_heads")
@@ -291,13 +289,19 @@ def _build_topology(
     else:
         attention_variant = None
 
-    density = DensityKind.DENSE
-    if macro_template == MacroTemplate.DECODER_MOE:
-        density = DensityKind.MOE
-    elif macro_template == MacroTemplate.SSM_HYBRID:
-        density = DensityKind.HYBRID
-
     tensor_names = {tensor.name for tensor in inspection.tensor_infos}
+    is_multimodal = macro_template in {
+        MacroTemplate.MULTIMODAL_DECODER,
+        MacroTemplate.MULTIMODAL_ENCODER_DECODER,
+    }
+    is_ssm_hybrid = _is_ssm_hybrid(config, tensor_names, runtime_target_model_type)
+    is_moe = _is_moe(config, tensor_names)
+    if is_moe:
+        density = DensityKind.MOE
+    elif is_ssm_hybrid:
+        density = DensityKind.HYBRID
+    else:
+        density = DensityKind.DENSE
     qkv_layout = "fused_qkv" if any("qkv" in name for name in tensor_names) else "split_qkv"
     recurrent_traits = tuple(
         sorted(
@@ -323,13 +327,10 @@ def _build_topology(
             MacroTemplate.ENCODER_DECODER,
             MacroTemplate.MULTIMODAL_ENCODER_DECODER,
         },
-        multimodal=macro_template in {
-            MacroTemplate.MULTIMODAL_DECODER,
-            MacroTemplate.MULTIMODAL_ENCODER_DECODER,
-        },
-        ssm_hybrid=macro_template == MacroTemplate.SSM_HYBRID,
+        multimodal=is_multimodal,
+        ssm_hybrid=is_ssm_hybrid,
         density=density,
-        attention_presence=macro_template != MacroTemplate.SSM_HYBRID or any(
+        attention_presence=not is_ssm_hybrid or any(
             "self_attn" in name for name in tensor_names
         ),
         attention_variant=attention_variant,

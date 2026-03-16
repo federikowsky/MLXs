@@ -1,4 +1,4 @@
-"""qwen2/qwen2_vl: text, multimodal, and registry compatibility."""
+"""qwen2: canonical text and multimodal family coverage."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import mlx.core as mx
 from mlxs._types import ModelMode
 from mlxs.load.registry import get_model_classes
 
-MINIMAL_QWEN2_VL = {
-    "model_type": "qwen2_vl",
+MINIMAL_QWEN2 = {
+    "model_type": "qwen2",
     "hidden_size": 64,
     "num_hidden_layers": 2,
     "num_attention_heads": 4,
@@ -16,11 +16,6 @@ MINIMAL_QWEN2_VL = {
     "intermediate_size": 128,
     "rms_norm_eps": 1e-6,
     "vocab_size": 256,
-}
-
-MINIMAL_QWEN2 = {
-    **MINIMAL_QWEN2_VL,
-    "model_type": "qwen2",
 }
 
 MINIMAL_VISION_CONFIG = {
@@ -81,24 +76,3 @@ def test_qwen2_multimodal_prepare_inputs() -> None:
     assert input_embeddings is not None
     assert input_embeddings.shape == (1, 4, MINIMAL_QWEN2["hidden_size"])
     assert logits.shape == (1, 4, model.vocab_size)
-
-
-def test_qwen2_vl_registry_uses_unified_qwen2_classes() -> None:
-    """Legacy qwen2_vl key resolves to the unified qwen2 implementation."""
-    vl_model_cls, vl_args_cls = get_model_classes("qwen2_vl")
-    qwen_model_cls, qwen_args_cls = get_model_classes("qwen2")
-
-    assert vl_model_cls is qwen_model_cls
-    assert vl_args_cls is qwen_args_cls
-
-
-def test_qwen2_vl_forward() -> None:
-    """Legacy qwen2_vl flat config continues to load in text mode."""
-    ModelCls, ArgsCls = get_model_classes("qwen2_vl")
-    args = ArgsCls.from_dict(MINIMAL_QWEN2_VL)
-    model = ModelCls(args)
-
-    logits = model(mx.array([[1, 2, 3, 4]]), cache=model.make_cache())
-
-    assert logits.shape == (1, 4, args.vocab_size)
-    assert model.supports_vision is False

@@ -366,6 +366,49 @@ def _qwen35_vl_source(
     return source
 
 
+def _qwen35_moe_vl_source(
+    reference: dict[str, np.ndarray],
+    _config: dict[str, Any],
+) -> dict[str, np.ndarray]:
+    source: dict[str, np.ndarray] = {}
+    consumed_up: set[str] = set()
+    for name, value in reference.items():
+        if name in consumed_up:
+            continue
+        if name.startswith("vision_tower.patch_embed.proj.weight"):
+            source["visual.patch_embed.proj.weight"] = np.transpose(
+                value.copy(),
+                (0, 4, 1, 2, 3),
+            )
+            continue
+        if name.startswith("vision_tower."):
+            source["visual." + name[len("vision_tower.") :]] = value.copy()
+            continue
+        if ".switch_mlp.gate_proj.weight" in name:
+            prefix = name.replace(".switch_mlp.gate_proj.weight", "")
+            up_name = f"{prefix}.switch_mlp.up_proj.weight"
+            source[f"{prefix}.experts.gate_up_proj.weight"] = np.concatenate(
+                [value, reference[up_name]],
+                axis=1,
+            )
+            consumed_up.add(up_name)
+            continue
+        if ".switch_mlp.up_proj.weight" in name:
+            continue
+        if ".switch_mlp.down_proj.weight" in name:
+            prefix = name.replace(".switch_mlp.down_proj.weight", "")
+            source[f"{prefix}.experts.down_proj.weight"] = value.copy()
+            continue
+
+        source_value = value.copy()
+        if name.endswith("conv1d.weight"):
+            source_value = np.moveaxis(source_value, 1, 2)
+        if name.startswith("language_model."):
+            source_value = _shift_qwen35_norm(name, source_value)
+        source[name] = source_value
+    return source
+
+
 def _compare_tensors(
     reference: dict[str, np.ndarray],
     actual: dict[str, np.ndarray],
@@ -551,11 +594,11 @@ SUPPORTED_CASES = (
         source_builder=_granitemoe_source,
     ),
     RuntimeCase(
-        name="qwen2_vl",
+        name="qwen2_multimodal",
         runtime_target="qwen2",
         macro_template="multimodal_decoder",
         config={
-            "model_type": "qwen2_vl",
+            "model_type": "qwen2",
             "text_config": {
                 "model_type": "qwen2",
                 "hidden_size": 8,
@@ -587,11 +630,11 @@ SUPPORTED_CASES = (
         multimodal=True,
     ),
     RuntimeCase(
-        name="qwen3_vl",
+        name="qwen3_multimodal",
         runtime_target="qwen3",
         macro_template="multimodal_decoder",
         config={
-            "model_type": "qwen3_vl",
+            "model_type": "qwen3",
             "text_config": {
                 "model_type": "qwen3",
                 "hidden_size": 8,
@@ -623,11 +666,11 @@ SUPPORTED_CASES = (
         multimodal=True,
     ),
     RuntimeCase(
-        name="qwen3_vl_moe",
+        name="qwen3_moe_multimodal",
         runtime_target="qwen3_moe",
         macro_template="multimodal_decoder",
         config={
-            "model_type": "qwen3_vl_moe",
+            "model_type": "qwen3_moe",
             "text_config": {
                 "model_type": "qwen3_moe",
                 "hidden_size": 8,
@@ -698,11 +741,60 @@ SUPPORTED_CASES = (
         multimodal=True,
     ),
     RuntimeCase(
-        name="lfm2_vl",
+        name="kimi_vl_multimodal",
+        runtime_target="kimi_vl",
+        macro_template="multimodal_decoder",
+        config={
+            "model_type": "kimi_vl",
+            "text_config": {
+                "model_type": "deepseek_v3",
+                "hidden_size": 64,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 4,
+                "num_key_value_heads": 4,
+                "qk_rope_head_dim": 16,
+                "qk_nope_head_dim": 16,
+                "v_head_dim": 32,
+                "kv_lora_rank": 32,
+                "q_lora_rank": 32,
+                "intermediate_size": 128,
+                "moe_intermediate_size": 64,
+                "n_routed_experts": 4,
+                "n_shared_experts": None,
+                "num_experts_per_tok": 1,
+                "moe_layer_freq": 1,
+                "first_k_dense_replace": 0,
+                "n_group": 1,
+                "topk_group": 1,
+                "routed_scaling_factor": 1.0,
+                "norm_topk_prob": True,
+                "topk_method": "noaux_tc",
+                "max_position_embeddings": 128,
+                "rms_norm_eps": 1e-6,
+                "vocab_size": 32,
+                "rope_theta": 10000.0,
+            },
+            "vision_config": {
+                "hidden_size": 16,
+                "intermediate_size": 32,
+                "num_hidden_layers": 1,
+                "num_attention_heads": 4,
+                "patch_size": 2,
+                "image_size": 4,
+                "spatial_merge_size": 1,
+                "merge_kernel_size": [1, 1],
+            },
+            "media_placeholder_token_id": 250,
+        },
+        source_builder=_runtime_native_source,
+        multimodal=True,
+    ),
+    RuntimeCase(
+        name="lfm2_multimodal",
         runtime_target="lfm2",
         macro_template="multimodal_decoder",
         config={
-            "model_type": "lfm2_vl",
+            "model_type": "lfm2",
             "text_config": {
                 "model_type": "lfm2",
                 "vocab_size": 32,
@@ -884,11 +976,11 @@ SUPPORTED_CASES = (
         tensor_atol=1e-6,
     ),
     RuntimeCase(
-        name="qwen3_5_vl",
+        name="qwen3_5_multimodal",
         runtime_target="qwen3_5",
         macro_template="multimodal_decoder",
         config={
-            "model_type": "qwen3_5_vl",
+            "model_type": "qwen3_5",
             "text_config": {
                 "model_type": "qwen3_5",
                 "hidden_size": 16,
@@ -913,7 +1005,7 @@ SUPPORTED_CASES = (
                 },
             },
             "vision_config": {
-                "model_type": "qwen3_5_vl",
+                "model_type": "siglip",
                 "depth": 1,
                 "hidden_size": 8,
                 "out_hidden_size": 16,
@@ -928,6 +1020,62 @@ SUPPORTED_CASES = (
             "video_token_id": 30,
         },
         source_builder=_qwen35_vl_source,
+        multimodal=True,
+        tensor_compare="allclose",
+        tensor_atol=1e-6,
+    ),
+    RuntimeCase(
+        name="qwen3_5_moe_multimodal",
+        runtime_target="qwen3_5_moe",
+        macro_template="multimodal_decoder",
+        config={
+            "model_type": "qwen3_5_moe",
+            "text_config": {
+                "model_type": "qwen3_5_moe",
+                "hidden_size": 16,
+                "intermediate_size": 32,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "vocab_size": 32,
+                "linear_num_value_heads": 4,
+                "linear_num_key_heads": 2,
+                "linear_key_head_dim": 4,
+                "linear_value_head_dim": 4,
+                "linear_conv_kernel_dim": 3,
+                "tie_word_embeddings": False,
+                "head_dim": 8,
+                "full_attention_interval": 2,
+                "max_position_embeddings": 32,
+                "num_experts": 2,
+                "num_experts_per_tok": 1,
+                "decoder_sparse_step": 1,
+                "shared_expert_intermediate_size": 32,
+                "moe_intermediate_size": 16,
+                "norm_topk_prob": True,
+                "mlp_only_layers": [],
+                "rope_parameters": {
+                    "type": "default",
+                    "rope_theta": 100000.0,
+                    "partial_rotary_factor": 0.25,
+                },
+            },
+            "vision_config": {
+                "model_type": "siglip",
+                "depth": 1,
+                "hidden_size": 8,
+                "out_hidden_size": 16,
+                "num_heads": 2,
+                "patch_size": 2,
+                "in_channels": 3,
+                "mlp_ratio": 2.0,
+                "spatial_merge_size": 1,
+                "temporal_patch_size": 1,
+            },
+            "image_token_id": 31,
+            "video_token_id": 30,
+        },
+        source_builder=_qwen35_moe_vl_source,
         multimodal=True,
         tensor_compare="allclose",
         tensor_atol=1e-6,
@@ -1024,40 +1172,27 @@ def test_convert_source_e2e_runtime(case: RuntimeCase, tmp_path: Path) -> None:
             "multimodal_encoder_decoder",
         ),
         (
-            "qwen3_5_moe_multimodal_deferred",
+            "qwen2_vl_legacy_removed",
             {
-                "model_type": "qwen3_5_moe",
+                "model_type": "qwen2_vl",
                 "text_config": {
-                    "model_type": "qwen3_5_moe",
+                    "model_type": "qwen2",
                     "hidden_size": 8,
-                    "intermediate_size": 16,
                     "num_hidden_layers": 1,
+                    "intermediate_size": 16,
                     "num_attention_heads": 2,
                     "num_key_value_heads": 1,
-                    "vocab_size": 32,
-                    "linear_num_value_heads": 4,
-                    "linear_num_key_heads": 2,
-                    "linear_key_head_dim": 4,
-                    "linear_value_head_dim": 4,
-                    "linear_conv_kernel_dim": 3,
-                    "tie_word_embeddings": False,
                     "head_dim": 4,
-                    "full_attention_interval": 1,
+                    "vocab_size": 32,
+                    "tie_word_embeddings": False,
                     "max_position_embeddings": 32,
-                    "num_experts": 2,
-                    "num_experts_per_tok": 1,
-                    "decoder_sparse_step": 1,
-                    "shared_expert_intermediate_size": 16,
-                    "moe_intermediate_size": 8,
                 },
                 "vision_config": {"hidden_size": 8},
                 "image_token_id": 31,
             },
             {
                 "language_model.model.embed_tokens.weight": np.ones((32, 8), dtype=np.float32),
-                "language_model.model.layers.0.linear_attn.in_proj_qkv.weight": np.ones(
-                    (24, 8), dtype=np.float32,
-                ),
+                "vision_tower.patch_embed.proj.weight": np.ones((2, 1, 1, 1, 1), dtype=np.float32),
             },
             "multimodal_decoder",
         ),

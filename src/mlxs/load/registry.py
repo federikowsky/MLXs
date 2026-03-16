@@ -54,7 +54,6 @@ MODEL_REGISTRY: dict[str, tuple[str, str, str]] = {
     "jamba": ("mlxs.models.jamba", "Model", "ModelArgs"),
     "lfm2": ("mlxs.models.lfm2", "Model", "ModelArgs"),
     "lfm2_moe": ("mlxs.models.lfm2_moe", "Model", "ModelArgs"),
-    "lfm2_vl": ("mlxs.models.lfm2", "Model", "ModelArgs"),
     "klear": ("mlxs.models.klear", "Model", "ModelArgs"),
     "kimi_k25": ("mlxs.models.kimi_k25", "Model", "ModelArgs"),
     "kimi_linear": ("mlxs.models.kimi_linear", "Model", "ModelArgs"),
@@ -99,15 +98,11 @@ MODEL_REGISTRY: dict[str, tuple[str, str, str]] = {
     "pixtral": ("mlxs.models.pixtral", "Model", "ModelArgs"),
     "qwen2": ("mlxs.models.qwen", "Model", "ModelArgs"),
     "qwen2_moe": ("mlxs.models.qwen2_moe", "Model", "ModelArgs"),
-    "qwen2_vl": ("mlxs.models.qwen", "Model", "ModelArgs"),
     "qwen3": ("mlxs.models.qwen3", "Model", "ModelArgs"),
     "qwen3_5": ("mlxs.models.qwen3_5", "Model", "ModelArgs"),
     "qwen3_5_moe": ("mlxs.models.qwen3_5_moe", "Model", "ModelArgs"),
-    "qwen3_5_vl": ("mlxs.models.qwen3_5", "Model", "ModelArgs"),
     "qwen3_moe": ("mlxs.models.qwen3_moe", "Model", "ModelArgs"),
-    "qwen3_vl_moe": ("mlxs.models.qwen3_moe", "Model", "ModelArgs"),
     "qwen3_next": ("mlxs.models.qwen3_next", "Model", "ModelArgs"),
-    "qwen3_vl": ("mlxs.models.qwen3", "Model", "ModelArgs"),
     "recurrent_gemma": ("mlxs.models.recurrent_gemma", "Model", "ModelArgs"),
     "rwkv7": ("mlxs.models.rwkv7", "Model", "ModelArgs"),
     "solar_open": ("mlxs.models.solar_open", "Model", "ModelArgs"),
@@ -133,7 +128,6 @@ _MODEL_REMAPPING: dict[str, str] = {
     "mistral": "llama",
     "nemotron-nas": "nemotron_nas",
     "phi3_small": "phi3small",
-    "qwen2_5_vl": "qwen2_vl",
 }
 
 

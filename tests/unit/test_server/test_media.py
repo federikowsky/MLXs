@@ -274,6 +274,21 @@ def test_preprocess_images_routes_canonical_qwen_families_to_qwen_vl(
     }
 
 
+def test_preprocess_images_routes_kimi_vl_to_kimi_branch() -> None:
+    """kimi_vl uses dedicated MoonViT preprocessing and returns a patch grid."""
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    pixel_values, extra_kwargs = _preprocess_images(
+        "kimi_vl",
+        [Image.new("RGB", (14, 14), color=(128, 128, 128))],
+    )
+
+    assert tuple(int(dim) for dim in pixel_values.shape) == (1, 14, 14, 3)
+    assert "image_grid_thw" in extra_kwargs
+    assert mx.array_equal(extra_kwargs["image_grid_thw"], mx.array([[1, 1]], dtype=mx.int32))
+
+
 def test_preprocess_images_routes_lfm2_to_standard_branch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -296,25 +311,16 @@ def test_preprocess_images_routes_lfm2_to_standard_branch(
     assert len(calls) == 1
 
 
-def test_preprocess_images_keeps_qwen3_5_moe_out_of_qwen_vl_branch(
+def test_preprocess_images_routes_qwen3_5_moe_to_qwen_vl_branch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Deferred qwen3_5_moe must not be routed through the Qwen VL preprocess path."""
-    standard_calls: list[list[object]] = []
-    qwen_calls: list[list[object]] = []
-
-    def fake_preprocess_standard(images):  # type: ignore[no-untyped-def]
-        standard_calls.append(images)
-        return "pixel_values"
+    """qwen3_5_moe uses the same canonical Qwen VL image preprocessing branch."""
+    qwen_calls: list[tuple[object, object, object, object]] = []
 
     def fake_preprocess_qwen_vl(images, vision_cfg, max_pixels=None, min_pixels=None):  # type: ignore[no-untyped-def]
-        qwen_calls.append(images)
-        return "unexpected", "unexpected"
+        qwen_calls.append((images, vision_cfg, max_pixels, min_pixels))
+        return "pixel_values", "grid"
 
-    monkeypatch.setattr(
-        "mlxs.models.vision.image_processing.preprocess_standard",
-        fake_preprocess_standard,
-    )
     monkeypatch.setattr(
         "mlxs.models.vision.image_processing.preprocess_qwen_vl",
         fake_preprocess_qwen_vl,
@@ -323,9 +329,12 @@ def test_preprocess_images_keeps_qwen3_5_moe_out_of_qwen_vl_branch(
     pixel_values, extra_kwargs = _preprocess_images("qwen3_5_moe", [object()])
 
     assert pixel_values == "pixel_values"
-    assert extra_kwargs == {}
-    assert len(standard_calls) == 1
-    assert not qwen_calls
+    assert extra_kwargs == {"image_grid_thw": "grid"}
+    assert qwen_calls and qwen_calls[0][1] == {
+        "patch_size": 14,
+        "temporal_patch_size": 2,
+        "spatial_merge_size": 2,
+    }
 
 
 def test_process_video_inputs_uses_video_kwargs_for_qwen3_5(
@@ -342,6 +351,37 @@ def test_process_video_inputs_uses_video_kwargs_for_qwen3_5(
     )
 
     model = _VideoModel("qwen3_5")
+    input_ids_out, input_embeddings, media_hash = process_video_inputs(
+        model,
+        [MediaItem(media_type="video", data=b"video-bytes", mime_type="video/mp4")],
+        input_ids=mx.array([[1, 2]]),
+    )
+
+    assert mx.array_equal(input_ids_out, mx.array([[1, 2]]))
+    assert input_embeddings is None
+    assert media_hash is not None
+    assert model.calls == [
+        {
+            "video_pixel_values": "video_pixels",
+            "video_grid_thw": "video_grid",
+        }
+    ]
+
+
+def test_process_video_inputs_uses_video_kwargs_for_qwen3_5_moe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qwen3_5_moe shares the dedicated Qwen3.5 video placeholder path."""
+    monkeypatch.setattr(
+        "mlxs.models.vision.video_processing.extract_video_frames",
+        lambda *args, **kwargs: ["frame"],
+    )
+    monkeypatch.setattr(
+        "mlxs.models.vision.video_processing.preprocess_video_qwen_vl",
+        lambda *args, **kwargs: ("video_pixels", "video_grid"),
+    )
+
+    model = _VideoModel("qwen3_5_moe")
     input_ids_out, input_embeddings, media_hash = process_video_inputs(
         model,
         [MediaItem(media_type="video", data=b"video-bytes", mime_type="video/mp4")],

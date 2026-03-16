@@ -189,6 +189,7 @@ def _preprocess_images(
     Returns: ``(pixel_values, extra_kwargs for prepare_inputs)``
     """
     from mlxs.models.vision.image_processing import (
+        preprocess_kimi_vl,
         preprocess_pixtral,
         preprocess_qwen_vl,
         preprocess_standard,
@@ -196,14 +197,10 @@ def _preprocess_images(
 
     if model_type in (
         "qwen2",
-        "qwen2_vl",
-        "qwen2_5_vl",
         "qwen3",
-        "qwen3_vl",
         "qwen3_moe",
-        "qwen3_vl_moe",
         "qwen3_5",
-        "qwen3_5_vl",
+        "qwen3_5_moe",
     ):
         vision_cfg = {"patch_size": 14, "temporal_patch_size": 2, "spatial_merge_size": 2}
         pv, grid = preprocess_qwen_vl(
@@ -213,6 +210,13 @@ def _preprocess_images(
     elif model_type in ("pixtral", "mistral3"):
         pv, sizes = preprocess_pixtral(images, max_pixels=max_pixels)
         return pv, {"image_sizes": sizes}
+    elif model_type == "kimi_vl":
+        pv, grid = preprocess_kimi_vl(
+            images,
+            {"patch_size": 14, "image_size": 384},
+            max_pixels=max_pixels,
+        )
+        return pv, {"image_grid_thw": grid}
     else:
         pv = preprocess_standard(images)
         return pv, {}
@@ -313,20 +317,16 @@ def process_video_inputs(
 
     if model_type in (
         "qwen2",
-        "qwen2_vl",
-        "qwen2_5_vl",
         "qwen3",
-        "qwen3_vl",
         "qwen3_moe",
-        "qwen3_vl_moe",
         "qwen3_5",
-        "qwen3_5_vl",
+        "qwen3_5_moe",
     ):
         vision_cfg = {"patch_size": 14, "temporal_patch_size": 2, "spatial_merge_size": 2}
         pixel_values, grid_thw = preprocess_video_qwen_vl(
             frames, vision_cfg, max_pixels=image_max_pixels,
         )
-        if model_type in ("qwen3_5", "qwen3_5_vl"):
+        if model_type in ("qwen3_5", "qwen3_5_moe"):
             extra_kwargs = {"video_grid_thw": grid_thw}
         else:
             extra_kwargs = {"image_grid_thw": grid_thw}
@@ -335,7 +335,7 @@ def process_video_inputs(
         extra_kwargs = {}
 
     if hasattr(model, "prepare_inputs"):
-        if model_type in ("qwen3_5", "qwen3_5_vl"):
+        if model_type in ("qwen3_5", "qwen3_5_moe"):
             input_ids_out, input_embeddings = model.prepare_inputs(
                 input_ids,
                 video_pixel_values=pixel_values,

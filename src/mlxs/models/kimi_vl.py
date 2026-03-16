@@ -7,8 +7,9 @@ for image processing (FR12, §7.4, AC11).
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -18,22 +19,74 @@ from mlxs.models.base import BaseModelArgs
 from mlxs.models.deepseek_v3 import Model as DeepseekV3Model
 from mlxs.models.deepseek_v3 import ModelArgs as TextConfig
 
+if TYPE_CHECKING:
+    class ModuleBase:
+        def __init__(self, *args: Any, **kwargs: Any) -> None: ...
+        def trainable_parameters(self) -> dict[str, Any]: ...
+else:
+    ModuleBase = nn.Module
+
+
+def _normalize_kimi_vision_config(vision_config: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(vision_config)
+
+    alias_map = {
+        "num_hidden_layers": "depth",
+        "num_attention_heads": "num_heads",
+        "in_channels": "num_channels",
+    }
+    for source_key, target_key in alias_map.items():
+        if target_key not in normalized and source_key in normalized:
+            normalized[target_key] = normalized[source_key]
+
+    if "embed_dim" not in normalized and "hidden_size" in normalized:
+        normalized["embed_dim"] = normalized["hidden_size"]
+
+    return normalized
+
+
+def _normalize_moon_vit_grid(grid: mx.array | None) -> mx.array:
+    if grid is None:
+        return mx.array([[1, 1]], dtype=mx.int32)
+
+    if grid.ndim != 2 or grid.shape[1] < 2:
+        raise ValueError("Kimi VL requires image_grid_thw/image_grid_hw with at least 2 columns")
+
+    if grid.shape[1] == 2:
+        return grid.astype(mx.int32)
+
+    return grid[:, -2:].astype(mx.int32)
+
 
 @dataclass
 class ModelArgs(BaseModelArgs):
     """Kimi VL config: model_type + text_config + optional vision_config."""
 
-    text_config: TextConfig | dict[str, Any] = None  # type: ignore[assignment]
+    text_config: TextConfig | dict[str, Any] | None = None
     model_type: str = "kimi_vl"
     vision_config: dict[str, Any] | None = None
     image_token_id: int = 151655
 
+    @classmethod
+    def from_dict(cls, params: dict[str, Any]) -> ModelArgs:
+        normalized = dict(params)
+        if "image_token_id" not in normalized and "media_placeholder_token_id" in normalized:
+            normalized["image_token_id"] = normalized["media_placeholder_token_id"]
+        if isinstance(normalized.get("vision_config"), dict):
+            normalized["vision_config"] = _normalize_kimi_vision_config(
+                normalized["vision_config"]
+            )
+        allowed = inspect.signature(cls).parameters
+        return cls(**{k: v for k, v in normalized.items() if k in allowed})
+
     def __post_init__(self) -> None:
         if isinstance(self.text_config, dict):
-            self.text_config = TextConfig.from_dict(self.text_config)
+            self.text_config = cast(TextConfig, TextConfig.from_dict(self.text_config))
+        if self.text_config is None:
+            raise ValueError("kimi_vl requires text_config")
 
 
-class Model(nn.Module):
+class Model(ModuleBase):
     """Kimi VL LM wrapper — dual-mode: text-only or multimodal (§7.4)."""
 
     def __init__(
@@ -43,13 +96,16 @@ class Model(nn.Module):
         self.args = config
         self.model_type = config.model_type
         self._mode = model_mode
-        self.language_model = DeepseekV3Model(config.text_config)
+        text_config = config.text_config
+        if not isinstance(text_config, TextConfig):
+            raise TypeError("kimi_vl requires text_config to resolve to DeepseekV3 ModelArgs")
+        self.language_model = DeepseekV3Model(text_config)
 
         if model_mode != ModelMode.TEXT and config.vision_config:
             from mlxs.models.vision.moon_vit import MoonViTConfig, MoonViTModel
             from mlxs.models.vision.projectors import MLPProjector
 
-            vc_dict = config.vision_config
+            vc_dict = _normalize_kimi_vision_config(config.vision_config)
             vc = MoonViTConfig(
                 **{k: v for k, v in vc_dict.items()
                    if k in MoonViTConfig.__dataclass_fields__}
@@ -57,7 +113,7 @@ class Model(nn.Module):
             self.vision_tower = MoonViTModel(vc)
 
             # Projector: vision output → LM hidden
-            text_hidden = config.text_config.hidden_size
+            text_hidden = text_config.hidden_size
             vision_hidden = vc.embed_dim * (vc.spatial_merge_size ** 2)
             self.multi_modal_projector = MLPProjector(
                 in_dim=vision_hidden,
@@ -92,8 +148,8 @@ class Model(nn.Module):
 
         from mlxs.models.vision import merge_embeddings
 
-        # Vision tower returns list of merged patch tensors
-        grid = image_grid_thw if image_grid_thw is not None else mx.array([[1, 1, 1]])
+        # MoonViT consumes per-patch NHWC inputs and 2D patch-grid shapes.
+        grid = _normalize_moon_vit_grid(image_grid_thw)
         image_embeds_list = self.vision_tower(pixel_values, grid)
 
         # Concatenate and project
@@ -188,4 +244,4 @@ class Model(nn.Module):
         return result
 
     def parameters(self) -> dict[str, Any]:
-        return self.language_model.parameters()
+        return dict(self.trainable_parameters())
