@@ -55,9 +55,11 @@ class ConversionPhase(StrEnum):
 
 
 class VerificationMode(StrEnum):
-    REQUIRED = "required"
-    BASIC = "basic"
     SKIP = "skip"
+    BASIC = "basic"
+    STRICT = "strict"
+    REQUIRED = "required"
+    PARANOID = "paranoid"
 
 
 class ModelAssistanceMode(StrEnum):
@@ -294,6 +296,33 @@ class ConversionPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceShardDependency:
+    shard_file: str
+    source_names: tuple[str, ...]
+    target_names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MappingDependencyGroup:
+    shard_files: tuple[str, ...]
+    target_names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionDependencyPlan:
+    referenced_source_tensors: tuple[str, ...]
+    referenced_source_shards: tuple[str, ...]
+    source_shard_dependencies: tuple[SourceShardDependency, ...]
+    mapping_dependency_groups: tuple[MappingDependencyGroup, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class OutputPackGroup:
+    target_names: tuple[str, ...]
+    total_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionResult:
     output_dir: Path
     weight_files: tuple[str, ...]
@@ -301,6 +330,11 @@ class ExecutionResult:
     written_tensor_names: tuple[str, ...]
     copied_artifacts: tuple[str, ...]
     skipped_source_tensors: tuple[str, ...]
+    loaded_source_tensors: tuple[str, ...] = ()
+    load_strategy: str = "whole_shard_mx_load"
+    materialization_strategy: str = "all_targets_buffered"
+    dependency_plan: ExecutionDependencyPlan | None = None
+    output_pack_groups: tuple[OutputPackGroup, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +372,7 @@ class ConversionManifest:
     verification_checks: tuple[dict[str, Any], ...]
     warnings: tuple[str, ...]
     architecture_traits: dict[str, Any] = field(default_factory=dict)
+    execution_dependency_summary: dict[str, Any] = field(default_factory=dict)
     capability_snapshot: dict[str, Any] = field(default_factory=dict)
     required_target_names: tuple[str, ...] = ()
     mapping_provenance: tuple[dict[str, Any], ...] = ()

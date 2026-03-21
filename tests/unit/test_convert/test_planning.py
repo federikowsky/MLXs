@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from mlxs.convert.errors import MissingRequiredTensorError, UnsupportedRuntimeTargetError
-from mlxs.convert.planning import _alias_candidates, build_conversion_plan
+from mlxs.convert.planning import (
+    _alias_candidates,
+    _verification_policy_for_mode,
+    build_conversion_plan,
+)
 from mlxs.convert.types import (
     ArchitectureTraits,
     CanonicalIR,
@@ -30,6 +34,7 @@ from mlxs.convert.types import (
     SourceKind,
     TensorInfo,
     TopologyKind,
+    VerificationMode,
 )
 
 
@@ -143,6 +148,45 @@ def _canonical_ir(*, supported: bool = True) -> CanonicalIR:
             confidence_score=None,
             fallback_markers=(),
         ),
+    )
+
+
+def test_verification_policy_for_mode_tiers_are_explicit() -> None:
+    assert _verification_policy_for_mode(VerificationMode.BASIC) == (
+        "schema",
+        "weight_index",
+        "config_invariants",
+        "required_tensor_coverage",
+    )
+    assert _verification_policy_for_mode(VerificationMode.STRICT) == (
+        "schema",
+        "weight_index",
+        "config_invariants",
+        "required_tensor_coverage",
+        "shape",
+        "schema_hash",
+        "artifacts",
+    )
+    assert _verification_policy_for_mode(VerificationMode.REQUIRED) == (
+        "schema",
+        "weight_index",
+        "config_invariants",
+        "required_tensor_coverage",
+        "shape",
+        "schema_hash",
+        "artifacts",
+        "runtime_smoke",
+    )
+    assert _verification_policy_for_mode(VerificationMode.PARANOID) == (
+        "schema",
+        "weight_index",
+        "config_invariants",
+        "required_tensor_coverage",
+        "shape",
+        "schema_hash",
+        "artifacts",
+        "runtime_smoke",
+        "minimal_forward",
     )
 
 

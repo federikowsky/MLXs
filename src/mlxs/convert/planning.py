@@ -923,18 +923,27 @@ def _planner_model_mode(canonical_ir: CanonicalIR) -> ModelMode:
 def _verification_policy_for_mode(mode: VerificationMode) -> tuple[str, ...]:
     if mode == VerificationMode.SKIP:
         return ()
-    base = (
+    basic = (
         "schema",
         "weight_index",
         "config_invariants",
         "required_tensor_coverage",
+    )
+    strict = (
+        *basic,
         "shape",
         "schema_hash",
         "artifacts",
     )
+    if mode == VerificationMode.BASIC:
+        return basic
+    if mode == VerificationMode.STRICT:
+        return strict
     if mode == VerificationMode.REQUIRED:
-        return (*base, "runtime_smoke")
-    return base
+        return (*strict, "runtime_smoke")
+    if mode == VerificationMode.PARANOID:
+        return (*strict, "runtime_smoke", "minimal_forward")
+    return strict
 
 
 def _ensure_unique_names(

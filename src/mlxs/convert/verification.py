@@ -70,7 +70,12 @@ def verify_existing_output(
     manifest = _load_manifest(output_path)
 
     if manifest is not None and _manifest_has_schema_snapshot(manifest):
-        spec = _spec_from_manifest(output_path, inspection, manifest, verification_mode=opts.verification_mode)
+        spec = _spec_from_manifest(
+            output_path,
+            inspection,
+            manifest,
+            verification_mode=opts.verification_mode,
+        )
         return _run_verification(spec, output_path, options=opts)
 
     canonical_ir = normalize_inspection(inspection, options=opts)
@@ -126,7 +131,9 @@ def _spec_from_manifest(
     verification_mode: VerificationMode,
 ) -> _VerificationSpec:
     target_schema = _target_schema_from_snapshot(manifest["target_schema_snapshot"])
-    expected_weight_files = tuple(_string_tuple(manifest.get("weight_files"))) or inspection.shard_files
+    expected_weight_files = (
+        tuple(_string_tuple(manifest.get("weight_files"))) or inspection.shard_files
+    )
     expected_weight_index_file = manifest.get("weight_index_file")
     if expected_weight_index_file is None and len(expected_weight_files) > 1:
         expected_weight_index_file = "model.safetensors.index.json"
@@ -207,6 +214,8 @@ def _run_verification(
             _check_artifact_completeness(spec.expected_artifacts, output_dir, checks)
         elif check_name == "runtime_smoke":
             _check_runtime_smoke_load(output_dir, spec.runtime_model_mode, checks)
+        elif check_name == "minimal_forward":
+            _check_minimal_forward(output_dir, spec.runtime_model_mode, checks)
 
     status = (
         VerificationStatus.PASSED
@@ -350,7 +359,11 @@ def _check_schema_hash(
     checks.append(
         VerificationCheck(
             "schema_hash",
-            VerificationStatus.PASSED if actual_hash == expected_schema_hash else VerificationStatus.FAILED,
+            (
+                VerificationStatus.PASSED
+                if actual_hash == expected_schema_hash
+                else VerificationStatus.FAILED
+            ),
             "produced schema hash matches the expected manifest/schema snapshot"
             if actual_hash == expected_schema_hash
             else (
@@ -382,7 +395,9 @@ def _check_config_invariants(
     missing = sorted(expected_keys - actual_keys)
     extra = sorted(actual_keys - expected_keys)
     changed = sorted(
-        key for key in expected_keys & actual_keys if actual_config.get(key) != expected_config.get(key)
+        key
+        for key in expected_keys & actual_keys
+        if actual_config.get(key) != expected_config.get(key)
     )
     fragments: list[str] = []
     if missing:
@@ -445,6 +460,57 @@ def _check_runtime_smoke_load(
             "runtime_smoke",
             VerificationStatus.PASSED,
             "converted package loads through the current runtime loader",
+        )
+    )
+
+
+def _check_minimal_forward(
+    output_dir: Path,
+    runtime_model_mode: str,
+    checks: list[VerificationCheck],
+) -> None:
+    if runtime_model_mode != ModelMode.TEXT.value:
+        checks.append(
+            VerificationCheck(
+                "minimal_forward",
+                VerificationStatus.SKIPPED,
+                "minimal forward is only enabled for text-mode runtime targets",
+            )
+        )
+        return
+
+    try:
+        import mlx.core as mx
+
+        from mlxs.load.loader import load_model
+
+        model = load_model(
+            output_dir,
+            lazy=False,
+            model_mode=ModelMode.TEXT,
+        )
+        logits = model(mx.array([[1, 2]], dtype=mx.int32))
+        if isinstance(logits, (tuple, list)):
+            logits = logits[0]
+        shape = tuple(int(dim) for dim in logits.shape)
+    except Exception as exc:
+        checks.append(
+            VerificationCheck(
+                "minimal_forward",
+                VerificationStatus.FAILED,
+                f"minimal forward failed: {exc}",
+            )
+        )
+        return
+
+    valid = len(shape) == 3 and shape[0] == 1 and shape[1] == 2
+    checks.append(
+        VerificationCheck(
+            "minimal_forward",
+            VerificationStatus.PASSED if valid else VerificationStatus.FAILED,
+            "text-mode minimal forward produced logits with expected leading dimensions"
+            if valid
+            else f"unexpected minimal forward output shape: {shape}",
         )
     )
 
@@ -536,16 +602,21 @@ def _default_policy_for_mode(
 ) -> tuple[str, ...]:
     if mode == VerificationMode.SKIP:
         return ()
-    policy = [
+    basic = [
         "schema",
         "weight_index",
         "config_invariants",
         "required_tensor_coverage",
-        "shape",
     ]
+    if mode == VerificationMode.BASIC:
+        return tuple(basic)
+
+    policy = [*basic, "shape"]
     if include_schema_hash:
         policy.append("schema_hash")
     policy.append("artifacts")
-    if mode == VerificationMode.REQUIRED:
+    if mode in (VerificationMode.REQUIRED, VerificationMode.PARANOID):
         policy.append("runtime_smoke")
+    if mode == VerificationMode.PARANOID:
+        policy.append("minimal_forward")
     return tuple(policy)

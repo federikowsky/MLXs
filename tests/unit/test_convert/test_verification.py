@@ -21,6 +21,7 @@ from mlxs.convert.types import (
     VerificationMode,
 )
 from mlxs.convert.verification import (
+    _check_minimal_forward,
     _check_runtime_smoke_load,
     verify_conversion,
     verify_existing_output,
@@ -73,19 +74,26 @@ def _inspection(output_dir: Path):
 
 
 def _plan(*, mode: VerificationMode) -> ConversionPlan:
-    base_policy = (
+    basic_policy = (
         "schema",
         "weight_index",
         "config_invariants",
         "required_tensor_coverage",
+    )
+    strict_policy = (
+        *basic_policy,
         "shape",
         "schema_hash",
         "artifacts",
     )
-    if mode == VerificationMode.REQUIRED:
-        verification_policy = (*base_policy, "runtime_smoke")
+    if mode == VerificationMode.PARANOID:
+        verification_policy = (*strict_policy, "runtime_smoke", "minimal_forward")
+    elif mode == VerificationMode.REQUIRED:
+        verification_policy = (*strict_policy, "runtime_smoke")
+    elif mode == VerificationMode.STRICT:
+        verification_policy = strict_policy
     elif mode == VerificationMode.BASIC:
-        verification_policy = base_policy
+        verification_policy = basic_policy
     else:
         verification_policy = ()
 
@@ -180,6 +188,111 @@ def test_verify_conversion_basic_does_not_call_runtime_smoke(
     assert report.status.value == "passed"
 
 
+def test_verify_conversion_strict_checks_shapes_but_not_runtime_smoke(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    _write_output_dir(output_dir)
+    (output_dir / "tokenizer.json").write_text("{}")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("runtime smoke should not run in STRICT mode")
+
+    monkeypatch.setattr("mlxs.load.loader.load_model", fail_if_called)
+
+    report = verify_conversion(
+        _inspection(output_dir),
+        object(),
+        _plan(mode=VerificationMode.STRICT),
+        _execution(output_dir),
+        options=ConversionOptions(verification_mode=VerificationMode.STRICT),
+    )
+
+    assert report.status.value == "passed"
+    assert {check.name for check in report.checks} >= {
+        "schema",
+        "weight_index",
+        "config_invariants",
+        "required_tensor_coverage",
+        "shape",
+        "schema_hash",
+        "artifacts",
+    }
+
+
+def test_verify_conversion_required_runs_runtime_smoke_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    _write_output_dir(output_dir)
+    (output_dir / "tokenizer.json").write_text("{}")
+
+    calls: list[str] = []
+
+    def fake_load_model(*_args, **_kwargs):
+        calls.append("load")
+        return object()
+
+    monkeypatch.setattr("mlxs.load.loader.load_model", fake_load_model)
+
+    report = verify_conversion(
+        _inspection(output_dir),
+        object(),
+        _plan(mode=VerificationMode.REQUIRED),
+        _execution(output_dir),
+        options=ConversionOptions(verification_mode=VerificationMode.REQUIRED),
+    )
+
+    assert report.status.value == "passed"
+    assert calls == ["load"]
+    assert "minimal_forward" not in {check.name for check in report.checks}
+
+
+def test_minimal_forward_is_skipped_for_multimodal_runtime(tmp_path: Path) -> None:
+    checks = []
+
+    _check_minimal_forward(tmp_path, "multimodal", checks)
+
+    assert len(checks) == 1
+    assert checks[0].name == "minimal_forward"
+    assert checks[0].status.value == "skipped"
+
+
+def test_verify_conversion_paranoid_runs_minimal_forward(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    _write_output_dir(output_dir)
+    (output_dir / "tokenizer.json").write_text("{}")
+
+    class _FakeModel:
+        def __call__(self, input_ids):
+            return np.zeros((1, int(input_ids.shape[1]), 4), dtype=np.float32)
+
+    calls: list[str] = []
+
+    def fake_load_model(*_args, **_kwargs):
+        calls.append("load")
+        return _FakeModel()
+
+    monkeypatch.setattr("mlxs.load.loader.load_model", fake_load_model)
+
+    report = verify_conversion(
+        _inspection(output_dir),
+        object(),
+        _plan(mode=VerificationMode.PARANOID),
+        _execution(output_dir),
+        options=ConversionOptions(verification_mode=VerificationMode.PARANOID),
+    )
+
+    assert report.status.value == "passed"
+    assert calls == ["load", "load"]
+    assert {check.name for check in report.checks} >= {"runtime_smoke", "minimal_forward"}
+
+
 def test_verify_existing_output_uses_manifest_artifact_snapshot(tmp_path: Path) -> None:
     output_dir = tmp_path / "output"
     _write_output_dir(output_dir)
@@ -210,7 +323,7 @@ def test_verify_existing_output_uses_manifest_artifact_snapshot(tmp_path: Path) 
     with pytest.raises(ConversionVerificationError, match="Verification failed"):
         verify_existing_output(
             output_dir,
-            options=ConversionOptions(verification_mode=VerificationMode.BASIC),
+            options=ConversionOptions(verification_mode=VerificationMode.STRICT),
         )
 
 
@@ -229,6 +342,14 @@ def test_verify_existing_output_accepts_adapter_mapping_provenance(tmp_path: Pat
             "topology_kind": "decoder",
             "expert_layout": "dense",
             "sequence_family": "attention",
+        },
+        "execution_dependency_summary": {
+            "load_strategy": "selective_safetensors",
+            "materialization_strategy": "single_file_buffered",
+            "referenced_source_tensor_count": 1,
+            "loaded_source_tensor_count": 1,
+            "referenced_source_shards": ["model.safetensors"],
+            "output_pack_groups": [{"target_count": 1, "total_bytes": 16}],
         },
         "required_target_names": [entry.name for entry in snapshot],
         "target_schema_hash": runtime_schema_hash(snapshot),
@@ -289,6 +410,14 @@ def test_verify_existing_output_accepts_qwen35_moe_mapping_provenance(tmp_path: 
             "topology_kind": "decoder",
             "expert_layout": "moe",
             "sequence_family": "ssm_hybrid",
+        },
+        "execution_dependency_summary": {
+            "load_strategy": "selective_safetensors",
+            "materialization_strategy": "single_file_buffered",
+            "referenced_source_tensor_count": 1,
+            "loaded_source_tensor_count": 1,
+            "referenced_source_shards": ["model.safetensors"],
+            "output_pack_groups": [{"target_count": 1, "total_bytes": 16}],
         },
         "required_target_names": [entry.name for entry in snapshot],
         "target_schema_hash": runtime_schema_hash(snapshot),
