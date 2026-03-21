@@ -16,7 +16,11 @@ import mlx.nn as nn
 
 from mlxs._errors import ModelLoadError
 from mlxs._types import ModelMode
-from mlxs.load.registry import get_model_classes
+from mlxs.load.registry import (
+    get_model_capabilities,
+    get_model_classes,
+    instantiate_model,
+)
 from mlxs.load.tokenizer import TokenizerWrapper, load_hf_tokenizer
 from mlxs.load.weights import load_config, load_weights
 
@@ -82,6 +86,7 @@ def load_model(
         ModelClass, ModelArgsClass = get_model_classes(model_type)
     except ValueError as exc:
         raise ModelLoadError(str(exc)) from exc
+    capabilities = get_model_capabilities(model_type)
 
     # Resolve AUTO mode (§7.4)
     resolved_mode = model_mode
@@ -99,16 +104,16 @@ def load_model(
             f"model_mode=multimodal requested but {model_type} config.json "
             f"has no vision_config. This model does not support vision."
         )
+    if resolved_mode == ModelMode.MULTIMODAL and not capabilities.supports_multimodal:
+        raise ModelLoadError(
+            f"{model_type} is registered as text-only and does not support multimodal mode."
+        )
     args = ModelArgsClass.from_dict(config)
 
-    # Pass model_mode if the constructor accepts it
-    import inspect
-
-    sig = inspect.signature(ModelClass.__init__)
-    if "model_mode" in sig.parameters:
-        model = ModelClass(args, model_mode=resolved_mode)
-    else:
-        model = ModelClass(args)
+    try:
+        model = instantiate_model(model_type, args, model_mode=resolved_mode)
+    except ValueError as exc:
+        raise ModelLoadError(str(exc)) from exc
 
     if lazy:
         logger.info("Lazy load enabled — weights deferred until first call")

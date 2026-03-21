@@ -8,7 +8,14 @@ from __future__ import annotations
 
 import pytest
 
-from mlxs.load.registry import _MODEL_REMAPPING, MODEL_REGISTRY, get_model_classes
+from mlxs._types import ModelMode
+from mlxs.load.registry import (
+    _MODEL_REMAPPING,
+    MODEL_REGISTRY,
+    get_model_capabilities,
+    get_model_classes,
+    get_model_entry,
+)
 
 
 class TestRegistryHappyPath:
@@ -27,6 +34,12 @@ class TestRegistryHappyPath:
         assert model_cls.__name__ == "Model"
         assert args_cls.__name__ == "ModelArgs"
 
+    def test_qwen3_entry_exposes_capabilities(self) -> None:
+        entry = get_model_entry("qwen3")
+        assert entry.model_type == "qwen3"
+        assert entry.capabilities.supports_multimodal is True
+        assert ModelMode.MULTIMODAL in entry.capabilities.supported_model_modes
+
 
 class TestRegistryAliases:
     def test_mistral_resolves_to_llama(self) -> None:
@@ -42,6 +55,9 @@ class TestRegistryAliases:
         assert model_cls.__module__ == "mlxs.models.qwen3"
         assert args_cls.__module__ == "mlxs.models.qwen3"
 
+    def test_aliases_share_canonical_capabilities(self) -> None:
+        assert get_model_capabilities("mistral") == get_model_capabilities("llama")
+
 class TestRegistryNegativePath:
     def test_unknown_model_raises(self) -> None:
         with pytest.raises(ValueError, match="Unsupported model_type"):
@@ -53,6 +69,10 @@ class TestRegistryNegativePath:
         msg = str(exc_info.value)
         assert "llama" in msg
         assert "qwen2" in msg
+
+    def test_unknown_capabilities_raise(self) -> None:
+        with pytest.raises(ValueError, match="Unsupported model_type"):
+            get_model_capabilities("bad_type")
 
     @pytest.mark.parametrize(
         "legacy_model_type",

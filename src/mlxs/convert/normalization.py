@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from collections.abc import Iterable
 from typing import Any
 
@@ -209,14 +208,13 @@ def _runtime_supports_modality(runtime_target_model_type: str, multimodal: bool)
     if not multimodal:
         return True
 
-    from mlxs.load.registry import get_model_classes
+    from mlxs.load.registry import get_model_capabilities
 
     try:
-        ModelClass, _ = get_model_classes(runtime_target_model_type)
+        capabilities = get_model_capabilities(runtime_target_model_type)
     except ValueError:
         return False
-    signature = inspect.signature(ModelClass.__init__)
-    return "model_mode" in signature.parameters
+    return capabilities.supports_multimodal and capabilities.supports_conversion
 
 
 def _has_multimodal_config(config: dict[str, Any]) -> bool:

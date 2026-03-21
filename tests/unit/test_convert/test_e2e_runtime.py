@@ -1103,6 +1103,12 @@ def test_convert_source_e2e_runtime(case: RuntimeCase, tmp_path: Path) -> None:
 
     assert result.canonical_ir.identity.macro_template.value == case.macro_template
     assert result.plan.runtime_target_model_type == case.runtime_target
+    manifest = json.loads(result.manifest_path.read_text())
+    assert manifest["runtime_target_model_type"] == case.runtime_target
+    assert manifest["runtime_model_mode"] == result.plan.runtime_model_mode
+    assert manifest["target_schema_hash"] == result.plan.target_schema_hash
+    assert len(manifest["mapping_provenance"]) == len(result.plan.mappings)
+    assert len(manifest["required_target_names"]) == len(result.plan.required_target_names)
 
     converted = load_file(str(output_dir / "model.safetensors"))
     if case.tensor_compare == "allclose":
