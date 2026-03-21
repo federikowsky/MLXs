@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum, StrEnum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -249,6 +249,8 @@ class TensorTargetPlan:
     required: bool = True
     note: str | None = None
     rule_id: str = "exact"
+    match_layer: str = "exact"
+    adapter_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

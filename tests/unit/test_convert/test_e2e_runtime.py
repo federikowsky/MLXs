@@ -1109,6 +1109,22 @@ def test_convert_source_e2e_runtime(case: RuntimeCase, tmp_path: Path) -> None:
     assert manifest["target_schema_hash"] == result.plan.target_schema_hash
     assert len(manifest["mapping_provenance"]) == len(result.plan.mappings)
     assert len(manifest["required_target_names"]) == len(result.plan.required_target_names)
+    assert all(
+        {"target_name", "source_names", "rule_id", "match_layer", "transforms"} <= set(entry)
+        for entry in manifest["mapping_provenance"]
+    )
+    if case.name in {"qwen2_multimodal", "qwen3_multimodal"}:
+        assert any(
+            entry["match_layer"] == "family_adapter"
+            and entry["adapter_name"] == "qwen_family"
+            for entry in manifest["mapping_provenance"]
+        )
+    if case.name == "qwen3_moe_multimodal":
+        assert any(
+            entry["match_layer"] == "generic_alias"
+            and entry["adapter_name"] is None
+            for entry in manifest["mapping_provenance"]
+        )
 
     converted = load_file(str(output_dir / "model.safetensors"))
     if case.tensor_compare == "allclose":

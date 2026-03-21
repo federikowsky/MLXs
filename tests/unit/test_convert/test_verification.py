@@ -36,7 +36,11 @@ def _write_output_dir(
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(json.dumps(config or {"model_type": "qwen3"}))
-    save_file(tensors or {"model.embed_tokens.weight": np.ones((2, 2), dtype=np.float32)}, str(output_dir / shard_name))
+    save_file(
+        tensors
+        or {"model.embed_tokens.weight": np.ones((2, 2), dtype=np.float32)},
+        str(output_dir / shard_name),
+    )
 
 
 def _inspection(output_dir: Path):
@@ -79,7 +83,7 @@ def _plan(*, mode: VerificationMode) -> ConversionPlan:
         "artifacts",
     )
     if mode == VerificationMode.REQUIRED:
-        verification_policy = base_policy + ("runtime_smoke",)
+        verification_policy = (*base_policy, "runtime_smoke")
     elif mode == VerificationMode.BASIC:
         verification_policy = base_policy
     else:
@@ -184,7 +188,13 @@ def test_verify_existing_output_uses_manifest_artifact_snapshot(tmp_path: Path) 
         "runtime_model_mode": "text",
         "required_target_names": ["model.embed_tokens.weight"],
         "target_schema_hash": runtime_schema_hash(
-            (RuntimeTensorSchemaEntry(name="model.embed_tokens.weight", shape=(2, 2), dtype="F32"),)
+            (
+                RuntimeTensorSchemaEntry(
+                    name="model.embed_tokens.weight",
+                    shape=(2, 2),
+                    dtype="F32",
+                ),
+            )
         ),
         "target_schema_snapshot": [
             {"name": "model.embed_tokens.weight", "shape": [2, 2], "dtype": "F32"}
@@ -202,6 +212,50 @@ def test_verify_existing_output_uses_manifest_artifact_snapshot(tmp_path: Path) 
             output_dir,
             options=ConversionOptions(verification_mode=VerificationMode.BASIC),
         )
+
+
+def test_verify_existing_output_accepts_adapter_mapping_provenance(tmp_path: Path) -> None:
+    output_dir = tmp_path / "output"
+    _write_output_dir(output_dir)
+    (output_dir / "tokenizer.json").write_text("{}")
+
+    snapshot = (
+        RuntimeTensorSchemaEntry(name="model.embed_tokens.weight", shape=(2, 2), dtype="F32"),
+    )
+    manifest = {
+        "runtime_model_mode": "text",
+        "required_target_names": [entry.name for entry in snapshot],
+        "target_schema_hash": runtime_schema_hash(snapshot),
+        "target_schema_snapshot": [
+            {"name": entry.name, "shape": list(entry.shape), "dtype": entry.dtype}
+            for entry in snapshot
+        ],
+        "normalized_config_snapshot": {"model_type": "qwen3"},
+        "tokenizer_artifacts": ["tokenizer.json"],
+        "multimodal_artifacts": [],
+        "weight_files": ["model.safetensors"],
+        "weight_index_file": None,
+        "mapping_provenance": [
+            {
+                "target_name": "model.embed_tokens.weight",
+                "source_names": ["language_model.model.embed_tokens.weight"],
+                "rule_id": "qwen_family:language_model_prefix",
+                "match_layer": "family_adapter",
+                "adapter_name": "qwen_family",
+                "required": True,
+                "note": "pilot family alias",
+                "transforms": [],
+            }
+        ],
+    }
+    (output_dir / "conversion_manifest.json").write_text(json.dumps(manifest))
+
+    report = verify_existing_output(
+        output_dir,
+        options=ConversionOptions(verification_mode=VerificationMode.BASIC),
+    )
+
+    assert report.status.value == "passed"
 
 
 def test_verify_existing_output_requires_shard_index_from_manifest(tmp_path: Path) -> None:

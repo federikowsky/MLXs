@@ -15,7 +15,6 @@ from mlxs.convert.types import (
     ConversionResult,
     ExecutionResult,
     InspectionReport,
-    VerificationCheck,
     VerificationReport,
 )
 
@@ -109,6 +108,8 @@ def build_manifest(
                 "target_name": mapping.target_name,
                 "source_names": mapping.source_names,
                 "rule_id": mapping.rule_id,
+                "match_layer": mapping.match_layer,
+                "adapter_name": mapping.adapter_name,
                 "required": mapping.required,
                 "note": mapping.note,
                 "transforms": tuple(json_ready(transform) for transform in mapping.transforms),
@@ -195,7 +196,11 @@ def _capability_snapshot(runtime_target_model_type: str) -> dict[str, Any]:
         "supports_text": capabilities.supports_text,
         "supports_multimodal": capabilities.supports_multimodal,
         "supported_model_modes": tuple(
-            mode.value for mode in sorted(capabilities.supported_model_modes, key=lambda item: item.value)
+            mode.value
+            for mode in sorted(
+                capabilities.supported_model_modes,
+                key=lambda item: item.value,
+            )
         ),
         "supports_conversion": capabilities.supports_conversion,
         "supports_schema_export": capabilities.supports_schema_export,

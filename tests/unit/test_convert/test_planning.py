@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -9,9 +10,8 @@ from mlxs.convert.planning import _alias_candidates, build_conversion_plan
 from mlxs.convert.types import (
     CanonicalIR,
     ConversionOptions,
-    ConversionPlan,
-    ConversionPhase,
     DensityKind,
+    InspectionReport,
     IRAmbiguities,
     IRConfig,
     IRConversion,
@@ -21,7 +21,6 @@ from mlxs.convert.types import (
     IRTensorLayout,
     IRTokenizer,
     IRTopology,
-    InspectionReport,
     MacroTemplate,
     Modality,
     RuntimeTensorSchemaEntry,
@@ -137,6 +136,68 @@ def _canonical_ir(*, supported: bool = True) -> CanonicalIR:
     )
 
 
+def _family_ir(
+    runtime_target_model_type: str,
+    *,
+    multimodal: bool,
+) -> CanonicalIR:
+    base = _canonical_ir()
+    return replace(
+        base,
+        identity=replace(
+            base.identity,
+            macro_template=(
+                MacroTemplate.MULTIMODAL_DECODER
+                if multimodal
+                else MacroTemplate.DECODER_DENSE
+            ),
+            modality=Modality.MULTIMODAL if multimodal else Modality.TEXT,
+            architecture_label=runtime_target_model_type,
+            runtime_target_model_type=runtime_target_model_type,
+            supported_by_runtime=True,
+        ),
+        topology=replace(
+            base.topology,
+            backbone_type="multimodal_decoder" if multimodal else "decoder",
+            multimodal=multimodal,
+            density=DensityKind.DENSE,
+            projector_presence=multimodal,
+            tower_presence=multimodal,
+        ),
+        config=replace(
+            base.config,
+            values={},
+            raw_config={"model_type": runtime_target_model_type},
+        ),
+        tensor_layout=replace(
+            base.tensor_layout,
+            selected_source_tensor_profile=(
+                "visual_prefix" if multimodal else "runtime_native"
+            ),
+            tensor_groups_present=("core", "multimodal") if multimodal else ("core",),
+            optional_tensor_groups_present=("multimodal",) if multimodal else (),
+            fused_split_markers=("visual_prefix",) if multimodal else (),
+            naming_aliases_discovered=(
+                ("language_model_prefix", "visual_prefix")
+                if multimodal
+                else ("language_model_prefix",)
+            ),
+        ),
+        conversion=replace(
+            base.conversion,
+            canonical_output_config={"model_type": runtime_target_model_type},
+        ),
+        evidence=replace(
+            base.evidence,
+            matched_config_keys=("model_type",),
+            matched_tensor_patterns=(
+                ("visual_prefix",) if multimodal else ("language_model_prefix",)
+            ),
+            selected_rules=(runtime_target_model_type,),
+        ),
+    )
+
+
 def test_build_conversion_plan_stacks_triplet_experts(monkeypatch: pytest.MonkeyPatch) -> None:
     inspection = _inspection(
         [
@@ -162,6 +223,9 @@ def test_build_conversion_plan_stacks_triplet_experts(monkeypatch: pytest.Monkey
     mapping = plan.mappings[0]
     assert mapping.target_name.endswith("switch_mlp.gate_proj.weight")
     assert mapping.transforms[0].kind.value == "stack"
+    assert mapping.rule_id == "stack_triplet_experts"
+    assert mapping.match_layer == "structural"
+    assert mapping.adapter_name is None
 
 
 def test_build_conversion_plan_rejects_unsupported_runtime() -> None:
@@ -203,6 +267,68 @@ def test_build_conversion_plan_prefers_exact_match_over_alias(
 
     assert plan.mappings[0].source_names == (target_name,)
     assert plan.mappings[0].rule_id == "exact"
+    assert plan.mappings[0].match_layer == "exact"
+    assert plan.mappings[0].adapter_name is None
+
+
+def test_build_conversion_plan_uses_qwen_family_adapter_for_language_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspection = _inspection(["language_model.model.embed_tokens.weight"])
+    ir = _family_ir("qwen3", multimodal=False)
+
+    monkeypatch.setattr(
+        "mlxs.convert.planning._collect_runtime_tensor_schema",
+        lambda _ir: [RuntimeTensorSchemaEntry(name="model.embed_tokens.weight", shape=(2, 4))],
+    )
+
+    plan = build_conversion_plan(inspection, ir, options=ConversionOptions())
+
+    mapping = plan.mappings[0]
+    assert mapping.source_names == ("language_model.model.embed_tokens.weight",)
+    assert mapping.rule_id == "qwen_family:language_model_prefix"
+    assert mapping.match_layer == "family_adapter"
+    assert mapping.adapter_name == "qwen_family"
+
+
+def test_build_conversion_plan_uses_qwen_family_adapter_for_vision_model_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspection = _inspection(["vision_model.encoder.weight"])
+    ir = _family_ir("qwen2", multimodal=True)
+
+    monkeypatch.setattr(
+        "mlxs.convert.planning._collect_runtime_tensor_schema",
+        lambda _ir: [RuntimeTensorSchemaEntry(name="vision_tower.encoder.weight", shape=(2, 4))],
+    )
+
+    plan = build_conversion_plan(inspection, ir, options=ConversionOptions())
+
+    mapping = plan.mappings[0]
+    assert mapping.source_names == ("vision_model.encoder.weight",)
+    assert mapping.rule_id == "qwen_family:vision_model_prefix"
+    assert mapping.match_layer == "family_adapter"
+    assert mapping.adapter_name == "qwen_family"
+
+
+def test_build_conversion_plan_keeps_non_pilot_family_on_generic_alias_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspection = _inspection(["model.vision_encoder.encoder.weight"])
+    ir = _family_ir("pixtral", multimodal=True)
+
+    monkeypatch.setattr(
+        "mlxs.convert.planning._collect_runtime_tensor_schema",
+        lambda _ir: [RuntimeTensorSchemaEntry(name="vision_tower.encoder.weight", shape=(2, 4))],
+    )
+
+    plan = build_conversion_plan(inspection, ir, options=ConversionOptions())
+
+    mapping = plan.mappings[0]
+    assert mapping.source_names == ("model.vision_encoder.encoder.weight",)
+    assert mapping.rule_id == "generic_alias"
+    assert mapping.match_layer == "generic_alias"
+    assert mapping.adapter_name is None
 
 
 def test_build_conversion_plan_fails_when_required_tensor_missing(
@@ -373,6 +499,9 @@ def test_build_conversion_plan_stacks_named_experts(
     assert len(plan.mappings) == 1
     mapping = plan.mappings[0]
     assert mapping.transforms[0].kind.value == "stack"
+    assert mapping.rule_id == "stack_named_experts"
+    assert mapping.match_layer == "structural"
+    assert mapping.adapter_name is None
 
 
 def test_build_conversion_plan_splits_switch_mlp_input_linear(
@@ -397,3 +526,6 @@ def test_build_conversion_plan_splits_switch_mlp_input_linear(
     mapping = plan.mappings[0]
     assert mapping.note == "switch_mlp_input_linear_split"
     assert mapping.transforms[0].kind.value == "slice"
+    assert mapping.rule_id == "switch_mlp_input_linear_split"
+    assert mapping.match_layer == "structural"
+    assert mapping.adapter_name is None
