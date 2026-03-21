@@ -1,8 +1,4 @@
-"""Qwen3 MoE model architecture.
-
-Implements ModelProtocol. Supports sparse MoE with QK-norm attention
-and configurable dense/MoE layer placement.
-"""
+"""Qwen3 MoE family model — text-only and multimodal config-driven."""
 
 from __future__ import annotations
 
@@ -12,17 +8,33 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
+from mlxs._types import ModelMode
 from mlxs.cache.attention_mask import create_attention_mask
 from mlxs.cache.kv import KVCache
 from mlxs.layers.activations import swiglu
 from mlxs.layers.attention import scaled_dot_product_attention
 from mlxs.layers.moe import SwitchGLU
-from mlxs.models.base import BaseModelArgs
+from mlxs.models.multimodal_shared import (
+    MediaBranch,
+    MultimodalArgsMixin,
+    build_dual_mode_components,
+    prepare_multimodal_inputs,
+)
+from mlxs.models.vision.siglip_builder import build_siglip_vision_tower
+
+_VISION_PREFIXES = (
+    "visual.",
+    "vision_tower.",
+    "vision_model.",
+    "multi_modal_projector.",
+    "mm_projector.",
+)
+_VISION_EXACT = ("visual", "vision_tower", "vision_model")
 
 
 @dataclass
-class ModelArgs(BaseModelArgs):
-    """Qwen3 MoE model configuration."""
+class ModelArgs(MultimodalArgsMixin[dict[str, Any]]):
+    """Qwen3 MoE family config: flat text-only or nested multimodal config."""
 
     model_type: str = "qwen3_moe"
     hidden_size: int = 2048
@@ -43,6 +55,23 @@ class ModelArgs(BaseModelArgs):
     max_position_embeddings: int = 32768
     norm_topk_prob: bool = True
     rope_scaling: dict[str, float | str] | None = None
+
+    image_token_id: int | None = 151655
+    video_token_id: int | None = 151656
+
+    @classmethod
+    def from_dict(cls, params: dict[str, Any]) -> ModelArgs:
+        return cls.from_flat_or_nested(
+            params,
+            default_model_type=params.get("model_type", "qwen3_moe"),
+        )
+
+    def resolved_text_args(self) -> ModelArgs:
+        """Resolve the language-side config for nested multimodal layouts."""
+
+        if self.text_config:
+            return type(self).from_dict(self.text_config)
+        return self
 
 
 class Attention(nn.Module):
@@ -211,16 +240,73 @@ class Qwen3MoeModel(nn.Module):
         return self.norm(h)
 
 
-class Model(nn.Module):
-    """Qwen3 MoE LM head wrapper -- satisfies ModelProtocol."""
+def _build_language_components(
+    args: ModelArgs,
+) -> tuple[Qwen3MoeModel, nn.Linear | None]:
+    model = Qwen3MoeModel(args)
+    lm_head = (
+        None
+        if args.tie_word_embeddings
+        else nn.Linear(args.hidden_size, args.vocab_size, bias=False)
+    )
+    return model, lm_head
 
-    def __init__(self, args: ModelArgs) -> None:
+
+def _sanitize_text_weights(
+    weights: dict[str, Any],
+    *,
+    tie_word_embeddings: bool,
+    num_hidden_layers: int,
+    num_experts: int,
+) -> dict[str, Any]:
+    sanitized = dict(weights)
+    if tie_word_embeddings:
+        sanitized.pop("lm_head.weight", None)
+    if "model.layers.0.mlp.experts.0.up_proj.weight" not in sanitized:
+        return sanitized
+
+    for layer_idx in range(num_hidden_layers):
+        prefix = f"model.layers.{layer_idx}"
+        for projection in ("up_proj", "down_proj", "gate_proj"):
+            key_0 = f"{prefix}.mlp.experts.0.{projection}.weight"
+            if key_0 not in sanitized:
+                continue
+            to_join = [
+                sanitized.pop(f"{prefix}.mlp.experts.{expert_idx}.{projection}.weight")
+                for expert_idx in range(num_experts)
+            ]
+            sanitized[f"{prefix}.mlp.switch_mlp.{projection}.weight"] = mx.stack(to_join)
+    return sanitized
+
+
+class Model(nn.Module):
+    """Qwen3 MoE family wrapper — text-only or multimodal via config + model_mode."""
+
+    def __init__(
+        self,
+        args: ModelArgs,
+        *,
+        model_mode: ModelMode = ModelMode.TEXT,
+    ) -> None:
         super().__init__()
-        self.args = args
+        self.config = args
         self.model_type = args.model_type
-        self.model = Qwen3MoeModel(args)
-        if not args.tie_word_embeddings:
-            self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
+        self._image_token_id = args.image_token_id
+        self._video_token_id = args.video_token_id
+
+        text_args = args.resolved_text_args()
+        self.args = text_args
+
+        components = build_dual_mode_components(
+            model_mode=model_mode,
+            language_builder=lambda: _build_language_components(text_args),
+            vision_config=args.vision_config,
+            vision_builder=build_siglip_vision_tower,
+        )
+        self._mode = components.model_mode
+        self.model, self.lm_head = components.language_model
+        if components.vision_tower is not None:
+            self.vision_tower = components.vision_tower
 
     def __call__(
         self,
@@ -232,7 +318,46 @@ class Model(nn.Module):
         out = self.model(inputs, cache, input_embeddings=input_embeddings)
         if self.args.tie_word_embeddings:
             return self.model.embed_tokens.as_linear(out)
+        if self.lm_head is None:
+            raise ValueError("lm_head is required when tie_word_embeddings is False")
         return self.lm_head(out)
+
+    def prepare_inputs(
+        self,
+        input_ids: mx.array,
+        *,
+        pixel_values: mx.array | None = None,
+        image_grid_thw: mx.array | None = None,
+        **_kwargs: Any,
+    ) -> tuple[mx.array, mx.array | None]:
+        if not self.supports_vision or pixel_values is None:
+            return input_ids, None
+
+        image_branch = None
+        if self._image_token_id is not None:
+            image_branch = MediaBranch(
+                values=pixel_values,
+                placeholder_token_id=self._image_token_id,
+                encode=self._encode_image,
+                encoder_kwargs={"grid_thw": image_grid_thw},
+            )
+
+        return prepare_multimodal_inputs(
+            input_ids,
+            embed_tokens=self.model.embed_tokens,
+            image_branch=image_branch,
+        )
+
+    def _encode_image(
+        self,
+        pixel_values: mx.array,
+        *,
+        grid_thw: mx.array | None = None,
+    ) -> mx.array:
+        dtype = self.vision_tower.patch_embed.proj.weight.dtype
+        image = pixel_values.astype(dtype)
+        grid = grid_thw if grid_thw is not None else mx.array([[1, 1, 1]])
+        return self.vision_tower(image, grid)
 
     @property
     def num_layers(self) -> int:
@@ -246,21 +371,73 @@ class Model(nn.Module):
         return [KVCache() for _ in self.model.layers]
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        if self.args.tie_word_embeddings:
-            weights.pop("lm_head.weight", None)
-        if "model.layers.0.mlp.experts.0.up_proj.weight" not in weights:
-            return weights
-        for l in range(self.args.num_hidden_layers):
-            prefix = f"model.layers.{l}"
-            for n in ["up_proj", "down_proj", "gate_proj"]:
-                if f"{prefix}.mlp.experts.0.{n}.weight" in weights:
-                    to_join = [
-                        weights.pop(f"{prefix}.mlp.experts.{e}.{n}.weight")
-                        for e in range(self.args.num_experts)
-                    ]
-                    weights[f"{prefix}.mlp.switch_mlp.{n}.weight"] = mx.stack(to_join)
-        return weights
+        if self._mode == ModelMode.TEXT:
+            filtered = {
+                key: value
+                for key, value in weights.items()
+                if key not in _VISION_EXACT
+                and not any(key.startswith(prefix) for prefix in _VISION_PREFIXES)
+            }
+            filtered = {
+                (
+                    key[len("language_model.") :]
+                    if key.startswith("language_model.")
+                    else key
+                ): value
+                for key, value in filtered.items()
+            }
+            return _sanitize_text_weights(
+                filtered,
+                tie_word_embeddings=self.args.tie_word_embeddings,
+                num_hidden_layers=self.args.num_hidden_layers,
+                num_experts=self.args.num_experts,
+            )
+
+        language_weights: dict[str, Any] = {}
+        vision_weights: dict[str, Any] = {}
+        for key, value in weights.items():
+            if key.startswith(("multi_modal_projector.", "mm_projector.")):
+                continue
+            if key.startswith("visual."):
+                key = f"vision_tower.{key[len('visual.') :]}"
+            elif key.startswith("vision_model."):
+                key = f"vision_tower.{key[len('vision_model.') :]}"
+
+            if key.startswith("vision_tower."):
+                vision_weights[key] = value
+            elif key.startswith("language_model."):
+                language_weights[key[len("language_model.") :]] = value
+            else:
+                language_weights[key] = value
+
+        sanitized_language = _sanitize_text_weights(
+            language_weights,
+            tie_word_embeddings=self.args.tie_word_embeddings,
+            num_hidden_layers=self.args.num_hidden_layers,
+            num_experts=self.args.num_experts,
+        )
+        if hasattr(self, "vision_tower"):
+            vision_weights = self.vision_tower.sanitize(vision_weights)
+        return sanitized_language | vision_weights
 
     @property
     def layers(self) -> list[Qwen3MoeDecoderLayer]:
         return self.model.layers
+
+    @property
+    def supports_vision(self) -> bool:
+        return self._mode != ModelMode.TEXT and hasattr(self, "vision_tower")
+
+    @property
+    def supports_audio(self) -> bool:
+        return False
+
+    @property
+    def image_token_id(self) -> int | None:
+        return self._image_token_id if self.supports_vision else None
+
+    @property
+    def language_model(self) -> Model:
+        """Compatibility alias for legacy wrapper-style access patterns."""
+
+        return self

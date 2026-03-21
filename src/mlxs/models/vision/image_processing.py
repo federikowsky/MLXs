@@ -20,6 +20,8 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 
 CLIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
 CLIP_STD = (0.26862954, 0.26130258, 0.27577711)
+KIMI_MEAN = (0.5, 0.5, 0.5)
+KIMI_STD = (0.5, 0.5, 0.5)
 
 # Qwen2-VL defaults
 _QWEN_VL_MIN_PIXELS = 3136     # 4 * 28 * 28
@@ -31,11 +33,11 @@ def _ensure_pillow() -> Any:
     try:
         from PIL import Image
         return Image
-    except ImportError:
+    except ImportError as exc:
         raise InvalidPromptError(
             "Pillow is required for image processing. "
             "Install with: pip install mlxs[vision]"
-        )
+        ) from exc
 
 
 def _smart_resize(
@@ -229,6 +231,76 @@ def preprocess_pixtral(
 
     pixel_values = mx.stack(padded, axis=0)  # (N, C, H, W)
     return pixel_values, sizes
+
+
+def preprocess_kimi_vl(
+    images: list[Any],  # list[PIL.Image.Image]
+    vision_config: dict[str, Any] | Any = None,
+    *,
+    max_pixels: int | None = None,
+) -> tuple[mx.array, mx.array]:
+    """Preprocess images for Kimi-VL / MoonViT.
+
+    Returns:
+        pixel_values: ``(N_patches_total, patch_H, patch_W, C)`` patch stack.
+        image_grid_thw: ``(N_images, 2)`` patch-grid ``[height, width]`` per image.
+    """
+    Image = _ensure_pillow()
+    import numpy as np
+
+    if isinstance(vision_config, dict):
+        patch_size = int(vision_config.get("patch_size", 14))
+        image_size = int(vision_config.get("image_size", 384))
+    elif vision_config is not None:
+        patch_size = int(getattr(vision_config, "patch_size", 14))
+        image_size = int(getattr(vision_config, "image_size", 384))
+    else:
+        patch_size = 14
+        image_size = 384
+
+    max_px = max_pixels or (image_size * image_size)
+    mean_arr = mx.array(KIMI_MEAN, dtype=mx.float32).reshape(1, 1, 3)
+    std_arr = mx.array(KIMI_STD, dtype=mx.float32).reshape(1, 1, 3)
+
+    all_patches: list[mx.array] = []
+    grid_hw: list[list[int]] = []
+
+    for img in images:
+        if not isinstance(img, Image.Image):
+            raise InvalidPromptError(f"Expected PIL Image, got {type(img)}")
+
+        img = img.convert("RGB")
+        width, height = img.size
+
+        if height * width > max_px:
+            scale = math.sqrt(max_px / (height * width))
+            height = max(1, int(height * scale))
+            width = max(1, int(width * scale))
+            img = img.resize((width, height), Image.BICUBIC)
+
+        padded_h = max(patch_size, math.ceil(height / patch_size) * patch_size)
+        padded_w = max(patch_size, math.ceil(width / patch_size) * patch_size)
+
+        img_np = np.array(img, dtype=np.float32) / 255.0  # (H, W, C)
+        canvas = np.zeros((padded_h, padded_w, 3), dtype=np.float32)
+        canvas[:height, :width, :] = img_np
+
+        img_arr = (mx.array(canvas) - mean_arr) / std_arr  # (H, W, C)
+
+        grid_h = padded_h // patch_size
+        grid_w = padded_w // patch_size
+        patches = img_arr.reshape(grid_h, patch_size, grid_w, patch_size, 3)
+        patches = patches.transpose(0, 2, 1, 3, 4).reshape(
+            grid_h * grid_w, patch_size, patch_size, 3
+        )
+
+        all_patches.append(patches)
+        grid_hw.append([grid_h, grid_w])
+
+    pixel_values = mx.concatenate(all_patches, axis=0)
+    image_grid_thw = mx.array(grid_hw, dtype=mx.int32)
+
+    return pixel_values, image_grid_thw
 
 
 def preprocess_standard(

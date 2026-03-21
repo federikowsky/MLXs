@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from mlxs.convert.errors import MissingRequiredTensorError, UnsupportedRuntimeTargetError
-from mlxs.convert.planning import build_conversion_plan
+from mlxs.convert.planning import _alias_candidates, build_conversion_plan
 from mlxs.convert.types import (
     CanonicalIR,
     ConversionOptions,
@@ -170,6 +170,39 @@ def test_build_conversion_plan_rejects_unsupported_runtime() -> None:
 
     with pytest.raises(UnsupportedRuntimeTargetError):
         build_conversion_plan(inspection, ir)
+
+
+def test_alias_candidates_are_deterministic_and_keep_exact_target_first() -> None:
+    target_name = "language_model.model.layers.0.mlp.fc1.weight"
+
+    first = _alias_candidates(target_name)
+    second = _alias_candidates(target_name)
+
+    assert first == second
+    assert first[0] == target_name
+
+
+def test_build_conversion_plan_prefers_exact_match_over_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_name = "model.embed_tokens.weight"
+    inspection = _inspection(
+        [
+            target_name,
+            "language_model.model.embed_tokens.weight",
+        ]
+    )
+    ir = _canonical_ir()
+
+    monkeypatch.setattr(
+        "mlxs.convert.planning._collect_runtime_tensor_schema",
+        lambda _ir: [RuntimeTensorSchemaEntry(name=target_name, shape=(2, 4))],
+    )
+
+    plan = build_conversion_plan(inspection, ir, options=ConversionOptions())
+
+    assert plan.mappings[0].source_names == (target_name,)
+    assert plan.mappings[0].rule_id == "exact"
 
 
 def test_build_conversion_plan_fails_when_required_tensor_missing(

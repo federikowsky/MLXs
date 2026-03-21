@@ -1,16 +1,19 @@
-"""Minimal forward test for kimi_vl (DeepSeek V3 text backbone, vision dropped)."""
+"""kimi_vl: text and multimodal wrapper coverage."""
 
 from __future__ import annotations
 
 import mlx.core as mx
 
+from mlxs._types import ModelMode
 from mlxs.load.registry import get_model_classes
+
+TEXT_HIDDEN_SIZE = 64
 
 MINIMAL_KIMI_VL = {
     "model_type": "kimi_vl",
     "text_config": {
         "model_type": "deepseek_v3",
-        "hidden_size": 64,
+        "hidden_size": TEXT_HIDDEN_SIZE,
         "num_hidden_layers": 2,
         "num_attention_heads": 4,
         "num_key_value_heads": 4,
@@ -39,6 +42,18 @@ MINIMAL_KIMI_VL = {
 }
 
 
+MINIMAL_KIMI_VL_VISION = {
+    "hidden_size": 16,
+    "intermediate_size": 32,
+    "num_hidden_layers": 1,
+    "num_attention_heads": 4,
+    "patch_size": 2,
+    "image_size": 4,
+    "spatial_merge_size": 1,
+    "merge_kernel_size": [1, 1],
+}
+
+
 def test_kimi_vl_forward() -> None:
     """From registry + minimal config: Model, make_cache, forward -> logits (B,T,V)."""
     ModelCls, ArgsCls = get_model_classes("kimi_vl")
@@ -52,3 +67,35 @@ def test_kimi_vl_forward() -> None:
     assert logits.shape == (B, T, V)
     assert model.num_layers == 2
     assert model.vocab_size == V
+
+
+def test_kimi_vl_multimodal_prepare_inputs_with_public_aliases() -> None:
+    """kimi_vl accepts public config aliases and real multimodal prepare_inputs."""
+    ModelCls, ArgsCls = get_model_classes("kimi_vl")
+    args = ArgsCls.from_dict(
+        {
+            "model_type": "kimi_vl",
+            "text_config": MINIMAL_KIMI_VL["text_config"],
+            "vision_config": MINIMAL_KIMI_VL_VISION,
+            "media_placeholder_token_id": 250,
+        }
+    )
+    model = ModelCls(args, model_mode=ModelMode.MULTIMODAL)
+    input_ids = mx.array([[250, 250, 250, 250]], dtype=mx.int32)
+
+    prepared_ids, input_embeddings = model.prepare_inputs(
+        input_ids,
+        pixel_values=mx.zeros((4, 2, 2, 3), dtype=mx.float32),
+        image_grid_thw=mx.array([[2, 2]], dtype=mx.int32),
+    )
+    logits = model(
+        prepared_ids,
+        cache=model.make_cache(),
+        input_embeddings=input_embeddings,
+    )
+
+    assert model.supports_vision is True
+    assert model.image_token_id == 250
+    assert input_embeddings is not None
+    assert input_embeddings.shape == (1, 4, TEXT_HIDDEN_SIZE)
+    assert logits.shape == (1, 4, model.vocab_size)

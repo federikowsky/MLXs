@@ -9,27 +9,33 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
 import mlx.nn as nn
 
 from mlxs._errors import ModelLoadError
 from mlxs._types import ModelMode
-from mlxs.load.registry import get_model_classes
+from mlxs.load.registry import (
+    get_model_capabilities,
+    get_model_classes,
+    instantiate_model,
+)
 from mlxs.load.tokenizer import TokenizerWrapper, load_hf_tokenizer
 from mlxs.load.weights import load_config, load_weights
 
 if TYPE_CHECKING:
     from mlxs.config.schema import ModelConfig
+    ModuleT = Any
+else:
+    ModuleT = nn.Module
 
 logger = logging.getLogger(__name__)
-
 
 def load_model_and_tokenizer(
     model_path: str | Path,
     model_config: ModelConfig,
-) -> tuple[nn.Module, TokenizerWrapper]:
+) -> tuple[ModuleT, TokenizerWrapper]:
     """Load model and tokenizer according to config weight_format (FR1, §7.2).
 
     model_path can be a local directory or a Hugging Face model id; it is
@@ -47,7 +53,7 @@ def load_model(
     *,
     lazy: bool = False,
     model_mode: ModelMode = ModelMode.AUTO,
-) -> nn.Module:
+) -> ModuleT:
     """Load a model from a local path.
 
     Reads config.json, resolves the architecture via the registry,
@@ -80,6 +86,7 @@ def load_model(
         ModelClass, ModelArgsClass = get_model_classes(model_type)
     except ValueError as exc:
         raise ModelLoadError(str(exc)) from exc
+    capabilities = get_model_capabilities(model_type)
 
     # Resolve AUTO mode (§7.4)
     resolved_mode = model_mode
@@ -88,23 +95,25 @@ def load_model(
         resolved_mode = ModelMode.MULTIMODAL if has_vision else ModelMode.TEXT
 
     # Validate MULTIMODAL requires vision_config
-    if resolved_mode == ModelMode.MULTIMODAL:
-        if "vision_config" not in config and "visual_config" not in config:
-            raise ModelLoadError(
-                f"model_mode=multimodal requested but {model_type} config.json "
-                f"has no vision_config. This model does not support vision."
-            )
-
+    if (
+        resolved_mode == ModelMode.MULTIMODAL
+        and "vision_config" not in config
+        and "visual_config" not in config
+    ):
+        raise ModelLoadError(
+            f"model_mode=multimodal requested but {model_type} config.json "
+            f"has no vision_config. This model does not support vision."
+        )
+    if resolved_mode == ModelMode.MULTIMODAL and not capabilities.supports_multimodal:
+        raise ModelLoadError(
+            f"{model_type} is registered as text-only and does not support multimodal mode."
+        )
     args = ModelArgsClass.from_dict(config)
 
-    # Pass model_mode if the constructor accepts it
-    import inspect
-
-    sig = inspect.signature(ModelClass.__init__)
-    if "model_mode" in sig.parameters:
-        model = ModelClass(args, model_mode=resolved_mode)
-    else:
-        model = ModelClass(args)
+    try:
+        model = instantiate_model(model_type, args, model_mode=resolved_mode)
+    except ValueError as exc:
+        raise ModelLoadError(str(exc)) from exc
 
     if lazy:
         logger.info("Lazy load enabled — weights deferred until first call")

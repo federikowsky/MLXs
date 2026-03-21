@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from collections.abc import Iterable
 from typing import Any
 
@@ -10,6 +9,7 @@ from mlxs.convert.types import (
     ConversionOptions,
     ConversionPhase,
     DensityKind,
+    InspectionReport,
     IRAmbiguities,
     IRConfig,
     IRConversion,
@@ -19,7 +19,6 @@ from mlxs.convert.types import (
     IRTensorLayout,
     IRTokenizer,
     IRTopology,
-    InspectionReport,
     MacroTemplate,
     Modality,
 )
@@ -57,6 +56,14 @@ _REQUIRED_FIELDS_BY_TEMPLATE: dict[MacroTemplate, tuple[str, ...]] = {
     MacroTemplate.MULTIMODAL_ENCODER_DECODER: ("hidden_size",),
 }
 
+_CONVERGED_RUNTIME_TARGETS: dict[str, str] = {
+    "lfm2": "lfm2",
+    "qwen2": "qwen2",
+    "qwen3": "qwen3",
+    "qwen3_5": "qwen3_5",
+    "qwen3_moe": "qwen3_moe",
+}
+
 
 def normalize_inspection(
     inspection: InspectionReport,
@@ -68,7 +75,12 @@ def normalize_inspection(
     matched_config_keys = tuple(sorted(config.keys()))
     runtime_target_model_type = _resolve_runtime_target_model_type(config)
     macro_template, ambiguity_flags = _select_macro_template(inspection, runtime_target_model_type)
-    topology = _build_topology(inspection, config, macro_template)
+    topology = _build_topology(
+        inspection,
+        config,
+        macro_template=macro_template,
+        runtime_target_model_type=runtime_target_model_type,
+    )
     canonical_values = _canonical_config_values(config)
     required_fields = _REQUIRED_FIELDS_BY_TEMPLATE[macro_template]
     missing = tuple(field for field in required_fields if canonical_values.get(field) is None)
@@ -121,7 +133,9 @@ def normalize_inspection(
             required_fields=required_fields,
         ),
         tensor_layout=IRTensorLayout(
-            selected_source_tensor_profile=source_profiles[0] if source_profiles else "runtime_native",
+            selected_source_tensor_profile=(
+                source_profiles[0] if source_profiles else "runtime_native"
+            ),
             canonical_internal_tensor_profile="runtime_post_sanitize",
             tensor_groups_present=tensor_groups,
             optional_tensor_groups_present=tuple(
@@ -136,7 +150,9 @@ def normalize_inspection(
             artifact_paths=inspection.tokenizer_artifacts,
             special_tokens=tokenizer_specials,
             vocab_metadata={"vocab_size": canonical_values.get("vocab_size")},
-            chat_template_present=any("template" in path for path in inspection.tokenizer_artifacts),
+            chat_template_present=any(
+                "template" in path for path in inspection.tokenizer_artifacts
+            ),
         ),
         conversion=IRConversion(
             dtype_policy=opts.dtype_policy,
@@ -167,14 +183,16 @@ def normalize_inspection(
 
 
 def _resolve_runtime_target_model_type(config: dict[str, Any]) -> str | None:
-    from mlxs.load.registry import MODEL_REGISTRY, _MODEL_REMAPPING
+    from mlxs.load.registry import _MODEL_REMAPPING, MODEL_REGISTRY
 
     source_model_type = config.get("model_type")
-    if source_model_type is None:
+    if not isinstance(source_model_type, str):
         return None
     canonical = _MODEL_REMAPPING.get(source_model_type, source_model_type)
+    if canonical in _CONVERGED_RUNTIME_TARGETS:
+        return _CONVERGED_RUNTIME_TARGETS[canonical]
     if _has_multimodal_config(config):
-        multimodal_candidates = []
+        multimodal_candidates: list[str] = []
         if canonical.endswith("_moe"):
             multimodal_candidates.append(canonical.replace("_moe", "_vl_moe"))
         multimodal_candidates.append(f"{canonical}_vl")
@@ -190,14 +208,13 @@ def _runtime_supports_modality(runtime_target_model_type: str, multimodal: bool)
     if not multimodal:
         return True
 
-    from mlxs.load.registry import get_model_classes
+    from mlxs.load.registry import get_model_capabilities
 
     try:
-        ModelClass, _ = get_model_classes(runtime_target_model_type)
+        capabilities = get_model_capabilities(runtime_target_model_type)
     except ValueError:
         return False
-    signature = inspect.signature(ModelClass.__init__)
-    return "model_mode" in signature.parameters
+    return capabilities.supports_multimodal and capabilities.supports_conversion
 
 
 def _has_multimodal_config(config: dict[str, Any]) -> bool:
@@ -254,7 +271,9 @@ def _select_macro_template(
 def _build_topology(
     inspection: InspectionReport,
     config: dict[str, Any],
+    *,
     macro_template: MacroTemplate,
+    runtime_target_model_type: str | None,
 ) -> IRTopology:
     attention_heads = _value_from_nested(config, "num_attention_heads")
     kv_heads = _value_from_nested(config, "num_key_value_heads", "num_kv_heads", "n_kv_heads")
@@ -268,19 +287,28 @@ def _build_topology(
     else:
         attention_variant = None
 
-    density = DensityKind.DENSE
-    if macro_template == MacroTemplate.DECODER_MOE:
-        density = DensityKind.MOE
-    elif macro_template == MacroTemplate.SSM_HYBRID:
-        density = DensityKind.HYBRID
-
     tensor_names = {tensor.name for tensor in inspection.tensor_infos}
+    is_multimodal = macro_template in {
+        MacroTemplate.MULTIMODAL_DECODER,
+        MacroTemplate.MULTIMODAL_ENCODER_DECODER,
+    }
+    is_ssm_hybrid = _is_ssm_hybrid(config, tensor_names, runtime_target_model_type)
+    is_moe = _is_moe(config, tensor_names)
+    if is_moe:
+        density = DensityKind.MOE
+    elif is_ssm_hybrid:
+        density = DensityKind.HYBRID
+    else:
+        density = DensityKind.DENSE
     qkv_layout = "fused_qkv" if any("qkv" in name for name in tensor_names) else "split_qkv"
     recurrent_traits = tuple(
         sorted(
             marker
             for marker, present in {
-                "arrays_cache": any("conv1d.weight" in name or "conv_1d.weight" in name for name in tensor_names),
+                "arrays_cache": any(
+                    "conv1d.weight" in name or "conv_1d.weight" in name
+                    for name in tensor_names
+                ),
                 "ssm_state": any("A_log" in name or "rg_lru" in name for name in tensor_names),
                 "hybrid_attention": any("self_attn" in name for name in tensor_names),
             }.items()
@@ -297,13 +325,10 @@ def _build_topology(
             MacroTemplate.ENCODER_DECODER,
             MacroTemplate.MULTIMODAL_ENCODER_DECODER,
         },
-        multimodal=macro_template in {
-            MacroTemplate.MULTIMODAL_DECODER,
-            MacroTemplate.MULTIMODAL_ENCODER_DECODER,
-        },
-        ssm_hybrid=macro_template == MacroTemplate.SSM_HYBRID,
+        multimodal=is_multimodal,
+        ssm_hybrid=is_ssm_hybrid,
         density=density,
-        attention_presence=macro_template != MacroTemplate.SSM_HYBRID or any(
+        attention_presence=not is_ssm_hybrid or any(
             "self_attn" in name for name in tensor_names
         ),
         attention_variant=attention_variant,
@@ -428,7 +453,9 @@ def _canonical_config_values(config: dict[str, Any]) -> dict[str, Any]:
             config, "num_experts_per_tok", "num_experts_per_token"
         ),
         "tie_word_embeddings": _value_from_nested(config, "tie_word_embeddings"),
-        "vision_hidden_size": _value_from_nested(config, "hidden_size", nested_key="vision_config"),
+        "vision_hidden_size": _value_from_nested(
+            config, "hidden_size", nested_key="vision_config"
+        ),
         "projector_hidden_size": _value_from_nested(
             config, "hidden_size", nested_key="vision_config"
         ),
@@ -436,7 +463,10 @@ def _canonical_config_values(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value is not None}
 
 
-def _canonicalize_output_config(config: dict[str, Any], runtime_target_model_type: str) -> dict[str, Any]:
+def _canonicalize_output_config(
+    config: dict[str, Any],
+    runtime_target_model_type: str,
+) -> dict[str, Any]:
     output = dict(config)
     output["model_type"] = runtime_target_model_type
     if isinstance(output.get("text_config"), dict):
@@ -448,7 +478,9 @@ def _canonicalize_output_config(config: dict[str, Any], runtime_target_model_typ
     return output
 
 
-def _detect_tensor_profiles(tensor_infos: Iterable[Any]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+def _detect_tensor_profiles(
+    tensor_infos: Iterable[Any],
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     names = {tensor.name for tensor in tensor_infos}
     profiles: list[str] = []
     aliases: list[str] = []
@@ -472,7 +504,7 @@ def _detect_tensor_profiles(tensor_infos: Iterable[Any]) -> tuple[tuple[str, ...
     if any("conv1d.weight" in name or "conv_1d.weight" in name for name in names):
         profiles.append("conv_axis_sensitive")
         groups.add("ssm")
-    if any("lm_head.weight" == name for name in names):
+    if any(name == "lm_head.weight" for name in names):
         groups.add("lm_head")
     if any("rotary_emb.inv_freq" in name for name in names):
         profiles.append("rotary_inv_freq")

@@ -1,6 +1,6 @@
-"""LFM2-VL SigLIP2-style vision encoder.
+"""LFM2 SigLIP2-style vision encoder.
 
-Ported from mlx-vlm's lfm2_vl/vision.py. Standard ViT with:
+Ported from mlx-vlm's LFM2 vision implementation. Standard ViT with:
 - Linear patch embedding (not Conv2d)
 - Learnable position embeddings with bicubic interpolation
 - GELU activation MLP
@@ -19,9 +19,9 @@ from mlxs.models.vision.interpolate import bicubic_interpolate
 
 @dataclass
 class LFM2VisionConfig:
-    """LFM2-VL vision encoder configuration."""
+    """LFM2 vision encoder configuration."""
 
-    model_type: str = "lfm2_vl"
+    model_type: str = "lfm2"
     hidden_size: int = 768
     intermediate_size: int = 3072
     num_hidden_layers: int = 12
@@ -162,7 +162,7 @@ class LFM2VisionModel(nn.Module):
         for layer in self.layers:
             x = layer(x)
             if output_hidden_states:
-                encoder_states = encoder_states + (x,)
+                encoder_states = (*encoder_states, x)
 
         last_hidden = self.post_layernorm(x)
         return encoder_states, x, last_hidden

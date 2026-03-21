@@ -1,18 +1,24 @@
-"""Qwen3.5 MoE model: hybrid linear + attention layers with sparse MoE."""
+"""Qwen3.5 MoE family model: text-only or multimodal via config + model_mode."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 import mlx.nn as nn
 
+from mlxs._types import ModelMode
 from mlxs.cache.arrays import ArraysCache
 from mlxs.cache.attention_mask import create_attention_mask, create_ssm_mask
 from mlxs.cache.kv import KVCache
 from mlxs.layers.moe import SwitchGLU
-from mlxs.models.base import BaseModelArgs
+from mlxs.models.multimodal_shared import (
+    MediaBranch,
+    MultimodalArgsMixin,
+    build_dual_mode_components,
+    prepare_multimodal_inputs,
+)
 from mlxs.models.qwen3_5 import (
     MLP,
     Attention,
@@ -24,6 +30,16 @@ from mlxs.models.qwen3_5 import (
 from mlxs.models.qwen3_5 import (
     ModelArgs as Qwen35ModelArgs,
 )
+from mlxs.models.vision.siglip_builder import build_siglip_vision_tower
+
+_VISION_PREFIXES = (
+    "visual.",
+    "vision_tower.",
+    "vision_model.",
+    "multi_modal_projector.",
+    "mm_projector.",
+)
+_VISION_EXACT = ("visual", "vision_tower", "vision_model")
 
 
 @dataclass
@@ -65,7 +81,7 @@ class SparseMoeBlock(nn.Module):
         self.shared_expert_gate = nn.Linear(dim, 1, bias=False)
 
     def __call__(self, x: mx.array) -> mx.array:
-        gates = mx.softmax(self.gate(x), axis=-1, precise=True)
+        gates = mx.softmax(self.gate(x), axis=-1)
         inds = mx.argpartition(gates, kth=-self.top_k, axis=-1)[..., -self.top_k :]
         scores = mx.take_along_axis(gates, inds, axis=-1)
         if self.norm_topk_prob:
@@ -139,41 +155,81 @@ class TextModel(nn.Module):
             cache = [None] * len(self.layers)  # type: ignore[list-item]
 
         fa_mask = create_attention_mask(hidden, cache[self._fa_idx])
-        ssm_mask = create_ssm_mask(hidden, cache[self._ssm_idx])
+        ssm_mask = cast(mx.array | None, create_ssm_mask(hidden, cache[self._ssm_idx]))
         for layer, layer_cache in zip(self.layers, cache, strict=True):
-            mask = ssm_mask if layer.is_linear else fa_mask
-            hidden = layer(hidden, mask=mask, cache=layer_cache)
+            if layer.is_linear:
+                hidden = layer(
+                    hidden,
+                    mask=ssm_mask,
+                    cache=cast(ArraysCache | None, layer_cache),
+                )
+            else:
+                hidden = layer(
+                    hidden,
+                    mask=fa_mask,
+                    cache=cast(KVCache | None, layer_cache),
+                )
         return self.norm(hidden)
 
 
 @dataclass
-class ModelArgs(BaseModelArgs):
-    """Top-level Qwen3.5-MoE config: ``model_type`` + ``text_config``."""
+class ModelArgs(MultimodalArgsMixin[dict[str, Any]]):
+    """Top-level Qwen3.5-MoE config with optional multimodal envelope."""
 
     model_type: str = "qwen3_5_moe"
     text_config: dict[str, Any] = field(default_factory=dict)
+    image_token_id: int | None = 248056
+    video_token_id: int | None = 248057
 
     @classmethod
     def from_dict(cls, params: dict[str, Any]) -> ModelArgs:
-        if "text_config" not in params:
-            return cls(
-                model_type=params.get("model_type", "qwen3_5_moe"),
-                text_config=params,
-            )
-        return cls(**{k: v for k, v in params.items() if k in ("model_type", "text_config")})
+        return cls.from_flat_or_nested(
+            params,
+            default_model_type=params.get("model_type", "qwen3_5_moe"),
+            vision_config_keys=("vision_config", "visual_config"),
+        )
+
+    def resolved_text_args(self) -> TextModelArgs:
+        if self.text_config:
+            return cast(TextModelArgs, TextModelArgs.from_dict(self.text_config))
+        return cast(TextModelArgs, TextModelArgs.from_dict({"model_type": self.model_type}))
+
+
+def _build_language_model(args: TextModelArgs) -> Qwen35LanguageModel:
+    language_model = Qwen35LanguageModel(args)
+    language_model.model = TextModel(args)
+    language_model.args = args
+    return language_model
 
 
 class Model(nn.Module):
-    """Qwen3.5-MoE wrapper that reuses the dense language-model head/cache logic."""
+    """Qwen3.5-MoE wrapper with optional SigLIP image/video support."""
 
-    def __init__(self, args: ModelArgs) -> None:
+    def __init__(
+        self,
+        args: ModelArgs,
+        *,
+        model_mode: ModelMode = ModelMode.TEXT,
+    ) -> None:
         super().__init__()
-        self.args = args
+        self.config = args
         self.model_type = args.model_type
-        text_args = TextModelArgs.from_dict(args.text_config)
-        self.language_model = Qwen35LanguageModel(text_args)
-        self.language_model.model = TextModel(text_args)
-        self.language_model.args = text_args
+        self._image_token_id = args.image_token_id
+        self._video_token_id = args.video_token_id
+
+        text_args = args.resolved_text_args()
+        self.args = text_args
+
+        components = build_dual_mode_components(
+            model_mode=model_mode,
+            language_builder=lambda: _build_language_model(text_args),
+            vision_config=args.vision_config,
+            vision_builder=build_siglip_vision_tower,
+        )
+        self._mode = components.model_mode
+        self.language_model = components.language_model
+        if components.vision_tower is not None:
+            self.vision_tower = components.vision_tower
 
     def __call__(
         self,
@@ -187,6 +243,54 @@ class Model(nn.Module):
             cache=cache,
             input_embeddings=input_embeddings,
         )
+
+    def prepare_inputs(
+        self,
+        input_ids: mx.array,
+        *,
+        pixel_values: mx.array | None = None,
+        image_grid_thw: mx.array | None = None,
+        video_pixel_values: mx.array | None = None,
+        **kwargs: Any,
+    ) -> tuple[mx.array, mx.array | None]:
+        if not self.supports_vision or (pixel_values is None and video_pixel_values is None):
+            return input_ids, None
+
+        image_branch = None
+        if pixel_values is not None and self._image_token_id is not None:
+            image_branch = MediaBranch(
+                values=pixel_values,
+                placeholder_token_id=self._image_token_id,
+                encode=self._encode_media,
+                encoder_kwargs={"grid_thw": image_grid_thw},
+            )
+
+        video_branch = None
+        if video_pixel_values is not None and self._video_token_id is not None:
+            video_branch = MediaBranch(
+                values=video_pixel_values,
+                placeholder_token_id=self._video_token_id,
+                encode=self._encode_media,
+                encoder_kwargs={"grid_thw": kwargs.get("video_grid_thw", image_grid_thw)},
+            )
+
+        return prepare_multimodal_inputs(
+            input_ids,
+            embed_tokens=self.language_model.model.embed_tokens,
+            image_branch=image_branch,
+            video_branch=video_branch,
+        )
+
+    def _encode_media(
+        self,
+        pixel_values: mx.array,
+        *,
+        grid_thw: mx.array | None = None,
+    ) -> mx.array:
+        dtype = self.vision_tower.patch_embed.proj.weight.dtype
+        media = pixel_values.astype(dtype)
+        grid = grid_thw if grid_thw is not None else mx.array([[1, 1, 1]])
+        return self.vision_tower(media, grid)
 
     @property
     def num_layers(self) -> int:
@@ -204,23 +308,46 @@ class Model(nn.Module):
         return self.language_model.layers
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        sanitized = _normalize_language_model_weights(weights)
-        for layer_idx in range(self.language_model.args.num_hidden_layers):
-            prefix = f"language_model.model.layers.{layer_idx}.mlp"
-            gate_up_key = f"{prefix}.experts.gate_up_proj"
-            if gate_up_key not in sanitized:
+        if self._mode == ModelMode.TEXT:
+            filtered = {
+                key: value
+                for key, value in weights.items()
+                if key not in _VISION_EXACT
+                and not any(key.startswith(prefix) for prefix in _VISION_PREFIXES)
+            }
+            return _sanitize_language_weights(self.language_model, filtered)
+
+        language_weights: dict[str, Any] = {}
+        vision_weights: dict[str, Any] = {}
+        for key, value in weights.items():
+            if key.startswith(("multi_modal_projector.", "mm_projector.")):
                 continue
+            if key.startswith("visual."):
+                key = f"vision_tower.{key[len('visual.') :]}"
+            elif key.startswith("vision_model."):
+                key = f"vision_tower.{key[len('vision_model.') :]}"
 
-            gate_up = sanitized.pop(gate_up_key)
-            mid = gate_up.shape[-2] // 2
-            sanitized[f"{prefix}.switch_mlp.gate_proj.weight"] = gate_up[..., :mid, :]
-            sanitized[f"{prefix}.switch_mlp.up_proj.weight"] = gate_up[..., mid:, :]
+            if key.startswith("vision_tower."):
+                vision_weights[key] = value
+            else:
+                language_weights[key] = value
 
-            down_key = f"{prefix}.experts.down_proj"
-            if down_key in sanitized:
-                sanitized[f"{prefix}.switch_mlp.down_proj.weight"] = sanitized.pop(down_key)
+        sanitized_language = _sanitize_language_weights(self.language_model, language_weights)
+        if hasattr(self, "vision_tower"):
+            vision_weights = self.vision_tower.sanitize(vision_weights)
+        return sanitized_language | vision_weights
 
-        return _text_model_sanitize(self.language_model, sanitized)
+    @property
+    def supports_vision(self) -> bool:
+        return self._mode != ModelMode.TEXT and hasattr(self, "vision_tower")
+
+    @property
+    def supports_audio(self) -> bool:
+        return False
+
+    @property
+    def image_token_id(self) -> int | None:
+        return self._image_token_id if self.supports_vision else None
 
 
 def _normalize_language_model_weights(weights: dict[str, Any]) -> dict[str, Any]:
@@ -234,6 +361,29 @@ def _normalize_language_model_weights(weights: dict[str, Any]) -> dict[str, Any]
             key = "language_model." + key
         normalized[key] = value
     return normalized
+
+
+def _sanitize_language_weights(
+    language_model: Qwen35LanguageModel,
+    weights: dict[str, Any],
+) -> dict[str, Any]:
+    sanitized = _normalize_language_model_weights(weights)
+    for layer_idx in range(language_model.args.num_hidden_layers):
+        prefix = f"language_model.model.layers.{layer_idx}.mlp"
+        gate_up_key = f"{prefix}.experts.gate_up_proj"
+        if gate_up_key not in sanitized:
+            continue
+
+        gate_up = sanitized.pop(gate_up_key)
+        mid = gate_up.shape[-2] // 2
+        sanitized[f"{prefix}.switch_mlp.gate_proj.weight"] = gate_up[..., :mid, :]
+        sanitized[f"{prefix}.switch_mlp.up_proj.weight"] = gate_up[..., mid:, :]
+
+        down_key = f"{prefix}.experts.down_proj"
+        if down_key in sanitized:
+            sanitized[f"{prefix}.switch_mlp.down_proj.weight"] = sanitized.pop(down_key)
+
+    return _text_model_sanitize(language_model, sanitized)
 
 
 def _text_model_sanitize(
