@@ -8,13 +8,60 @@ In MULTIMODAL mode: loads Pixtral ViT encoder + MLP projector and supports
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
 import mlx.nn as nn
 
 from mlxs._types import ModelMode
 from mlxs.models.base import BaseModelArgs
+from mlxs.models.multimodal_shared import (
+    MediaBranch,
+    build_dual_mode_components,
+    prepare_multimodal_inputs,
+)
+
+if TYPE_CHECKING:
+    from mlxs.models.vision.pixtral_encoder import PixtralVisionModel
+    from mlxs.models.vision.projectors import MLPProjector
+
+
+def _build_language_model(text_config: dict[str, Any]) -> nn.Module:
+    inner_type = text_config.get("model_type", "ministral3")
+    if inner_type == "ministral3":
+        from mlxs.models import ministral3
+
+        inner_args = ministral3.ModelArgs.from_dict(text_config)
+        return ministral3.Model(inner_args)
+
+    from mlxs.models import llama
+
+    inner_args = llama.ModelArgs.from_dict(text_config)
+    return llama.Model(inner_args)
+
+
+def _build_vision_components(
+    raw_config: dict[str, Any],
+    *,
+    text_hidden: int,
+) -> tuple[PixtralVisionModel, MLPProjector]:
+    from mlxs.models.vision.pixtral_encoder import PixtralVisionConfig, PixtralVisionModel
+    from mlxs.models.vision.projectors import MLPProjector
+
+    config = PixtralVisionConfig(
+        **{
+            key: value
+            for key, value in raw_config.items()
+            if key in PixtralVisionConfig.__dataclass_fields__
+        }
+    )
+    vision_tower = PixtralVisionModel(config)
+    projector = MLPProjector(
+        in_dim=config.hidden_size,
+        hidden_dim=text_hidden,
+        out_dim=text_hidden,
+    )
+    return vision_tower, projector
 
 
 @dataclass
@@ -46,35 +93,20 @@ class Model(nn.Module):
         super().__init__()
         self.args = args
         self.model_type = args.model_type
-        self._mode = model_mode
         text_config = args.text_config or {}
-        inner_type = text_config.get("model_type", "ministral3")
-        if inner_type == "ministral3":
-            from mlxs.models import ministral3
-            inner_args = ministral3.ModelArgs.from_dict(text_config)
-            self.language_model = ministral3.Model(inner_args)
-        else:
-            from mlxs.models import llama
-            inner_args = llama.ModelArgs.from_dict(text_config)
-            self.language_model = llama.Model(inner_args)
-
-        if model_mode != ModelMode.TEXT and args.vision_config:
-            from mlxs.models.vision.pixtral_encoder import PixtralVisionConfig, PixtralVisionModel
-            from mlxs.models.vision.projectors import MLPProjector
-
-            vc_dict = args.vision_config
-            vc = PixtralVisionConfig(
-                **{k: v for k, v in vc_dict.items()
-                   if k in PixtralVisionConfig.__dataclass_fields__}
-            )
-            self.vision_tower = PixtralVisionModel(vc)
-
-            text_hidden = text_config.get("hidden_size", 5120)
-            self.multi_modal_projector = MLPProjector(
-                in_dim=vc.hidden_size,
-                hidden_dim=text_hidden,
-                out_dim=text_hidden,
-            )
+        components = build_dual_mode_components(
+            model_mode=model_mode,
+            language_builder=lambda: _build_language_model(text_config),
+            vision_config=args.vision_config,
+            vision_builder=lambda raw_config: _build_vision_components(
+                raw_config,
+                text_hidden=text_config.get("hidden_size", 5120),
+            ),
+        )
+        self._mode = components.model_mode
+        self.language_model = components.language_model
+        if components.vision_tower is not None:
+            self.vision_tower, self.multi_modal_projector = components.vision_tower
             self._vision_feature_layer = args.vision_feature_layer
 
         self._image_token_id = args.image_token_index or 10
@@ -102,23 +134,32 @@ class Model(nn.Module):
         if pixel_values is None or self._mode == ModelMode.TEXT:
             return input_ids, None
 
-        from mlxs.models.vision import merge_embeddings
+        image_branch = MediaBranch(
+            values=pixel_values,
+            placeholder_token_id=self._image_token_id,
+            encode=self._encode_image,
+            encoder_kwargs={"image_sizes": image_sizes},
+        )
+        return prepare_multimodal_inputs(
+            input_ids,
+            embed_tokens=self.language_model.model.embed_tokens,
+            image_branch=image_branch,
+        )
 
+    def _encode_image(
+        self,
+        pixel_values: mx.array,
+        *,
+        image_sizes: list[tuple[int, int]] | mx.array | None = None,
+    ) -> mx.array:
         _, hidden_states = self.vision_tower(
-            pixel_values, image_sizes=image_sizes, output_hidden_states=True,
+            pixel_values,
+            image_sizes=image_sizes,
+            output_hidden_states=True,
         )
         image_features = hidden_states[self._vision_feature_layer]
         image_features = self.multi_modal_projector(image_features)
-
-        if image_features.ndim == 3 and image_features.shape[0] == 1:
-            image_features = image_features.squeeze(0)
-
-        text_embeds = self.language_model.model.embed_tokens(input_ids)
-
-        merged = merge_embeddings(
-            text_embeds, image_features, input_ids, self._image_token_id,
-        )
-        return input_ids, merged
+        return image_features.reshape(-1, image_features.shape[-1])
 
     @property
     def supports_vision(self) -> bool:
@@ -178,7 +219,11 @@ class Model(nn.Module):
             elif k.startswith("vision_tower."):
                 vision_weights[k] = v
             elif k.startswith("model.vision_projection."):
-                projector_weights[k.replace("model.vision_projection.", "multi_modal_projector.")] = v
+                projector_key = k.replace(
+                    "model.vision_projection.",
+                    "multi_modal_projector.",
+                )
+                projector_weights[projector_key] = v
             elif k.startswith("multi_modal_projector."):
                 projector_weights[k] = v
             elif k.startswith(prefix):

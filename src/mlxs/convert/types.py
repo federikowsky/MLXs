@@ -248,6 +248,7 @@ class TensorTargetPlan:
     transforms: tuple[TensorTransform, ...] = ()
     required: bool = True
     note: str | None = None
+    rule_id: str = "exact"
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +264,7 @@ class ConversionPlan:
     selected_rules: tuple[str, ...]
     verification_policy: tuple[str, ...]
     normalized_config: dict[str, Any]
+    target_schema_hash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +297,7 @@ class ConversionManifest:
     macro_template: str | None
     architecture_label: str | None
     runtime_target_model_type: str | None
+    runtime_model_mode: str | None
     structural_parameters: dict[str, Any]
     model_assisted_normalization_used: bool
     tensor_profile: str | None
@@ -308,8 +311,23 @@ class ConversionManifest:
     verification_status: str
     verification_checks: tuple[dict[str, Any], ...]
     warnings: tuple[str, ...]
+    capability_snapshot: dict[str, Any] = field(default_factory=dict)
+    required_target_names: tuple[str, ...] = ()
+    mapping_provenance: tuple[dict[str, Any], ...] = ()
+    skipped_source_tensors: tuple[str, ...] = ()
+    verification_policy: tuple[str, ...] = ()
+    target_schema_hash: str | None = None
+    target_schema_snapshot: tuple[dict[str, Any], ...] = ()
+    normalized_config_snapshot: dict[str, Any] = field(default_factory=dict)
+    tokenizer_artifacts: tuple[str, ...] = ()
+    multimodal_artifacts: tuple[str, ...] = ()
+    copied_artifacts: tuple[str, ...] = ()
+    weight_files: tuple[str, ...] = ()
+    weight_index_file: str | None = None
+    failure_code: str | None = None
     failure_phase: str | None = None
     failure_reason: str | None = None
+    failure_details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

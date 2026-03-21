@@ -1,8 +1,19 @@
 """Model loading module — weights, tokenizer, registry (§9, FR1, FR11, AC10)."""
 
-from mlxs.load.registry import MODEL_REGISTRY
+from mlxs.load.registry import (
+    MODEL_REGISTRY,
+    get_model_capabilities,
+    get_model_entry,
+)
 
-__all__ = ["MODEL_REGISTRY", "load_model", "load_model_and_tokenizer", "load_tokenizer"]
+__all__ = [
+    "MODEL_REGISTRY",
+    "get_model_capabilities",
+    "get_model_entry",
+    "load_model",
+    "load_model_and_tokenizer",
+    "load_tokenizer",
+]
 
 
 def __getattr__(name: str):

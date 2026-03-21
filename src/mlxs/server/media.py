@@ -123,13 +123,13 @@ def load_image(item: MediaItem) -> Any:
         from PIL import Image
 
         return Image.open(BytesIO(item.data)).convert("RGB")
-    except ImportError:
+    except ImportError as exc:
         raise InvalidPromptError(
             "Pillow is required for image processing. "
             "Install with: pip install mlxs[vision]"
-        )
+        ) from exc
     except Exception as exc:
-        raise InvalidPromptError(f"Failed to load image: {exc}")
+        raise InvalidPromptError(f"Failed to load image: {exc}") from exc
 
 
 def process_media_inputs(
@@ -189,12 +189,19 @@ def _preprocess_images(
     Returns: ``(pixel_values, extra_kwargs for prepare_inputs)``
     """
     from mlxs.models.vision.image_processing import (
+        preprocess_kimi_vl,
         preprocess_pixtral,
         preprocess_qwen_vl,
         preprocess_standard,
     )
 
-    if model_type in ("qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_vl_moe"):
+    if model_type in (
+        "qwen2",
+        "qwen3",
+        "qwen3_moe",
+        "qwen3_5",
+        "qwen3_5_moe",
+    ):
         vision_cfg = {"patch_size": 14, "temporal_patch_size": 2, "spatial_merge_size": 2}
         pv, grid = preprocess_qwen_vl(
             images, vision_cfg, max_pixels=max_pixels, min_pixels=min_pixels,
@@ -203,6 +210,13 @@ def _preprocess_images(
     elif model_type in ("pixtral", "mistral3"):
         pv, sizes = preprocess_pixtral(images, max_pixels=max_pixels)
         return pv, {"image_sizes": sizes}
+    elif model_type == "kimi_vl":
+        pv, grid = preprocess_kimi_vl(
+            images,
+            {"patch_size": 14, "image_size": 384},
+            max_pixels=max_pixels,
+        )
+        return pv, {"image_grid_thw": grid}
     else:
         pv = preprocess_standard(images)
         return pv, {}
@@ -227,7 +241,6 @@ def process_audio_inputs(
         return input_ids, None, None
 
     from mlxs.models.vision.audio_processing import load_audio, preprocess_audio_batch
-    import numpy as np
 
     waveforms = [load_audio(item.data) for item in audio_items]
     audio_mel, audio_mel_mask = preprocess_audio_batch(waveforms)
@@ -273,8 +286,8 @@ def process_video_inputs(
     if not video_items:
         return input_ids, None, None
 
-    import tempfile
     import os
+    import tempfile
 
     from mlxs.models.vision.video_processing import (
         extract_video_frames,
@@ -302,20 +315,38 @@ def process_video_inputs(
 
     model_type = getattr(model, "model_type", "")
 
-    if model_type in ("qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_vl_moe"):
+    if model_type in (
+        "qwen2",
+        "qwen3",
+        "qwen3_moe",
+        "qwen3_5",
+        "qwen3_5_moe",
+    ):
         vision_cfg = {"patch_size": 14, "temporal_patch_size": 2, "spatial_merge_size": 2}
         pixel_values, grid_thw = preprocess_video_qwen_vl(
             frames, vision_cfg, max_pixels=image_max_pixels,
         )
-        extra_kwargs: dict[str, Any] = {"image_grid_thw": grid_thw}
+        if model_type in ("qwen3_5", "qwen3_5_moe"):
+            extra_kwargs = {"video_grid_thw": grid_thw}
+        else:
+            extra_kwargs = {"image_grid_thw": grid_thw}
     else:
         pixel_values = preprocess_video_standard(frames)
         extra_kwargs = {}
 
     if hasattr(model, "prepare_inputs"):
-        input_ids_out, input_embeddings = model.prepare_inputs(
-            input_ids, pixel_values=pixel_values, **extra_kwargs,
-        )
+        if model_type in ("qwen3_5", "qwen3_5_moe"):
+            input_ids_out, input_embeddings = model.prepare_inputs(
+                input_ids,
+                video_pixel_values=pixel_values,
+                **extra_kwargs,
+            )
+        else:
+            input_ids_out, input_embeddings = model.prepare_inputs(
+                input_ids,
+                pixel_values=pixel_values,
+                **extra_kwargs,
+            )
     else:
         input_ids_out = input_ids
         input_embeddings = None

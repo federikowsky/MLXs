@@ -9,7 +9,34 @@ No changes to generate, cache, batch, or server.
 
 from __future__ import annotations
 
+import inspect
+import logging
+from dataclasses import dataclass
 from typing import Any
+
+from mlxs._types import ModelMode
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCapabilities:
+    supports_text: bool = True
+    supports_multimodal: bool = False
+    supported_model_modes: frozenset[ModelMode] = frozenset({ModelMode.TEXT})
+    supports_conversion: bool = True
+    supports_schema_export: bool = True
+    constructor_accepts_model_mode: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRegistryEntry:
+    model_type: str
+    module_path: str
+    model_class_name: str
+    model_args_class_name: str
+    capabilities: ModelCapabilities
+
 
 # Registry: model_type string → (module_path, Model class name, ModelArgs class name)
 # Lazy imports to avoid loading all model code at startup.
@@ -54,7 +81,6 @@ MODEL_REGISTRY: dict[str, tuple[str, str, str]] = {
     "jamba": ("mlxs.models.jamba", "Model", "ModelArgs"),
     "lfm2": ("mlxs.models.lfm2", "Model", "ModelArgs"),
     "lfm2_moe": ("mlxs.models.lfm2_moe", "Model", "ModelArgs"),
-    "lfm2_vl": ("mlxs.models.lfm2_vl", "Model", "ModelArgs"),
     "klear": ("mlxs.models.klear", "Model", "ModelArgs"),
     "kimi_k25": ("mlxs.models.kimi_k25", "Model", "ModelArgs"),
     "kimi_linear": ("mlxs.models.kimi_linear", "Model", "ModelArgs"),
@@ -99,15 +125,11 @@ MODEL_REGISTRY: dict[str, tuple[str, str, str]] = {
     "pixtral": ("mlxs.models.pixtral", "Model", "ModelArgs"),
     "qwen2": ("mlxs.models.qwen", "Model", "ModelArgs"),
     "qwen2_moe": ("mlxs.models.qwen2_moe", "Model", "ModelArgs"),
-    "qwen2_vl": ("mlxs.models.qwen2_vl", "Model", "ModelArgs"),
     "qwen3": ("mlxs.models.qwen3", "Model", "ModelArgs"),
     "qwen3_5": ("mlxs.models.qwen3_5", "Model", "ModelArgs"),
     "qwen3_5_moe": ("mlxs.models.qwen3_5_moe", "Model", "ModelArgs"),
-    "qwen3_5_vl": ("mlxs.models.qwen3_5_vl", "Model", "ModelArgs"),
     "qwen3_moe": ("mlxs.models.qwen3_moe", "Model", "ModelArgs"),
-    "qwen3_vl_moe": ("mlxs.models.qwen3_vl_moe", "Model", "ModelArgs"),
     "qwen3_next": ("mlxs.models.qwen3_next", "Model", "ModelArgs"),
-    "qwen3_vl": ("mlxs.models.qwen3_vl", "Model", "ModelArgs"),
     "recurrent_gemma": ("mlxs.models.recurrent_gemma", "Model", "ModelArgs"),
     "rwkv7": ("mlxs.models.rwkv7", "Model", "ModelArgs"),
     "solar_open": ("mlxs.models.solar_open", "Model", "ModelArgs"),
@@ -133,8 +155,65 @@ _MODEL_REMAPPING: dict[str, str] = {
     "mistral": "llama",
     "nemotron-nas": "nemotron_nas",
     "phi3_small": "phi3small",
-    "qwen2_5_vl": "qwen2_vl",
 }
+
+_MULTIMODAL_MODEL_TYPES = frozenset(
+    {
+        "kimi_k25",
+        "kimi_vl",
+        "lfm2",
+        "mistral3",
+        "pixtral",
+        "qwen2",
+        "qwen3",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "qwen3_moe",
+    }
+)
+
+_MODEL_CAPABILITIES: dict[str, ModelCapabilities] = {
+    model_type: (
+        ModelCapabilities(
+            supports_multimodal=True,
+            supported_model_modes=frozenset({ModelMode.TEXT, ModelMode.MULTIMODAL}),
+            constructor_accepts_model_mode=True,
+        )
+        if model_type in _MULTIMODAL_MODEL_TYPES
+        else ModelCapabilities()
+    )
+    for model_type in MODEL_REGISTRY
+}
+
+
+def _resolve_canonical_model_type(model_type: str) -> str:
+    return _MODEL_REMAPPING.get(model_type, model_type)
+
+
+def _unsupported_model_type(model_type: str) -> ValueError:
+    supported = sorted({*MODEL_REGISTRY, *_MODEL_REMAPPING})
+    return ValueError(
+        f"Unsupported model_type '{model_type}'. Supported: {', '.join(supported)}"
+    )
+
+
+def get_model_entry(model_type: str) -> ModelRegistryEntry:
+    canonical = _resolve_canonical_model_type(model_type)
+    entry = MODEL_REGISTRY.get(canonical)
+    if entry is None:
+        raise _unsupported_model_type(model_type)
+
+    return ModelRegistryEntry(
+        model_type=canonical,
+        module_path=entry[0],
+        model_class_name=entry[1],
+        model_args_class_name=entry[2],
+        capabilities=_MODEL_CAPABILITIES[canonical],
+    )
+
+
+def get_model_capabilities(model_type: str) -> ModelCapabilities:
+    return get_model_entry(model_type).capabilities
 
 
 def get_model_classes(model_type: str) -> tuple[type[Any], type[Any]]:
@@ -151,14 +230,32 @@ def get_model_classes(model_type: str) -> tuple[type[Any], type[Any]]:
     """
     import importlib
 
-    canonical = _MODEL_REMAPPING.get(model_type, model_type)
-    entry = MODEL_REGISTRY.get(canonical)
-    if entry is None:
-        supported = sorted({*MODEL_REGISTRY, *_MODEL_REMAPPING})
-        raise ValueError(
-            f"Unsupported model_type '{model_type}'. Supported: {', '.join(supported)}"
-        )
+    entry = get_model_entry(model_type)
+    module = importlib.import_module(entry.module_path)
+    return getattr(module, entry.model_class_name), getattr(module, entry.model_args_class_name)
 
-    module_path, model_cls_name, args_cls_name = entry
-    module = importlib.import_module(module_path)
-    return getattr(module, model_cls_name), getattr(module, args_cls_name)
+
+def instantiate_model(
+    model_type: str,
+    args: Any,
+    *,
+    model_mode: ModelMode = ModelMode.TEXT,
+) -> Any:
+    ModelClass, _ = get_model_classes(model_type)
+    capabilities = get_model_capabilities(model_type)
+
+    if model_mode == ModelMode.MULTIMODAL and not capabilities.supports_multimodal:
+        raise ValueError(f"{model_type} does not support multimodal model_mode")
+
+    if capabilities.constructor_accepts_model_mode:
+        return ModelClass(args, model_mode=model_mode)
+
+    signature = inspect.signature(ModelClass.__init__)
+    if "model_mode" in signature.parameters:
+        logger.warning(
+            "Falling back to constructor reflection for model_mode support on %s",
+            model_type,
+        )
+        return ModelClass(args, model_mode=model_mode)
+
+    return ModelClass(args)

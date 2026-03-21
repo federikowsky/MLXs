@@ -20,10 +20,13 @@ from mlxs.server.media import (
     extract_media_from_messages,
     load_image,
     process_media_inputs,
+    process_video_inputs,
 )
 from mlxs.server.sse import build_completion_response, token_events_to_sse
 
 logger = logging.getLogger(__name__)
+
+_VIDEO_SERVING_MODEL_TYPES = frozenset({"qwen3_5", "qwen3_5_moe"})
 
 
 async def chat_completions(request: Request) -> Response:
@@ -74,21 +77,10 @@ async def chat_completions(request: Request) -> Response:
     input_embeddings = None
     if media_items:
         try:
-            image_items = [m for m in media_items if m.media_type == "image"]
-            max_images = deps.config.model.max_images_per_request
-            if len(image_items) > max_images:
-                msg = f"Too many images: {len(image_items)} > {max_images}"
-                return JSONResponse(
-                    {"error": {"message": msg}}, status_code=400,
-                )
-            images = [load_image(item) for item in image_items]
-            prompt_tokens = deps.tokenizer.encode(prompt)
-            import mlx.core as mx
-            input_ids = mx.array(prompt_tokens)[None]  # (1, T)
-            _, input_embeddings, _ = process_media_inputs(
-                deps.model, images, input_ids,
-                image_max_pixels=deps.config.model.image_max_pixels,
-                image_min_pixels=deps.config.model.image_min_pixels,
+            input_embeddings = _build_multimodal_embeddings(
+                deps,
+                prompt,
+                media_items,
             )
         except InvalidPromptError as exc:
             return JSONResponse(
@@ -115,6 +107,78 @@ def _build_options(body: dict[str, Any]) -> GenerateOptions:
         top_logprobs=body.get("top_logprobs", 0),
     )
 
+
+def _build_multimodal_embeddings(
+    deps: Any,
+    prompt: str,
+    media_items: list[Any],
+) -> Any:
+    """Build route-level multimodal embeddings within the supported serving scope."""
+    image_items = [item for item in media_items if item.media_type == "image"]
+    audio_items = [item for item in media_items if item.media_type == "audio"]
+    video_items = [item for item in media_items if item.media_type == "video"]
+
+    if audio_items:
+        raise InvalidPromptError(
+            "Audio inputs are not supported via /v1/chat/completions "
+            "in the current production scope."
+        )
+
+    if image_items and video_items:
+        raise InvalidPromptError(
+            "Mixed image and video requests are not supported via "
+            "/v1/chat/completions in the current production scope."
+        )
+
+    prompt_tokens = deps.tokenizer.encode(prompt)
+    import mlx.core as mx
+
+    input_ids = mx.array(prompt_tokens)[None]  # (1, T)
+
+    if image_items:
+        max_images = deps.config.model.max_images_per_request
+        if len(image_items) > max_images:
+            raise InvalidPromptError(f"Too many images: {len(image_items)} > {max_images}")
+
+        images = [load_image(item) for item in image_items]
+        _, input_embeddings, _ = process_media_inputs(
+            deps.model,
+            images,
+            input_ids,
+            image_max_pixels=deps.config.model.image_max_pixels,
+            image_min_pixels=deps.config.model.image_min_pixels,
+        )
+        if input_embeddings is None:
+            raise InvalidPromptError(
+                "Image inputs are not supported for the loaded model configuration."
+            )
+        return input_embeddings
+
+    if video_items:
+        if len(video_items) > 1:
+            raise InvalidPromptError(
+                "At most one video per request is supported via /v1/chat/completions."
+            )
+
+        model_type = getattr(deps.model, "model_type", "")
+        if model_type not in _VIDEO_SERVING_MODEL_TYPES:
+            supported = ", ".join(sorted(_VIDEO_SERVING_MODEL_TYPES))
+            raise InvalidPromptError(
+                "Video inputs via /v1/chat/completions are supported only for "
+                f"{supported}; got {model_type or 'unknown'}."
+            )
+
+        _, input_embeddings, _ = process_video_inputs(
+            deps.model,
+            video_items,
+            input_ids,
+            image_max_pixels=deps.config.model.image_max_pixels,
+        )
+        if input_embeddings is None:
+            raise InvalidPromptError("Failed to derive video embeddings from the request.")
+        return input_embeddings
+
+    return None
 
 
 async def _stream_response(

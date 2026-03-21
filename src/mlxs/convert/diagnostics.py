@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from mlxs.convert.errors import ConverterError
+from mlxs.convert.runtime_schema import runtime_schema_hash
 from mlxs.convert.types import (
     CanonicalIR,
     ConversionManifest,
@@ -81,7 +82,52 @@ def build_manifest(
         }
         for check in checks
     )
-    warnings = inspection.warnings
+    if not verification_checks and error is not None and error.phase.value == "verification":
+        failed_checks = error.details.get("checks")
+        if isinstance(failed_checks, list):
+            verification_checks = tuple(
+                {
+                    "name": str(item.get("name", "verification")),
+                    "status": "failed",
+                    "detail": str(item.get("detail", "")),
+                }
+                for item in failed_checks
+                if isinstance(item, dict)
+            )
+    capability_snapshot: dict[str, Any] = {}
+    if canonical_ir is not None:
+        capability_snapshot = _capability_snapshot(
+            canonical_ir.identity.runtime_target_model_type
+        )
+
+    mapping_provenance: tuple[dict[str, Any], ...] = ()
+    target_schema_snapshot: tuple[dict[str, Any], ...] = ()
+    target_schema_hash: str | None = None
+    if plan is not None:
+        mapping_provenance = tuple(
+            {
+                "target_name": mapping.target_name,
+                "source_names": mapping.source_names,
+                "rule_id": mapping.rule_id,
+                "required": mapping.required,
+                "note": mapping.note,
+                "transforms": tuple(json_ready(transform) for transform in mapping.transforms),
+            }
+            for mapping in plan.mappings
+        )
+        target_schema_snapshot = tuple(
+            {
+                "name": entry.name,
+                "shape": tuple(entry.shape),
+                "dtype": entry.dtype,
+            }
+            for entry in plan.target_schema
+        )
+        target_schema_hash = plan.target_schema_hash or runtime_schema_hash(plan.target_schema)
+
+    tokenizer_artifacts = tuple(getattr(inspection, "tokenizer_artifacts", ()))
+    multimodal_artifacts = tuple(getattr(inspection, "multimodal_artifacts", ()))
+    warnings = tuple(getattr(inspection, "warnings", ()))
     if verification is not None:
         warnings = warnings + verification.warnings
     return ConversionManifest(
@@ -91,6 +137,7 @@ def build_manifest(
         runtime_target_model_type=(
             canonical_ir.identity.runtime_target_model_type if canonical_ir else None
         ),
+        runtime_model_mode=plan.runtime_model_mode if plan is not None else None,
         structural_parameters=structural_parameters,
         model_assisted_normalization_used=bool(
             canonical_ir
@@ -111,10 +158,46 @@ def build_manifest(
         ),
         verification_checks=verification_checks,
         warnings=warnings,
+        capability_snapshot=capability_snapshot,
+        required_target_names=plan.required_target_names if plan is not None else (),
+        mapping_provenance=mapping_provenance,
+        skipped_source_tensors=(
+            execution.skipped_source_tensors if execution is not None else ()
+        ),
+        verification_policy=plan.verification_policy if plan is not None else (),
+        target_schema_hash=target_schema_hash,
+        target_schema_snapshot=target_schema_snapshot,
+        normalized_config_snapshot=plan.normalized_config if plan is not None else {},
+        tokenizer_artifacts=tokenizer_artifacts,
+        multimodal_artifacts=multimodal_artifacts,
+        copied_artifacts=execution.copied_artifacts if execution is not None else (),
+        weight_files=execution.weight_files if execution is not None else (),
+        weight_index_file=execution.weight_index_file if execution is not None else None,
+        failure_code=error.code if error is not None else None,
         failure_phase=error.phase.value if error is not None else None,
         failure_reason=error.message if error is not None else None,
+        failure_details=error.details if error is not None else {},
     )
 
 
 def result_to_dict(result: ConversionResult) -> dict[str, Any]:
     return json_ready(result)
+
+
+def _capability_snapshot(runtime_target_model_type: str) -> dict[str, Any]:
+    from mlxs.load.registry import get_model_capabilities
+
+    try:
+        capabilities = get_model_capabilities(runtime_target_model_type)
+    except ValueError:
+        return {}
+    return {
+        "supports_text": capabilities.supports_text,
+        "supports_multimodal": capabilities.supports_multimodal,
+        "supported_model_modes": tuple(
+            mode.value for mode in sorted(capabilities.supported_model_modes, key=lambda item: item.value)
+        ),
+        "supports_conversion": capabilities.supports_conversion,
+        "supports_schema_export": capabilities.supports_schema_export,
+        "constructor_accepts_model_mode": capabilities.constructor_accepts_model_mode,
+    }

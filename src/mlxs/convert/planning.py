@@ -1,9 +1,19 @@
 from __future__ import annotations
 
-import inspect
 from typing import Any
 
-from mlxs.convert.errors import MissingRequiredTensorError, UnsupportedRuntimeTargetError
+from mlxs.convert.errors import (
+    ConverterError,
+    MissingRequiredTensorError,
+    UnsupportedRuntimeTargetError,
+)
+from mlxs.convert.runtime_schema import (
+    _flatten_parameter_tree as _runtime_flatten_parameter_tree,
+)
+from mlxs.convert.runtime_schema import (
+    export_runtime_schema,
+    runtime_schema_hash,
+)
 from mlxs.convert.types import (
     CanonicalIR,
     ConversionOptions,
@@ -16,6 +26,7 @@ from mlxs.convert.types import (
     TensorTargetPlan,
     TensorTransform,
     TensorTransformKind,
+    VerificationMode,
 )
 
 
@@ -25,7 +36,7 @@ def build_conversion_plan(
     *,
     options: ConversionOptions | None = None,
 ) -> ConversionPlan:
-    _ = options or ConversionOptions()
+    opts = options or ConversionOptions()
     if not canonical_ir.identity.supported_by_runtime:
         raise UnsupportedRuntimeTargetError(
             (
@@ -37,12 +48,22 @@ def build_conversion_plan(
         )
 
     target_schema = _collect_runtime_tensor_schema(canonical_ir)
+    _ensure_unique_names(
+        (entry.name for entry in target_schema),
+        phase=ConversionPhase.PLANNING,
+        noun="target schema tensor",
+    )
     source_tensors = {tensor.name: tensor for tensor in inspection.tensor_infos}
     context = PlanningContext(
         source_tensors=source_tensors,
         target_schema={entry.name: entry for entry in target_schema},
     )
     mappings = tuple(_build_mappings_for_schema(context, canonical_ir))
+    _ensure_unique_names(
+        (mapping.target_name for mapping in mappings),
+        phase=ConversionPhase.PLANNING,
+        noun="mapped target",
+    )
     missing = tuple(
         entry.name
         for entry in target_schema
@@ -66,67 +87,24 @@ def build_conversion_plan(
         target_schema=tuple(target_schema),
         required_target_names=tuple(entry.name for entry in target_schema),
         selected_rules=canonical_ir.evidence.selected_rules,
-        verification_policy=(
-            "schema",
-            "required_tensor_coverage",
-            "shape",
-            "config_invariants",
-            "artifacts",
-            "runtime_smoke",
-        ),
+        verification_policy=_verification_policy_for_mode(opts.verification_mode),
         normalized_config=canonical_ir.conversion.canonical_output_config,
+        target_schema_hash=runtime_schema_hash(target_schema),
     )
 
 
 def _collect_runtime_tensor_schema(canonical_ir: CanonicalIR) -> list[RuntimeTensorSchemaEntry]:
-    from mlxs.load.registry import get_model_classes
-
-    model_type = canonical_ir.identity.runtime_target_model_type
-    ModelClass, ModelArgsClass = get_model_classes(model_type)
-    args = ModelArgsClass.from_dict(canonical_ir.conversion.canonical_output_config)
-    model = _instantiate_model(ModelClass, args, canonical_ir)
-    parameter_tree = model.parameters()
-    flat = _flatten_parameter_tree(parameter_tree)
-    return [
-        RuntimeTensorSchemaEntry(
-            name=name,
-            shape=tuple(int(dim) for dim in value.shape),
-            dtype=str(getattr(value, "dtype", None)) if hasattr(value, "dtype") else None,
+    return list(
+        export_runtime_schema(
+            canonical_ir.conversion.canonical_output_config,
+            canonical_ir.identity.runtime_target_model_type,
+            model_mode=_runtime_model_mode(canonical_ir),
         )
-        for name, value in sorted(flat.items())
-    ]
-
-
-def _instantiate_model(ModelClass: type[Any], args: Any, canonical_ir: CanonicalIR) -> Any:
-    signature = inspect.signature(ModelClass.__init__)
-    if "model_mode" in signature.parameters:
-        from mlxs._types import ModelMode
-
-        mode = (
-            ModelMode.MULTIMODAL
-            if canonical_ir.topology.multimodal
-            else ModelMode.TEXT
-        )
-        return ModelClass(args, model_mode=mode)
-    return ModelClass(args)
+    )
 
 
 def _flatten_parameter_tree(tree: Any, prefix: str = "") -> dict[str, Any]:
-    if hasattr(tree, "shape"):
-        return {prefix: tree}
-    if isinstance(tree, dict):
-        flat: dict[str, Any] = {}
-        for key, value in tree.items():
-            child_prefix = f"{prefix}.{key}" if prefix else str(key)
-            flat.update(_flatten_parameter_tree(value, child_prefix))
-        return flat
-    if isinstance(tree, (list, tuple)):
-        flat = {}
-        for index, value in enumerate(tree):
-            child_prefix = f"{prefix}.{index}" if prefix else str(index)
-            flat.update(_flatten_parameter_tree(value, child_prefix))
-        return flat
-    return {}
+    return _runtime_flatten_parameter_tree(tree, prefix)
 
 
 def _build_mappings_for_schema(
@@ -167,6 +145,8 @@ def _mapping_for_target(
             target_name=target_name,
             source_names=(candidate,),
             transforms=tuple(transforms),
+            rule_id="exact" if candidate == target_name else "generic_alias",
+            note=None if candidate == target_name else f"Matched via alias candidate {candidate}",
         )
 
     specialized = (
@@ -185,38 +165,43 @@ def _mapping_for_target(
 
 
 def _alias_candidates(target_name: str) -> tuple[str, ...]:
-    candidates = {target_name}
+    candidates: list[str] = []
+
+    def add(candidate: str) -> None:
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    add(target_name)
     if target_name.startswith("language_model."):
-        candidates.add(target_name[len("language_model."):])
+        add(target_name[len("language_model."):])
     else:
-        candidates.add(f"language_model.{target_name}")
+        add(f"language_model.{target_name}")
     if target_name.startswith("language_model.model."):
-        candidates.add(target_name[len("language_model."):])
-        candidates.add(target_name.replace("language_model.model.", "model.", 1))
+        add(target_name[len("language_model."):])
+        add(target_name.replace("language_model.model.", "model.", 1))
     if target_name.startswith("model."):
-        candidates.add(target_name[len("model."):])
+        add(target_name[len("model."):])
     if "vision_tower." in target_name:
-        candidates.add(target_name.replace("vision_tower.", "visual.", 1))
-        candidates.add(target_name.replace("vision_tower.", "model.visual.", 1))
-        candidates.add(target_name.replace("vision_tower.", "model.vision_encoder.", 1))
-        candidates.add(target_name.replace("vision_tower.", "vision_tower.vision_model.", 1))
+        add(target_name.replace("vision_tower.", "visual.", 1))
+        add(target_name.replace("vision_tower.", "model.visual.", 1))
+        add(target_name.replace("vision_tower.", "model.vision_encoder.", 1))
+        add(target_name.replace("vision_tower.", "vision_tower.vision_model.", 1))
     if "multi_modal_projector." in target_name:
-        candidates.add(target_name.replace("multi_modal_projector.", "model.vision_projection.", 1))
+        add(target_name.replace("multi_modal_projector.", "model.vision_projection.", 1))
     if target_name.startswith("language_model.model."):
-        candidates.add(target_name.replace("language_model.model.", "model.language_model.", 1))
-    expanded = set(candidates)
+        add(target_name.replace("language_model.model.", "model.language_model.", 1))
     for candidate in list(candidates):
         if ".mlp.fc1." in candidate:
-            expanded.add(candidate.replace(".mlp.fc1.", ".mlp.linear_fc1.", 1))
+            add(candidate.replace(".mlp.fc1.", ".mlp.linear_fc1.", 1))
         if ".mlp.fc2." in candidate:
-            expanded.add(candidate.replace(".mlp.fc2.", ".mlp.linear_fc2.", 1))
+            add(candidate.replace(".mlp.fc2.", ".mlp.linear_fc2.", 1))
         if ".merger.ln_q." in candidate:
-            expanded.add(candidate.replace(".merger.ln_q.", ".merger.norm.", 1))
+            add(candidate.replace(".merger.ln_q.", ".merger.norm.", 1))
         if ".merger.mlp.0." in candidate:
-            expanded.add(candidate.replace(".merger.mlp.0.", ".merger.linear_fc1.", 1))
+            add(candidate.replace(".merger.mlp.0.", ".merger.linear_fc1.", 1))
         if ".merger.mlp.2." in candidate:
-            expanded.add(candidate.replace(".merger.mlp.2.", ".merger.linear_fc2.", 1))
-    return tuple(candidate for candidate in expanded if candidate)
+            add(candidate.replace(".merger.mlp.2.", ".merger.linear_fc2.", 1))
+    return tuple(candidates)
 
 
 def _shape_adjustments(
@@ -342,6 +327,7 @@ def _stack_triplet_experts(
                 note="Stack per-expert triplets into runtime switch_mlp tensor",
             ),
         ),
+        rule_id="stack_triplet_experts",
     )
 
 
@@ -383,6 +369,7 @@ def _stack_named_experts(
                 note="Stack per-expert tensors into runtime switch_mlp tensor",
             ),
         ),
+        rule_id="stack_named_experts",
     )
 
 
@@ -409,6 +396,7 @@ def _split_switch_mlp_input_linear(
                     ),
                 ),
                 note="switch_mlp_input_linear_split",
+                rule_id="switch_mlp_input_linear_split",
             )
     if ".switch_mlp.up_proj.weight" in target_name:
         source_name = target_name.replace(
@@ -429,6 +417,7 @@ def _split_switch_mlp_input_linear(
                     ),
                 ),
                 note="switch_mlp_input_linear_split",
+                rule_id="switch_mlp_input_linear_split",
             )
     if ".switch_mlp.down_proj.weight" in target_name:
         source_name = target_name.replace(
@@ -436,7 +425,11 @@ def _split_switch_mlp_input_linear(
             ".output_linear.weight",
         )
         if source_name in context.source_tensors:
-            return TensorTargetPlan(target_name=target_name, source_names=(source_name,))
+            return TensorTargetPlan(
+                target_name=target_name,
+                source_names=(source_name,),
+                rule_id="switch_mlp_output_linear_alias",
+            )
     return None
 
 
@@ -480,6 +473,7 @@ def _split_gate_up_proj(target_name: str, context: PlanningContext) -> TensorTar
                 ),
             ),
             note="gate_up_split",
+            rule_id="gate_up_split",
         )
     if target_name.endswith(".switch_mlp.down_proj.weight"):
         source_name = _resolve_source_name(
@@ -493,6 +487,7 @@ def _split_gate_up_proj(target_name: str, context: PlanningContext) -> TensorTar
             target_name=target_name,
             source_names=(source_name,),
             note="expert_down_proj_alias",
+            rule_id="expert_down_proj_alias",
         )
     return None
 
@@ -514,6 +509,7 @@ def _split_shared_mlp(target_name: str, context: PlanningContext) -> TensorTarge
                     ),
                 ),
                 note="shared_mlp_split",
+                rule_id="shared_mlp_split",
             )
     if ".mlp.up_proj.weight" in target_name:
         source_name = target_name.replace(".mlp.up_proj.weight", ".shared_mlp.input_linear.weight")
@@ -531,11 +527,16 @@ def _split_shared_mlp(target_name: str, context: PlanningContext) -> TensorTarge
                     ),
                 ),
                 note="shared_mlp_split",
+                rule_id="shared_mlp_split",
             )
     if ".mlp.down_proj.weight" in target_name:
         source_name = target_name.replace(".mlp.down_proj.weight", ".shared_mlp.output_linear.weight")
         if source_name in context.source_tensors:
-            return TensorTargetPlan(target_name=target_name, source_names=(source_name,))
+            return TensorTargetPlan(
+                target_name=target_name,
+                source_names=(source_name,),
+                rule_id="shared_mlp_output_linear_alias",
+            )
     return None
 
 
@@ -564,6 +565,7 @@ def _split_feed_forward_experts(target_name: str, context: PlanningContext) -> T
                         note="Align feed_forward expert gate weight axes",
                     ),
                 ),
+                rule_id="feed_forward_expert_gate_up_split",
             )
     if ".feed_forward.experts.up_proj.weight" in target_name:
         source_name = target_name.replace(
@@ -589,6 +591,7 @@ def _split_feed_forward_experts(target_name: str, context: PlanningContext) -> T
                         note="Align feed_forward expert up weight axes",
                     ),
                 ),
+                rule_id="feed_forward_expert_gate_up_split",
             )
     if ".feed_forward.experts.down_proj.weight" in target_name:
         source_name = target_name.replace(
@@ -607,6 +610,7 @@ def _split_feed_forward_experts(target_name: str, context: PlanningContext) -> T
                         note="Align feed_forward expert down weight axes",
                     ),
                 ),
+                rule_id="feed_forward_expert_down_align",
             )
     return None
 
@@ -686,3 +690,36 @@ def _runtime_model_mode(canonical_ir: CanonicalIR) -> str:
     if canonical_ir.topology.multimodal:
         return "multimodal"
     return "text"
+
+
+def _verification_policy_for_mode(mode: VerificationMode) -> tuple[str, ...]:
+    if mode == VerificationMode.SKIP:
+        return ()
+    base = (
+        "schema",
+        "weight_index",
+        "config_invariants",
+        "required_tensor_coverage",
+        "shape",
+        "schema_hash",
+        "artifacts",
+    )
+    if mode == VerificationMode.REQUIRED:
+        return base + ("runtime_smoke",)
+    return base
+
+
+def _ensure_unique_names(
+    names: Any,
+    *,
+    phase: ConversionPhase,
+    noun: str,
+) -> None:
+    ordered = [str(name) for name in names]
+    duplicates = sorted({name for name in ordered if ordered.count(name) > 1})
+    if duplicates:
+        raise ConverterError(
+            f"Duplicate {noun} names are not allowed: {', '.join(duplicates[:10])}",
+            phase=phase,
+            details={"duplicates": tuple(duplicates), "noun": noun},
+        )
