@@ -25,10 +25,25 @@ class Modality(StrEnum):
     MULTIMODAL = "multimodal"
 
 
+class TopologyKind(StrEnum):
+    DECODER = "decoder"
+    ENCODER_DECODER = "encoder_decoder"
+
+
+class ExpertLayoutKind(StrEnum):
+    DENSE = "dense"
+    MOE = "moe"
+
+
 class DensityKind(StrEnum):
     DENSE = "dense"
     MOE = "moe"
     HYBRID = "hybrid"
+
+
+class SequenceFamilyKind(StrEnum):
+    ATTENTION = "attention"
+    SSM_HYBRID = "ssm_hybrid"
 
 
 class ConversionPhase(StrEnum):
@@ -131,6 +146,14 @@ class IRIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class ArchitectureTraits:
+    modality: Modality
+    topology_kind: TopologyKind
+    expert_layout: ExpertLayoutKind
+    sequence_family: SequenceFamilyKind
+
+
+@dataclass(frozen=True, slots=True)
 class IRTopology:
     backbone_type: str
     decoder_only: bool
@@ -210,6 +233,7 @@ class IRAmbiguities:
 class CanonicalIR:
     source: IRSource
     identity: IRIdentity
+    traits: ArchitectureTraits
     topology: IRTopology
     config: IRConfig
     tensor_layout: IRTensorLayout
@@ -313,6 +337,7 @@ class ConversionManifest:
     verification_status: str
     verification_checks: tuple[dict[str, Any], ...]
     warnings: tuple[str, ...]
+    architecture_traits: dict[str, Any] = field(default_factory=dict)
     capability_snapshot: dict[str, Any] = field(default_factory=dict)
     required_target_names: tuple[str, ...] = ()
     mapping_provenance: tuple[dict[str, Any], ...] = ()

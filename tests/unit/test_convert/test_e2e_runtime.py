@@ -1107,6 +1107,12 @@ def test_convert_source_e2e_runtime(case: RuntimeCase, tmp_path: Path) -> None:
     assert manifest["runtime_target_model_type"] == case.runtime_target
     assert manifest["runtime_model_mode"] == result.plan.runtime_model_mode
     assert manifest["target_schema_hash"] == result.plan.target_schema_hash
+    assert manifest["architecture_traits"] == {
+        "modality": result.canonical_ir.traits.modality.value,
+        "topology_kind": result.canonical_ir.traits.topology_kind.value,
+        "expert_layout": result.canonical_ir.traits.expert_layout.value,
+        "sequence_family": result.canonical_ir.traits.sequence_family.value,
+    }
     assert len(manifest["mapping_provenance"]) == len(result.plan.mappings)
     assert len(manifest["required_target_names"]) == len(result.plan.required_target_names)
     assert all(

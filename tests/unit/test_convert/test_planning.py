@@ -8,9 +8,11 @@ import pytest
 from mlxs.convert.errors import MissingRequiredTensorError, UnsupportedRuntimeTargetError
 from mlxs.convert.planning import _alias_candidates, build_conversion_plan
 from mlxs.convert.types import (
+    ArchitectureTraits,
     CanonicalIR,
     ConversionOptions,
     DensityKind,
+    ExpertLayoutKind,
     InspectionReport,
     IRAmbiguities,
     IRConfig,
@@ -24,8 +26,10 @@ from mlxs.convert.types import (
     MacroTemplate,
     Modality,
     RuntimeTensorSchemaEntry,
+    SequenceFamilyKind,
     SourceKind,
     TensorInfo,
+    TopologyKind,
 )
 
 
@@ -70,6 +74,12 @@ def _canonical_ir(*, supported: bool = True) -> CanonicalIR:
             variant_label=None,
             runtime_target_model_type="mixtral",
             supported_by_runtime=supported,
+        ),
+        traits=ArchitectureTraits(
+            modality=Modality.TEXT,
+            topology_kind=TopologyKind.DECODER,
+            expert_layout=ExpertLayoutKind.MOE,
+            sequence_family=SequenceFamilyKind.ATTENTION,
         ),
         topology=IRTopology(
             backbone_type="decoder",
@@ -155,6 +165,13 @@ def _family_ir(
             architecture_label=runtime_target_model_type,
             runtime_target_model_type=runtime_target_model_type,
             supported_by_runtime=True,
+        ),
+        traits=replace(
+            base.traits,
+            modality=Modality.MULTIMODAL if multimodal else Modality.TEXT,
+            topology_kind=TopologyKind.DECODER,
+            expert_layout=ExpertLayoutKind.DENSE,
+            sequence_family=SequenceFamilyKind.ATTENTION,
         ),
         topology=replace(
             base.topology,
@@ -463,6 +480,12 @@ def test_build_conversion_plan_normalizes_patch_conv_layout(
             variant_label=None,
             runtime_target_model_type="pixtral",
             supported_by_runtime=True,
+        ),
+        traits=ArchitectureTraits(
+            modality=Modality.MULTIMODAL,
+            topology_kind=TopologyKind.DECODER,
+            expert_layout=ExpertLayoutKind.DENSE,
+            sequence_family=SequenceFamilyKind.ATTENTION,
         ),
         topology=IRTopology(
             backbone_type="multimodal_decoder",

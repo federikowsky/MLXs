@@ -224,6 +224,12 @@ def test_verify_existing_output_accepts_adapter_mapping_provenance(tmp_path: Pat
     )
     manifest = {
         "runtime_model_mode": "text",
+        "architecture_traits": {
+            "modality": "text",
+            "topology_kind": "decoder",
+            "expert_layout": "dense",
+            "sequence_family": "attention",
+        },
         "required_target_names": [entry.name for entry in snapshot],
         "target_schema_hash": runtime_schema_hash(snapshot),
         "target_schema_snapshot": [
@@ -278,6 +284,12 @@ def test_verify_existing_output_accepts_qwen35_moe_mapping_provenance(tmp_path: 
     )
     manifest = {
         "runtime_model_mode": "text",
+        "architecture_traits": {
+            "modality": "text",
+            "topology_kind": "decoder",
+            "expert_layout": "moe",
+            "sequence_family": "ssm_hybrid",
+        },
         "required_target_names": [entry.name for entry in snapshot],
         "target_schema_hash": runtime_schema_hash(snapshot),
         "target_schema_snapshot": [

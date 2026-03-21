@@ -94,10 +94,12 @@ def build_manifest(
                 if isinstance(item, dict)
             )
     capability_snapshot: dict[str, Any] = {}
+    architecture_traits: dict[str, Any] = {}
     if canonical_ir is not None:
         capability_snapshot = _capability_snapshot(
             canonical_ir.identity.runtime_target_model_type
         )
+        architecture_traits = json_ready(canonical_ir.traits)
 
     mapping_provenance: tuple[dict[str, Any], ...] = ()
     target_schema_snapshot: tuple[dict[str, Any], ...] = ()
@@ -159,6 +161,7 @@ def build_manifest(
         ),
         verification_checks=verification_checks,
         warnings=warnings,
+        architecture_traits=architecture_traits,
         capability_snapshot=capability_snapshot,
         required_target_names=plan.required_target_names if plan is not None else (),
         mapping_provenance=mapping_provenance,
