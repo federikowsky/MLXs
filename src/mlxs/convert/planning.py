@@ -28,7 +28,12 @@ from mlxs.convert.types import (
     TensorTransformKind,
     VerificationMode,
 )
-from mlxs.family_adapters import AdapterAliasMatch, get_family_adapter
+from mlxs.family_adapters import (
+    AdapterAliasMatch,
+    AdapterMappingMatch,
+    AdapterTransformSpec,
+    get_family_adapter,
+)
 
 
 def build_conversion_plan(
@@ -189,6 +194,17 @@ def _mapping_from_family_adapter(
     if adapter is None:
         return None
     model_mode = _planner_model_mode(canonical_ir)
+    for match in adapter.mapping_matches(target_name, model_mode=model_mode):
+        mapping = _mapping_from_adapter_mapping_match(
+            target_name,
+            target_shape,
+            context,
+            canonical_ir,
+            match,
+            adapter_name=adapter.adapter_name,
+        )
+        if mapping is not None:
+            return mapping
     for match in adapter.alias_matches(target_name, model_mode=model_mode):
         mapping = _mapping_from_adapter_alias_match(
             target_name,
@@ -247,6 +263,29 @@ def _mapping_from_adapter_alias_match(
     )
 
 
+def _mapping_from_adapter_mapping_match(
+    target_name: str,
+    target_shape: tuple[int, ...],
+    context: PlanningContext,
+    canonical_ir: CanonicalIR,
+    match: AdapterMappingMatch,
+    *,
+    adapter_name: str,
+) -> TensorTargetPlan | None:
+    return _mapping_from_source_names(
+        target_name,
+        target_shape,
+        source_names=match.source_names,
+        context=context,
+        canonical_ir=canonical_ir,
+        rule_id=match.rule_id,
+        match_layer="family_adapter",
+        adapter_name=adapter_name,
+        note=match.note,
+        transforms=tuple(_adapter_transform(spec) for spec in match.transforms),
+    )
+
+
 def _mapping_from_source_names(
     target_name: str,
     target_shape: tuple[int, ...],
@@ -258,6 +297,7 @@ def _mapping_from_source_names(
     match_layer: str,
     adapter_name: str | None = None,
     note: str | None = None,
+    transforms: tuple[TensorTransform, ...] = (),
 ) -> TensorTargetPlan | None:
     if len(source_names) != 1:
         if not all(name in context.source_tensors for name in source_names):
@@ -271,13 +311,15 @@ def _mapping_from_source_names(
             match_layer=match_layer,
             adapter_name=adapter_name,
             note=note,
+            transforms=transforms,
         )
 
     candidate = source_names[0]
     tensor = context.source_tensors.get(candidate)
     if tensor is None:
         return None
-    transforms = list(
+    adjusted_transforms = list(transforms)
+    adjusted_transforms.extend(
         _shape_adjustments(
             candidate,
             tensor.shape,
@@ -291,11 +333,27 @@ def _mapping_from_source_names(
     return TensorTargetPlan(
         target_name=target_name,
         source_names=(candidate,),
-        transforms=tuple(transforms),
+        transforms=tuple(adjusted_transforms),
         rule_id=rule_id,
         match_layer=match_layer,
         adapter_name=adapter_name,
         note=note,
+    )
+
+
+def _adapter_transform(spec: AdapterTransformSpec) -> TensorTransform:
+    return TensorTransform(
+        kind=TensorTransformKind(spec.kind),
+        scalar=spec.scalar,
+        axis=spec.axis,
+        permutation=spec.permutation,
+        source_axis=spec.source_axis,
+        target_axis=spec.target_axis,
+        shape=spec.shape,
+        slice_start=spec.slice_start,
+        slice_stop=spec.slice_stop,
+        dtype=spec.dtype,
+        note=spec.note,
     )
 
 

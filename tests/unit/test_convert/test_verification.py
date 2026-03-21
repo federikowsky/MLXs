@@ -258,6 +258,69 @@ def test_verify_existing_output_accepts_adapter_mapping_provenance(tmp_path: Pat
     assert report.status.value == "passed"
 
 
+def test_verify_existing_output_accepts_qwen35_moe_mapping_provenance(tmp_path: Path) -> None:
+    output_dir = tmp_path / "output"
+    _write_output_dir(
+        output_dir,
+        config={"model_type": "qwen3_5_moe"},
+        tensors={
+            "language_model.model.embed_tokens.weight": np.ones((2, 2), dtype=np.float32),
+        },
+    )
+    (output_dir / "tokenizer.json").write_text("{}")
+
+    snapshot = (
+        RuntimeTensorSchemaEntry(
+            name="language_model.model.embed_tokens.weight",
+            shape=(2, 2),
+            dtype="F32",
+        ),
+    )
+    manifest = {
+        "runtime_model_mode": "text",
+        "required_target_names": [entry.name for entry in snapshot],
+        "target_schema_hash": runtime_schema_hash(snapshot),
+        "target_schema_snapshot": [
+            {"name": entry.name, "shape": list(entry.shape), "dtype": entry.dtype}
+            for entry in snapshot
+        ],
+        "normalized_config_snapshot": {"model_type": "qwen3_5_moe"},
+        "tokenizer_artifacts": ["tokenizer.json"],
+        "multimodal_artifacts": [],
+        "weight_files": ["model.safetensors"],
+        "weight_index_file": None,
+        "mapping_provenance": [
+            {
+                "target_name": "language_model.model.layers.0.mlp.switch_mlp.gate_proj.weight",
+                "source_names": [
+                    "language_model.model.layers.0.mlp.experts.gate_up_proj.weight"
+                ],
+                "rule_id": "qwen35_moe_family:gate_up_split",
+                "match_layer": "family_adapter",
+                "adapter_name": "qwen35_moe_family",
+                "required": True,
+                "note": "qwen35_moe_gate_up_split",
+                "transforms": [
+                    {
+                        "kind": "slice",
+                        "axis": -2,
+                        "slice_start": 0,
+                        "slice_stop": None,
+                    }
+                ],
+            }
+        ],
+    }
+    (output_dir / "conversion_manifest.json").write_text(json.dumps(manifest))
+
+    report = verify_existing_output(
+        output_dir,
+        options=ConversionOptions(verification_mode=VerificationMode.BASIC),
+    )
+
+    assert report.status.value == "passed"
+
+
 def test_verify_existing_output_requires_shard_index_from_manifest(tmp_path: Path) -> None:
     output_dir = tmp_path / "output"
     _write_output_dir(

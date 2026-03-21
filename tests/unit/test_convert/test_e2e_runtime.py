@@ -1119,6 +1119,18 @@ def test_convert_source_e2e_runtime(case: RuntimeCase, tmp_path: Path) -> None:
             and entry["adapter_name"] == "qwen_family"
             for entry in manifest["mapping_provenance"]
         )
+    if case.name == "qwen3_5_multimodal":
+        assert any(
+            entry["match_layer"] == "family_adapter"
+            and entry["adapter_name"] == "qwen35_family"
+            for entry in manifest["mapping_provenance"]
+        )
+    if case.name in {"qwen3_5_moe", "qwen3_5_moe_multimodal"}:
+        assert any(
+            entry["match_layer"] == "family_adapter"
+            and entry["adapter_name"] == "qwen35_moe_family"
+            for entry in manifest["mapping_provenance"]
+        )
     if case.name == "qwen3_moe_multimodal":
         assert any(
             entry["match_layer"] == "generic_alias"

@@ -311,6 +311,99 @@ def test_build_conversion_plan_uses_qwen_family_adapter_for_vision_model_prefix(
     assert mapping.adapter_name == "qwen_family"
 
 
+def test_build_conversion_plan_uses_qwen35_adapter_for_language_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspection = _inspection(["language_model.model.embed_tokens.weight"])
+    ir = _family_ir("qwen3_5", multimodal=False)
+
+    monkeypatch.setattr(
+        "mlxs.convert.planning._collect_runtime_tensor_schema",
+        lambda _ir: [RuntimeTensorSchemaEntry(name="model.embed_tokens.weight", shape=(2, 4))],
+    )
+
+    plan = build_conversion_plan(inspection, ir, options=ConversionOptions())
+
+    mapping = plan.mappings[0]
+    assert mapping.source_names == ("language_model.model.embed_tokens.weight",)
+    assert mapping.rule_id == "qwen35_family:language_model_prefix"
+    assert mapping.match_layer == "family_adapter"
+    assert mapping.adapter_name == "qwen35_family"
+
+
+def test_build_conversion_plan_uses_qwen35_adapter_for_vision_model_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspection = _inspection(["vision_model.encoder.weight"])
+    ir = _family_ir("qwen3_5", multimodal=True)
+
+    monkeypatch.setattr(
+        "mlxs.convert.planning._collect_runtime_tensor_schema",
+        lambda _ir: [RuntimeTensorSchemaEntry(name="vision_tower.encoder.weight", shape=(2, 4))],
+    )
+
+    plan = build_conversion_plan(inspection, ir, options=ConversionOptions())
+
+    mapping = plan.mappings[0]
+    assert mapping.source_names == ("vision_model.encoder.weight",)
+    assert mapping.rule_id == "qwen35_family:vision_model_prefix"
+    assert mapping.match_layer == "family_adapter"
+    assert mapping.adapter_name == "qwen35_family"
+
+
+def test_build_conversion_plan_uses_qwen35_moe_adapter_for_language_wrapper_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspection = _inspection(["model.embed_tokens.weight"])
+    ir = _family_ir("qwen3_5_moe", multimodal=False)
+
+    monkeypatch.setattr(
+        "mlxs.convert.planning._collect_runtime_tensor_schema",
+        lambda _ir: [
+            RuntimeTensorSchemaEntry(
+                name="language_model.model.embed_tokens.weight",
+                shape=(2, 4),
+            )
+        ],
+    )
+
+    plan = build_conversion_plan(inspection, ir, options=ConversionOptions())
+
+    mapping = plan.mappings[0]
+    assert mapping.source_names == ("model.embed_tokens.weight",)
+    assert mapping.rule_id == "qwen35_moe_family:strip_language_model_prefix"
+    assert mapping.match_layer == "family_adapter"
+    assert mapping.adapter_name == "qwen35_moe_family"
+
+
+def test_build_conversion_plan_uses_qwen35_moe_adapter_for_gate_up_split(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspection = _inspection(["language_model.model.layers.0.mlp.experts.gate_up_proj.weight"])
+    ir = _family_ir("qwen3_5_moe", multimodal=False)
+
+    monkeypatch.setattr(
+        "mlxs.convert.planning._collect_runtime_tensor_schema",
+        lambda _ir: [
+            RuntimeTensorSchemaEntry(
+                name="language_model.model.layers.0.mlp.switch_mlp.gate_proj.weight",
+                shape=(2, 8, 8),
+            )
+        ],
+    )
+
+    plan = build_conversion_plan(inspection, ir, options=ConversionOptions())
+
+    mapping = plan.mappings[0]
+    assert mapping.source_names == (
+        "language_model.model.layers.0.mlp.experts.gate_up_proj.weight",
+    )
+    assert mapping.rule_id == "qwen35_moe_family:gate_up_split"
+    assert mapping.match_layer == "family_adapter"
+    assert mapping.adapter_name == "qwen35_moe_family"
+    assert mapping.transforms[0].kind.value == "slice"
+
+
 def test_build_conversion_plan_keeps_non_pilot_family_on_generic_alias_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

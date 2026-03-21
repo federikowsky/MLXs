@@ -17,6 +17,10 @@ from mlxs._types import ModelMode
 from mlxs.cache.arrays import ArraysCache
 from mlxs.cache.attention_mask import create_attention_mask, create_ssm_mask
 from mlxs.cache.kv import KVCache
+from mlxs.family_adapters import (
+    sanitize_qwen35_family_weights,
+    sanitize_qwen35_text_weights,
+)
 from mlxs.layers.activations import swiglu
 from mlxs.layers.attention import scaled_dot_product_attention
 from mlxs.layers.gated_delta import gated_delta_update
@@ -28,15 +32,6 @@ from mlxs.models.multimodal_shared import (
     prepare_multimodal_inputs,
 )
 from mlxs.models.vision.siglip_builder import build_siglip_vision_tower
-
-_VISION_PREFIXES = (
-    "visual.",
-    "vision_tower.",
-    "vision_model.",
-    "multi_modal_projector.",
-    "mm_projector.",
-)
-_VISION_EXACT = ("visual", "vision_tower", "vision_model")
 
 # ----- Model args -----
 
@@ -373,34 +368,10 @@ def _sanitize_text_weights(
     *,
     tie_word_embeddings: bool,
 ) -> dict[str, Any]:
-    has_mtp_weights = any("mtp." in key for key in weights)
-    has_unsanitized_conv1d = any(
-        "conv1d.weight" in key and value.shape[-1] != 1
-        for key, value in weights.items()
+    return sanitize_qwen35_text_weights(
+        weights,
+        tie_word_embeddings=tie_word_embeddings,
     )
-    should_shift_norm_weights = has_mtp_weights or has_unsanitized_conv1d
-    sanitized = {key: value for key, value in weights.items() if "mtp." not in key}
-    if tie_word_embeddings:
-        sanitized.pop("lm_head.weight", None)
-        sanitized.pop("language_model.lm_head.weight", None)
-
-    norm_keys = (
-        ".input_layernorm.weight",
-        ".post_attention_layernorm.weight",
-        "model.norm.weight",
-        ".q_norm.weight",
-        ".k_norm.weight",
-    )
-    for key, value in list(sanitized.items()):
-        if "conv1d.weight" in key and value.shape[-1] != 1:
-            sanitized[key] = value.moveaxis(2, 1)
-        if (
-            should_shift_norm_weights
-            and any(key.endswith(suffix) for suffix in norm_keys)
-            and value.ndim == 1
-        ):
-            sanitized[key] = value + 1.0
-    return sanitized
 
 
 class Model(nn.Module):
@@ -508,51 +479,17 @@ class Model(nn.Module):
         ]
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        if self._mode == ModelMode.TEXT:
-            filtered = {
-                key: value
-                for key, value in weights.items()
-                if key not in _VISION_EXACT
-                and not any(key.startswith(prefix) for prefix in _VISION_PREFIXES)
-            }
-            if self.model_type == "qwen3_5":
-                filtered = {
-                    (
-                        key[len("language_model.") :]
-                        if key.startswith("language_model.")
-                        else key
-                    ): value
-                    for key, value in filtered.items()
-                }
-            return _sanitize_text_weights(
-                filtered,
-                tie_word_embeddings=self.args.tie_word_embeddings,
-            )
-
-        language_weights: dict[str, Any] = {}
-        vision_weights: dict[str, Any] = {}
-        for key, value in weights.items():
-            if key.startswith(("multi_modal_projector.", "mm_projector.")):
-                continue
-            if key.startswith("visual."):
-                key = f"vision_tower.{key[len('visual.') :]}"
-            elif key.startswith("vision_model."):
-                key = f"vision_tower.{key[len('vision_model.') :]}"
-
-            if key.startswith("vision_tower."):
-                vision_weights[key] = value
-            elif self.model_type == "qwen3_5" and key.startswith("language_model."):
-                language_weights[key[len("language_model.") :]] = value
-            else:
-                language_weights[key] = value
-
-        sanitized_language = _sanitize_text_weights(
-            language_weights,
+        return sanitize_qwen35_family_weights(
+            weights,
+            model_mode=self._mode,
             tie_word_embeddings=self.args.tie_word_embeddings,
+            strip_language_model_prefix=self.model_type == "qwen3_5",
+            vision_sanitize=(
+                self.vision_tower.sanitize
+                if hasattr(self, "vision_tower")
+                else None
+            ),
         )
-        if hasattr(self, "vision_tower"):
-            vision_weights = self.vision_tower.sanitize(vision_weights)
-        return sanitized_language | vision_weights
 
     @property
     def layers(self) -> list[DecoderLayer]:
