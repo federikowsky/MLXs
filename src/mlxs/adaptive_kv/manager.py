@@ -269,8 +269,7 @@ class AdaptiveLayerCache:
             run_id = self._compressed_block_runs.get(block.block_id)
             if run_id is None:
                 raise AdaptiveKVError(
-                    f"Adaptive resident state is missing COMPRESSED run for block "
-                    f"{block.block_id}"
+                    f"Adaptive resident state is missing COMPRESSED run for block {block.block_id}"
                 )
             if run_id in emitted_compressed_runs:
                 continue
@@ -350,14 +349,20 @@ class AdaptiveLayerCache:
         weights: mx.array,
     ) -> None:
         usage_by_token = weights.mean(axis=(0, 1, 2))
-        mx.eval(usage_by_token)
         cursor = 0
+        block_ids: list[int] = []
+        block_usage: list[mx.array] = []
         for segment in resident_state.segments:
             segment_usage = usage_by_token[cursor : cursor + segment.token_count]
             for block_id, local_start, local_end in segment.block_slices:
-                score = float(segment_usage[local_start:local_end].sum().item())
-                self._manager.usage.record(block_id, score)
+                block_ids.append(block_id)
+                block_usage.append(segment_usage[local_start:local_end].sum())
             cursor += segment.token_count
+        if not block_usage:
+            return
+        usage_values = mx.stack(block_usage, axis=0)
+        mx.async_eval(usage_values)
+        self._manager.usage.record_batch(tuple(block_ids), usage_values)
 
     def block_live_bytes(self, block_id: int) -> int:
         run = self._compressed_run(block_id)
@@ -488,11 +493,7 @@ class AdaptiveLayerCache:
         full_values = resident_state.full_values
         for segment in resident_state.segments:
             if segment.tier is BlockTier.FULL:
-                if (
-                    full_keys is None
-                    or full_values is None
-                    or segment.full_slice is None
-                ):
+                if full_keys is None or full_values is None or segment.full_slice is None:
                     continue
                 start, end = segment.full_slice
                 keys_parts.append(full_keys[..., start:end, :])
@@ -668,6 +669,7 @@ class AdaptiveKVManager:
         self._model: Any = None
         self._prefill_step_size = 2048
         self._pending_recompute_requests = 0
+        self._adaptive_usage_timing_acc: dict[str, int] | None = None
         self.recompute = AdaptiveRecomputeCoordinator(
             self.registry,
             on_request=self._increment_recompute_requests,
@@ -714,7 +716,7 @@ class AdaptiveKVManager:
         if self.decode_steps % self.config.update_window_steps != 0:
             return
         started = time.perf_counter()
-        usage = self.usage.snapshot_and_reset()
+        usage = self.usage.snapshot_and_reset(timing_acc=self._adaptive_usage_timing_acc)
         self._update_scores(usage)
         pressure = self._compute_pressure_state()
         protected = self._protected_block_ids()
@@ -742,20 +744,51 @@ class AdaptiveKVManager:
     def request_recompute(self, block_ids: tuple[int, ...], *, reason: str) -> Any:
         return self.recompute.request(block_ids, reason=reason)
 
+    def attention_path_stats(self) -> dict[str, Any]:
+        """Diagnostic only: segment structure for mixed-tier attention (layer 0).
+
+        Counts match ``AdaptiveLayerCache.resident_state_for_attention`` — the hot-path
+        segment list (FULL runs coalesced; each compressed *run* is one segment).
+        """
+        if not self._layer_caches:
+            return {}
+        try:
+            rs = self._layer_caches[0].resident_state_for_attention()
+        except AdaptiveKVError as exc:
+            return {"error": str(exc)}
+        n_full = sum(1 for s in rs.segments if s.tier is BlockTier.FULL)
+        n_comp = sum(1 for s in rs.segments if s.tier is BlockTier.COMPRESSED)
+        logical_in_comp_runs = sum(
+            len(s.block_slices) for s in rs.segments if s.tier is BlockTier.COMPRESSED
+        )
+        logical_in_full_segments = sum(
+            len(s.block_slices) for s in rs.segments if s.tier is BlockTier.FULL
+        )
+        comp_counts = [s.token_count for s in rs.segments if s.tier is BlockTier.COMPRESSED]
+        comp_span = sum(comp_counts)
+        return {
+            "n_attention_segments": len(rs.segments),
+            "n_full_attention_segments": n_full,
+            "n_compressed_attention_segments": n_comp,
+            "logical_blocks_in_compressed_runs": logical_in_comp_runs,
+            "logical_blocks_in_full_segments": logical_in_full_segments,
+            "compressed_attention_token_span": comp_span,
+            "max_compressed_segment_tokens": max(comp_counts) if comp_counts else 0,
+            "compressed_segment_token_counts": comp_counts,
+        }
+
     def debug_snapshot(self) -> dict[str, Any]:
         blocks = self.registry.snapshot()
         return {
             "decode_steps": self.decode_steps,
             "pressure_state": self._pressure_state.value,
             "resident_bytes": self.resident_bytes(),
+            "attention_path": self.attention_path_stats(),
             "blocks": [
                 block_debug_view(block, ghost_present=self.ghost_store.has(block.block_id))
                 for block in blocks
             ],
-            "ghosts": {
-                block_id: ghost
-                for block_id, ghost in self.ghost_store.snapshot().items()
-            },
+            "ghosts": {block_id: ghost for block_id, ghost in self.ghost_store.snapshot().items()},
         }
 
     def resident_bytes(self) -> int:
@@ -771,8 +804,7 @@ class AdaptiveKVManager:
         if history_tokens == 0:
             return ()
         return tuple(
-            block.block_id
-            for block in self.registry.required_evicted_blocks(history_tokens)
+            block.block_id for block in self.registry.required_evicted_blocks(history_tokens)
         )
 
     def _protected_block_ids(self) -> set[int]:

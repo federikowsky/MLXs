@@ -50,6 +50,7 @@ def generate(
     adaptive_config: AdaptiveKVConfig | None = None,
     metrics: MetricsProtocol | None = None,
     final_adaptive_state_out: list[dict[str, Any]] | None = None,
+    adaptive_usage_timing_acc: dict[str, int] | None = None,
 ) -> Iterator[TokenEvent]:
     """Generate tokens from a prompt (§6.1, FR3).
 
@@ -78,6 +79,9 @@ def generate(
             0 = disabled. Default: 256.
         final_cache_out: If provided, the list is appended with the KV cache
             after generation completes (for prompt_cache.put). Plan-chat-cli.
+        adaptive_usage_timing_acc: Optional dict (benchmark/diagnostic only).
+            When adaptive KV is enabled, ``eval_ns`` / ``host_ns`` are incremented
+            during deferred usage flush in ``snapshot_and_reset``.
 
     Yields:
         TokenEvent for each generated token. The last event has
@@ -135,6 +139,8 @@ def generate(
             num_layers=compatibility.num_layers,
             metrics=metrics_sink,
         )
+        if adaptive_usage_timing_acc is not None:
+            adaptive_manager._adaptive_usage_timing_acc = adaptive_usage_timing_acc
         adaptive_manager.bind_generation_context(
             model=model,
             prefill_step_size=prefill_step_size,

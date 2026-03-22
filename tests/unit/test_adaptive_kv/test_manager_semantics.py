@@ -165,3 +165,23 @@ def test_promoting_middle_block_splits_compressed_run() -> None:
         ((1, 0, 2),),
         ((3, 0, 2),),
     ]
+
+
+def test_usage_timing_accumulates_only_at_window_flush() -> None:
+    manager = _make_manager(prompt_tokens=[1, 2, 3, 4], recent_tail_protect_blocks=0)
+    cache = manager.caches()[0]
+    manager._adaptive_usage_timing_acc = {}
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    resident_state = cache.resident_state_for_attention()
+    weights = mx.array([[[[0.1, 0.2, 0.3, 0.4]]]], dtype=mx.float32)
+
+    cache.record_usage_from_attention(resident_state, weights)
+
+    assert manager._adaptive_usage_timing_acc == {}
+
+    usage = manager.usage.snapshot_and_reset(timing_acc=manager._adaptive_usage_timing_acc)
+
+    assert usage
+    assert manager._adaptive_usage_timing_acc.get("eval_ns", 0) > 0
+    assert manager._adaptive_usage_timing_acc.get("host_ns", 0) >= 0
