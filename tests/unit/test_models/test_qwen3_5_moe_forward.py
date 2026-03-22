@@ -95,3 +95,81 @@ def test_qwen3_5_moe_multimodal_prepare_inputs_with_video() -> None:
     assert input_embeddings is not None
     assert input_embeddings.shape == (1, 4, 64)
     assert logits.shape == (1, 4, model.vocab_size)
+
+
+def test_qwen3_5_moe_text_sanitize_uses_family_specific_remap() -> None:
+    """qwen3_5_moe text sanitize keeps wrapped targets and splits gate_up experts."""
+    ModelCls, ArgsCls = get_model_classes("qwen3_5_moe")
+    args = ArgsCls.from_dict(
+        {
+            "model_type": "qwen3_5_moe",
+            "text_config": {
+                **MINIMAL_QWEN3_5_MOE["text_config"],
+                "tie_word_embeddings": True,
+            },
+        }
+    )
+    model = ModelCls(args)
+
+    sanitized = model.sanitize(
+        {
+            "model.embed_tokens.weight": mx.ones((2, 2), dtype=mx.float32),
+            "model.layers.0.linear_attn.conv1d.weight": mx.ones((8, 3, 4), dtype=mx.float32),
+            "model.layers.0.input_layernorm.weight": mx.ones((8,), dtype=mx.float32),
+            "model.layers.0.mlp.experts.gate_up_proj.weight": mx.ones(
+                (2, 16, 8), dtype=mx.float32
+            ),
+            "model.layers.0.mlp.experts.down_proj.weight": mx.ones((2, 8, 8), dtype=mx.float32),
+            "lm_head.weight": mx.ones((2, 2), dtype=mx.float32),
+        }
+    )
+
+    assert "language_model.model.embed_tokens.weight" in sanitized
+    assert "language_model.model.layers.0.mlp.switch_mlp.gate_proj.weight" in sanitized
+    assert "language_model.model.layers.0.mlp.switch_mlp.up_proj.weight" in sanitized
+    assert "language_model.model.layers.0.mlp.switch_mlp.down_proj.weight" in sanitized
+    assert tuple(
+        sanitized["language_model.model.layers.0.mlp.switch_mlp.gate_proj.weight"].shape
+    ) == (2, 8, 8)
+    assert tuple(
+        sanitized["language_model.model.layers.0.mlp.switch_mlp.up_proj.weight"].shape
+    ) == (2, 8, 8)
+    assert tuple(
+        sanitized["language_model.model.layers.0.linear_attn.conv1d.weight"].shape
+    ) == (8, 4, 3)
+    assert "language_model.lm_head.weight" not in sanitized
+    assert mx.allclose(
+        sanitized["language_model.model.layers.0.input_layernorm.weight"],
+        mx.full((8,), 2.0, dtype=mx.float32),
+    )
+
+
+def test_qwen3_5_moe_multimodal_sanitize_uses_family_specific_remap() -> None:
+    """qwen3_5_moe multimodal sanitize keeps vision aliasing and MoE remap."""
+    ModelCls, ArgsCls = get_model_classes("qwen3_5_moe")
+    args = ArgsCls.from_dict(
+        {
+            "model_type": "qwen3_5_moe",
+            "text_config": MINIMAL_QWEN3_5_MOE["text_config"],
+            "vision_config": MINIMAL_VISION_CONFIG,
+            "image_token_id": 250,
+            "video_token_id": 251,
+        }
+    )
+    model = ModelCls(args, model_mode=ModelMode.MULTIMODAL)
+
+    sanitized = model.sanitize(
+        {
+            "visual.patch_embed.proj.weight": mx.ones((4, 3, 1, 1, 1), dtype=mx.float32),
+            "vision_model.blocks.0.norm1.weight": mx.ones((16,), dtype=mx.float32),
+            "model.layers.0.mlp.experts.gate_up_proj.weight": mx.ones(
+                (2, 16, 8), dtype=mx.float32
+            ),
+        }
+    )
+
+    assert "vision_tower.patch_embed.proj.weight" in sanitized
+    assert tuple(sanitized["vision_tower.patch_embed.proj.weight"].shape) == (4, 1, 1, 1, 3)
+    assert "vision_tower.blocks.0.norm1.weight" in sanitized
+    assert "language_model.model.layers.0.mlp.switch_mlp.gate_proj.weight" in sanitized
+    assert "language_model.model.layers.0.mlp.switch_mlp.up_proj.weight" in sanitized

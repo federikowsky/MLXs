@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mlx.core as mx
+import numpy as np
 
 from mlxs._types import ModelMode
 from mlxs.load.registry import get_model_classes
@@ -79,3 +80,58 @@ def test_qwen3_multimodal_prepare_inputs() -> None:
     assert input_embeddings is not None
     assert input_embeddings.shape == (1, 4, MINIMAL_QWEN3["hidden_size"])
     assert logits.shape == (1, 4, model.vocab_size)
+
+
+def test_qwen3_text_sanitize_uses_shared_family_remap() -> None:
+    """qwen3 text sanitize keeps qwen3-specific cleanup on top of shared remap."""
+    ModelCls, ArgsCls = get_model_classes("qwen3")
+    args = ArgsCls.from_dict({**MINIMAL_QWEN3, "tie_word_embeddings": True})
+    model = ModelCls(args)
+
+    sanitized = model.sanitize(
+        {
+            "language_model.model.embed_tokens.weight": np.ones((2, 2), dtype=np.float32),
+            "visual.patch_embed.proj.weight": np.ones((2, 3, 1, 1, 1), dtype=np.float32),
+            "mm_projector.weight": np.ones((2, 2), dtype=np.float32),
+            "model.layers.0.self_attn.rotary_emb.inv_freq": np.ones((2,), dtype=np.float32),
+            "lm_head.weight": np.ones((2, 2), dtype=np.float32),
+        }
+    )
+
+    assert "model.embed_tokens.weight" in sanitized
+    assert "language_model.model.embed_tokens.weight" not in sanitized
+    assert "visual.patch_embed.proj.weight" not in sanitized
+    assert "mm_projector.weight" not in sanitized
+    assert "model.layers.0.self_attn.rotary_emb.inv_freq" in sanitized
+    assert "lm_head.weight" not in sanitized
+
+
+def test_qwen3_multimodal_sanitize_uses_shared_family_remap() -> None:
+    """qwen3 multimodal sanitize preserves shared Qwen family remap semantics."""
+    ModelCls, ArgsCls = get_model_classes("qwen3")
+    args = ArgsCls.from_dict(
+        {
+            "model_type": "qwen3",
+            "text_config": MINIMAL_QWEN3,
+            "vision_config": MINIMAL_VISION_CONFIG,
+            "image_token_id": 250,
+        }
+    )
+    model = ModelCls(args, model_mode=ModelMode.MULTIMODAL)
+
+    sanitized = model.sanitize(
+        {
+            "language_model.model.embed_tokens.weight": np.ones((2, 2), dtype=np.float32),
+            "visual.patch_embed.proj.weight": np.ones((4, 3, 1, 1, 1), dtype=np.float32),
+            "vision_model.blocks.0.norm1.weight": np.ones((16,), dtype=np.float32),
+            "mm_projector.weight": np.ones((2, 2), dtype=np.float32),
+        }
+    )
+
+    assert "model.embed_tokens.weight" in sanitized
+    assert "vision_tower.patch_embed.proj.weight" in sanitized
+    assert sanitized["vision_tower.patch_embed.proj.weight"].shape == (4, 1, 1, 1, 3)
+    assert "vision_tower.blocks.0.norm1.weight" in sanitized
+    assert "visual.patch_embed.proj.weight" not in sanitized
+    assert "vision_model.blocks.0.norm1.weight" not in sanitized
+    assert "mm_projector.weight" not in sanitized

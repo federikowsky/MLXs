@@ -15,7 +15,6 @@ from mlxs.convert.types import (
     ConversionResult,
     ExecutionResult,
     InspectionReport,
-    VerificationCheck,
     VerificationReport,
 )
 
@@ -95,10 +94,45 @@ def build_manifest(
                 if isinstance(item, dict)
             )
     capability_snapshot: dict[str, Any] = {}
+    architecture_traits: dict[str, Any] = {}
+    execution_dependency_summary: dict[str, Any] = {}
     if canonical_ir is not None:
         capability_snapshot = _capability_snapshot(
             canonical_ir.identity.runtime_target_model_type
         )
+        architecture_traits = json_ready(canonical_ir.traits)
+    if execution is not None and execution.dependency_plan is not None:
+        execution_dependency_summary = {
+            "load_strategy": execution.load_strategy,
+            "materialization_strategy": execution.materialization_strategy,
+            "referenced_source_tensor_count": len(
+                execution.dependency_plan.referenced_source_tensors
+            ),
+            "loaded_source_tensor_count": len(execution.loaded_source_tensors),
+            "referenced_source_shards": execution.dependency_plan.referenced_source_shards,
+            "source_shard_dependencies": tuple(
+                {
+                    "shard_file": group.shard_file,
+                    "source_tensor_count": len(group.source_names),
+                    "target_count": len(group.target_names),
+                }
+                for group in execution.dependency_plan.source_shard_dependencies
+            ),
+            "mapping_dependency_groups": tuple(
+                {
+                    "shard_files": group.shard_files,
+                    "target_count": len(group.target_names),
+                }
+                for group in execution.dependency_plan.mapping_dependency_groups
+            ),
+            "output_pack_groups": tuple(
+                {
+                    "target_count": len(group.target_names),
+                    "total_bytes": group.total_bytes,
+                }
+                for group in execution.output_pack_groups
+            ),
+        }
 
     mapping_provenance: tuple[dict[str, Any], ...] = ()
     target_schema_snapshot: tuple[dict[str, Any], ...] = ()
@@ -109,6 +143,8 @@ def build_manifest(
                 "target_name": mapping.target_name,
                 "source_names": mapping.source_names,
                 "rule_id": mapping.rule_id,
+                "match_layer": mapping.match_layer,
+                "adapter_name": mapping.adapter_name,
                 "required": mapping.required,
                 "note": mapping.note,
                 "transforms": tuple(json_ready(transform) for transform in mapping.transforms),
@@ -158,6 +194,8 @@ def build_manifest(
         ),
         verification_checks=verification_checks,
         warnings=warnings,
+        architecture_traits=architecture_traits,
+        execution_dependency_summary=execution_dependency_summary,
         capability_snapshot=capability_snapshot,
         required_target_names=plan.required_target_names if plan is not None else (),
         mapping_provenance=mapping_provenance,
@@ -195,7 +233,11 @@ def _capability_snapshot(runtime_target_model_type: str) -> dict[str, Any]:
         "supports_text": capabilities.supports_text,
         "supports_multimodal": capabilities.supports_multimodal,
         "supported_model_modes": tuple(
-            mode.value for mode in sorted(capabilities.supported_model_modes, key=lambda item: item.value)
+            mode.value
+            for mode in sorted(
+                capabilities.supported_model_modes,
+                key=lambda item: item.value,
+            )
         ),
         "supports_conversion": capabilities.supports_conversion,
         "supports_schema_export": capabilities.supports_schema_export,

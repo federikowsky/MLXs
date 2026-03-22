@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum, StrEnum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +25,25 @@ class Modality(StrEnum):
     MULTIMODAL = "multimodal"
 
 
+class TopologyKind(StrEnum):
+    DECODER = "decoder"
+    ENCODER_DECODER = "encoder_decoder"
+
+
+class ExpertLayoutKind(StrEnum):
+    DENSE = "dense"
+    MOE = "moe"
+
+
 class DensityKind(StrEnum):
     DENSE = "dense"
     MOE = "moe"
     HYBRID = "hybrid"
+
+
+class SequenceFamilyKind(StrEnum):
+    ATTENTION = "attention"
+    SSM_HYBRID = "ssm_hybrid"
 
 
 class ConversionPhase(StrEnum):
@@ -40,9 +55,11 @@ class ConversionPhase(StrEnum):
 
 
 class VerificationMode(StrEnum):
-    REQUIRED = "required"
-    BASIC = "basic"
     SKIP = "skip"
+    BASIC = "basic"
+    STRICT = "strict"
+    REQUIRED = "required"
+    PARANOID = "paranoid"
 
 
 class ModelAssistanceMode(StrEnum):
@@ -131,6 +148,14 @@ class IRIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class ArchitectureTraits:
+    modality: Modality
+    topology_kind: TopologyKind
+    expert_layout: ExpertLayoutKind
+    sequence_family: SequenceFamilyKind
+
+
+@dataclass(frozen=True, slots=True)
 class IRTopology:
     backbone_type: str
     decoder_only: bool
@@ -210,6 +235,7 @@ class IRAmbiguities:
 class CanonicalIR:
     source: IRSource
     identity: IRIdentity
+    traits: ArchitectureTraits
     topology: IRTopology
     config: IRConfig
     tensor_layout: IRTensorLayout
@@ -249,6 +275,8 @@ class TensorTargetPlan:
     required: bool = True
     note: str | None = None
     rule_id: str = "exact"
+    match_layer: str = "exact"
+    adapter_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +296,33 @@ class ConversionPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceShardDependency:
+    shard_file: str
+    source_names: tuple[str, ...]
+    target_names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MappingDependencyGroup:
+    shard_files: tuple[str, ...]
+    target_names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionDependencyPlan:
+    referenced_source_tensors: tuple[str, ...]
+    referenced_source_shards: tuple[str, ...]
+    source_shard_dependencies: tuple[SourceShardDependency, ...]
+    mapping_dependency_groups: tuple[MappingDependencyGroup, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class OutputPackGroup:
+    target_names: tuple[str, ...]
+    total_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionResult:
     output_dir: Path
     weight_files: tuple[str, ...]
@@ -275,6 +330,11 @@ class ExecutionResult:
     written_tensor_names: tuple[str, ...]
     copied_artifacts: tuple[str, ...]
     skipped_source_tensors: tuple[str, ...]
+    loaded_source_tensors: tuple[str, ...] = ()
+    load_strategy: str = "whole_shard_mx_load"
+    materialization_strategy: str = "all_targets_buffered"
+    dependency_plan: ExecutionDependencyPlan | None = None
+    output_pack_groups: tuple[OutputPackGroup, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,6 +371,8 @@ class ConversionManifest:
     verification_status: str
     verification_checks: tuple[dict[str, Any], ...]
     warnings: tuple[str, ...]
+    architecture_traits: dict[str, Any] = field(default_factory=dict)
+    execution_dependency_summary: dict[str, Any] = field(default_factory=dict)
     capability_snapshot: dict[str, Any] = field(default_factory=dict)
     required_target_names: tuple[str, ...] = ()
     mapping_provenance: tuple[dict[str, Any], ...] = ()

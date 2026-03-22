@@ -5,10 +5,12 @@ from typing import Any
 
 from mlxs.convert.errors import MissingRequiredConfigError
 from mlxs.convert.types import (
+    ArchitectureTraits,
     CanonicalIR,
     ConversionOptions,
     ConversionPhase,
     DensityKind,
+    ExpertLayoutKind,
     InspectionReport,
     IRAmbiguities,
     IRConfig,
@@ -21,16 +23,11 @@ from mlxs.convert.types import (
     IRTopology,
     MacroTemplate,
     Modality,
+    SequenceFamilyKind,
+    TopologyKind,
 )
 
-_SUPPORTED_RUNTIME_TEMPLATES = {
-    MacroTemplate.DECODER_DENSE,
-    MacroTemplate.DECODER_MOE,
-    MacroTemplate.MULTIMODAL_DECODER,
-    MacroTemplate.SSM_HYBRID,
-}
-
-_REQUIRED_FIELDS_BY_TEMPLATE: dict[MacroTemplate, tuple[str, ...]] = {
+_REQUIRED_FIELDS_BY_COMPAT_TEMPLATE: dict[MacroTemplate, tuple[str, ...]] = {
     MacroTemplate.DECODER_DENSE: (
         "hidden_size",
         "num_hidden_layers",
@@ -74,15 +71,18 @@ def normalize_inspection(
     config = inspection.config
     matched_config_keys = tuple(sorted(config.keys()))
     runtime_target_model_type = _resolve_runtime_target_model_type(config)
-    macro_template, ambiguity_flags = _select_macro_template(inspection, runtime_target_model_type)
+    traits, ambiguity_flags = _derive_architecture_traits(
+        inspection,
+        runtime_target_model_type,
+    )
+    macro_template = _compatibility_macro_template_from_traits(traits)
     topology = _build_topology(
         inspection,
         config,
-        macro_template=macro_template,
-        runtime_target_model_type=runtime_target_model_type,
+        traits=traits,
     )
     canonical_values = _canonical_config_values(config)
-    required_fields = _REQUIRED_FIELDS_BY_TEMPLATE[macro_template]
+    required_fields = _REQUIRED_FIELDS_BY_COMPAT_TEMPLATE[macro_template]
     missing = tuple(field for field in required_fields if canonical_values.get(field) is None)
     if missing:
         raise MissingRequiredConfigError(
@@ -96,8 +96,11 @@ def normalize_inspection(
     tokenizer_specials = _collect_special_tokens(config)
     is_supported = (
         runtime_target_model_type is not None
-        and macro_template in _SUPPORTED_RUNTIME_TEMPLATES
-        and _runtime_supports_modality(runtime_target_model_type, topology.multimodal)
+        and traits.topology_kind == TopologyKind.DECODER
+        and _runtime_supports_modality(
+            runtime_target_model_type,
+            traits.modality == Modality.MULTIMODAL,
+        )
     )
     architecture_label = runtime_target_model_type or config.get("model_type", "unknown")
 
@@ -116,7 +119,7 @@ def normalize_inspection(
         ),
         identity=IRIdentity(
             macro_template=macro_template,
-            modality=Modality.MULTIMODAL if topology.multimodal else Modality.TEXT,
+            modality=traits.modality,
             architecture_label=architecture_label,
             variant_label=(
                 config.get("model_type")
@@ -126,6 +129,7 @@ def normalize_inspection(
             runtime_target_model_type=architecture_label,
             supported_by_runtime=is_supported,
         ),
+        traits=traits,
         topology=topology,
         config=IRConfig(
             values=canonical_values,
@@ -229,51 +233,78 @@ def _has_multimodal_config(config: dict[str, Any]) -> bool:
     return any(key in config for key in multimodal_keys)
 
 
-def _select_macro_template(
+def _derive_architecture_traits(
     inspection: InspectionReport,
     runtime_target_model_type: str | None,
-) -> tuple[MacroTemplate, tuple[str, ...]]:
+) -> tuple[ArchitectureTraits, tuple[str, ...]]:
     config = inspection.config
     source_model_type = config.get("model_type", "")
     tensor_names = {tensor.name for tensor in inspection.tensor_infos}
     ambiguity_flags: list[str] = []
 
-    is_multimodal = _is_multimodal(config, inspection.multimodal_artifacts, tensor_names)
-    is_encoder_decoder = _is_encoder_decoder(config, tensor_names)
-    is_ssm_hybrid = _is_ssm_hybrid(config, tensor_names, runtime_target_model_type)
-    is_moe = _is_moe(config, tensor_names)
+    has_multimodal = _is_multimodal(config, inspection.multimodal_artifacts, tensor_names)
+    has_encoder_decoder = _is_encoder_decoder(config, tensor_names)
+    has_ssm_hybrid = _is_ssm_hybrid(config, tensor_names, runtime_target_model_type)
+    has_moe = _is_moe(config, tensor_names)
 
     matches = [
-        ("multimodal", is_multimodal),
-        ("encoder_decoder", is_encoder_decoder),
-        ("ssm_hybrid", is_ssm_hybrid),
-        ("moe", is_moe),
+        ("multimodal", has_multimodal),
+        ("encoder_decoder", has_encoder_decoder),
+        ("ssm_hybrid", has_ssm_hybrid),
+        ("moe", has_moe),
     ]
     if sum(1 for _, matched in matches if matched) > 1:
         ambiguity_flags.append("multi_profile_match")
+    traits = ArchitectureTraits(
+        modality=Modality.MULTIMODAL if has_multimodal else Modality.TEXT,
+        topology_kind=(
+            TopologyKind.ENCODER_DECODER
+            if has_encoder_decoder
+            else TopologyKind.DECODER
+        ),
+        expert_layout=ExpertLayoutKind.MOE if has_moe else ExpertLayoutKind.DENSE,
+        sequence_family=(
+            SequenceFamilyKind.SSM_HYBRID
+            if has_ssm_hybrid
+            else SequenceFamilyKind.ATTENTION
+        ),
+    )
+    if (
+        not source_model_type
+        and traits.modality == Modality.TEXT
+        and traits.topology_kind == TopologyKind.DECODER
+        and traits.expert_layout == ExpertLayoutKind.DENSE
+        and traits.sequence_family == SequenceFamilyKind.ATTENTION
+    ):
+        ambiguity_flags.append("missing_model_type")
 
-    if is_multimodal and is_encoder_decoder:
-        return MacroTemplate.MULTIMODAL_ENCODER_DECODER, tuple(ambiguity_flags)
-    if is_encoder_decoder:
-        return MacroTemplate.ENCODER_DECODER, tuple(ambiguity_flags)
-    if is_multimodal:
-        return MacroTemplate.MULTIMODAL_DECODER, tuple(ambiguity_flags)
-    if is_ssm_hybrid:
-        return MacroTemplate.SSM_HYBRID, tuple(ambiguity_flags)
-    if is_moe:
-        return MacroTemplate.DECODER_MOE, tuple(ambiguity_flags)
-    if source_model_type:
-        return MacroTemplate.DECODER_DENSE, tuple(ambiguity_flags)
-    ambiguity_flags.append("missing_model_type")
-    return MacroTemplate.DECODER_DENSE, tuple(ambiguity_flags)
+    return traits, tuple(ambiguity_flags)
+
+
+def _compatibility_macro_template_from_traits(
+    traits: ArchitectureTraits,
+) -> MacroTemplate:
+    if (
+        traits.topology_kind == TopologyKind.ENCODER_DECODER
+        and traits.modality == Modality.MULTIMODAL
+    ):
+        return MacroTemplate.MULTIMODAL_ENCODER_DECODER
+    if traits.topology_kind == TopologyKind.ENCODER_DECODER:
+        return MacroTemplate.ENCODER_DECODER
+    if traits.modality == Modality.MULTIMODAL:
+        return MacroTemplate.MULTIMODAL_DECODER
+    if traits.sequence_family == SequenceFamilyKind.SSM_HYBRID:
+        return MacroTemplate.SSM_HYBRID
+    if traits.expert_layout == ExpertLayoutKind.MOE:
+        return MacroTemplate.DECODER_MOE
+    return MacroTemplate.DECODER_DENSE
 
 
 def _build_topology(
     inspection: InspectionReport,
     config: dict[str, Any],
     *,
-    macro_template: MacroTemplate,
-    runtime_target_model_type: str | None,
+    traits: ArchitectureTraits,
 ) -> IRTopology:
     attention_heads = _value_from_nested(config, "num_attention_heads")
     kv_heads = _value_from_nested(config, "num_key_value_heads", "num_kv_heads", "n_kv_heads")
@@ -288,13 +319,9 @@ def _build_topology(
         attention_variant = None
 
     tensor_names = {tensor.name for tensor in inspection.tensor_infos}
-    is_multimodal = macro_template in {
-        MacroTemplate.MULTIMODAL_DECODER,
-        MacroTemplate.MULTIMODAL_ENCODER_DECODER,
-    }
-    is_ssm_hybrid = _is_ssm_hybrid(config, tensor_names, runtime_target_model_type)
-    is_moe = _is_moe(config, tensor_names)
-    if is_moe:
+    is_multimodal = traits.modality == Modality.MULTIMODAL
+    is_ssm_hybrid = traits.sequence_family == SequenceFamilyKind.SSM_HYBRID
+    if traits.expert_layout == ExpertLayoutKind.MOE:
         density = DensityKind.MOE
     elif is_ssm_hybrid:
         density = DensityKind.HYBRID
@@ -316,15 +343,9 @@ def _build_topology(
         )
     )
     return IRTopology(
-        backbone_type=_backbone_type(macro_template),
-        decoder_only=macro_template not in {
-            MacroTemplate.ENCODER_DECODER,
-            MacroTemplate.MULTIMODAL_ENCODER_DECODER,
-        },
-        encoder_decoder=macro_template in {
-            MacroTemplate.ENCODER_DECODER,
-            MacroTemplate.MULTIMODAL_ENCODER_DECODER,
-        },
+        backbone_type=_backbone_type_from_traits(traits),
+        decoder_only=traits.topology_kind == TopologyKind.DECODER,
+        encoder_decoder=traits.topology_kind == TopologyKind.ENCODER_DECODER,
         multimodal=is_multimodal,
         ssm_hybrid=is_ssm_hybrid,
         density=density,
@@ -546,15 +567,19 @@ def _shape_traits(tensor_infos: Iterable[Any]) -> list[str]:
     return traits
 
 
-def _backbone_type(macro_template: MacroTemplate) -> str:
-    return {
-        MacroTemplate.DECODER_DENSE: "decoder",
-        MacroTemplate.DECODER_MOE: "decoder",
-        MacroTemplate.MULTIMODAL_DECODER: "multimodal_decoder",
-        MacroTemplate.SSM_HYBRID: "ssm_hybrid",
-        MacroTemplate.ENCODER_DECODER: "encoder_decoder",
-        MacroTemplate.MULTIMODAL_ENCODER_DECODER: "multimodal_encoder_decoder",
-    }[macro_template]
+def _backbone_type_from_traits(traits: ArchitectureTraits) -> str:
+    if (
+        traits.topology_kind == TopologyKind.ENCODER_DECODER
+        and traits.modality == Modality.MULTIMODAL
+    ):
+        return "multimodal_encoder_decoder"
+    if traits.topology_kind == TopologyKind.ENCODER_DECODER:
+        return "encoder_decoder"
+    if traits.modality == Modality.MULTIMODAL:
+        return "multimodal_decoder"
+    if traits.sequence_family == SequenceFamilyKind.SSM_HYBRID:
+        return "ssm_hybrid"
+    return "decoder"
 
 
 def _detect_mlp_variant(

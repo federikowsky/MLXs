@@ -11,6 +11,7 @@ import mlx.nn as nn
 from mlxs._types import ModelMode
 from mlxs.cache.attention_mask import create_attention_mask
 from mlxs.cache.kv import KVCache
+from mlxs.family_adapters import sanitize_qwen_family_weights
 from mlxs.layers.activations import swiglu
 from mlxs.layers.attention import scaled_dot_product_attention
 from mlxs.layers.rope import initialize_rope
@@ -21,15 +22,6 @@ from mlxs.models.multimodal_shared import (
     prepare_multimodal_inputs,
 )
 from mlxs.models.vision.siglip_builder import build_siglip_vision_tower
-
-_VISION_PREFIXES = (
-    "visual.",
-    "vision_tower.",
-    "vision_model.",
-    "multi_modal_projector.",
-    "mm_projector.",
-)
-_VISION_EXACT = ("visual", "vision_tower", "vision_model")
 
 
 @dataclass
@@ -326,50 +318,19 @@ class Model(nn.Module):
         return [KVCache() for _ in self.model.layers]
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        if self._mode == ModelMode.TEXT:
-            filtered = {
-                key: value
-                for key, value in weights.items()
-                if key not in _VISION_EXACT
-                and not any(key.startswith(prefix) for prefix in _VISION_PREFIXES)
-            }
-            filtered = {
-                (
-                    key[len("language_model.") :]
-                    if key.startswith("language_model.")
-                    else key
-                ): value
-                for key, value in filtered.items()
-            }
-            return _sanitize_text_weights(
-                filtered,
+        return sanitize_qwen_family_weights(
+            weights,
+            model_mode=self._mode,
+            sanitize_text_weights=lambda inner: _sanitize_text_weights(
+                inner,
                 tie_word_embeddings=self.args.tie_word_embeddings,
-            )
-
-        language_weights: dict[str, Any] = {}
-        vision_weights: dict[str, Any] = {}
-        for key, value in weights.items():
-            if key.startswith(("multi_modal_projector.", "mm_projector.")):
-                continue
-            if key.startswith("visual."):
-                key = f"vision_tower.{key[len('visual.') :]}"
-            elif key.startswith("vision_model."):
-                key = f"vision_tower.{key[len('vision_model.') :]}"
-
-            if key.startswith("vision_tower."):
-                vision_weights[key] = value
-            elif key.startswith("language_model."):
-                language_weights[key[len("language_model.") :]] = value
-            else:
-                language_weights[key] = value
-
-        sanitized_language = _sanitize_text_weights(
-            language_weights,
-            tie_word_embeddings=self.args.tie_word_embeddings,
+            ),
+            vision_sanitize=(
+                self.vision_tower.sanitize
+                if hasattr(self, "vision_tower")
+                else None
+            ),
         )
-        if hasattr(self, "vision_tower"):
-            vision_weights = self.vision_tower.sanitize(vision_weights)
-        return sanitized_language | vision_weights
 
     @property
     def layers(self) -> list[TransformerBlock]:

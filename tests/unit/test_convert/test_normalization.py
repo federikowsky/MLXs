@@ -4,8 +4,22 @@ from pathlib import Path
 
 import pytest
 
-from mlxs.convert.normalization import normalize_inspection
-from mlxs.convert.types import ConversionOptions, InspectionReport, SourceKind, TensorInfo
+from mlxs.convert.normalization import (
+    _compatibility_macro_template_from_traits,
+    normalize_inspection,
+)
+from mlxs.convert.types import (
+    ArchitectureTraits,
+    ConversionOptions,
+    ExpertLayoutKind,
+    InspectionReport,
+    MacroTemplate,
+    Modality,
+    SequenceFamilyKind,
+    SourceKind,
+    TensorInfo,
+    TopologyKind,
+)
 
 
 def _inspection(config: dict[str, object], tensor_names: list[str]) -> InspectionReport:
@@ -47,6 +61,10 @@ def test_normalize_dense_decoder() -> None:
 
     assert ir.identity.macro_template.value == "decoder_dense"
     assert ir.identity.runtime_target_model_type == "qwen3"
+    assert ir.traits.modality == Modality.TEXT
+    assert ir.traits.topology_kind == TopologyKind.DECODER
+    assert ir.traits.expert_layout == ExpertLayoutKind.DENSE
+    assert ir.traits.sequence_family == SequenceFamilyKind.ATTENTION
     assert ir.topology.attention_variant == "gqa"
 
 
@@ -72,6 +90,8 @@ def test_normalize_decoder_moe() -> None:
     ir = normalize_inspection(inspection)
 
     assert ir.identity.macro_template.value == "decoder_moe"
+    assert ir.traits.expert_layout == ExpertLayoutKind.MOE
+    assert ir.traits.sequence_family == SequenceFamilyKind.ATTENTION
     assert ir.topology.density.value == "moe"
     assert ir.config.values["num_experts"] == 8
 
@@ -101,6 +121,8 @@ def test_normalize_multimodal_decoder() -> None:
 
     assert ir.identity.macro_template.value == "multimodal_decoder"
     assert ir.topology.multimodal is True
+    assert ir.traits.modality == Modality.MULTIMODAL
+    assert ir.traits.topology_kind == TopologyKind.DECODER
     assert ir.identity.runtime_target_model_type == "qwen2"
     assert ir.conversion.canonical_output_config["model_type"] == "qwen2"
     assert "visual->vision_tower" in ir.tensor_layout.naming_aliases_discovered
@@ -140,6 +162,7 @@ def test_normalize_kimi_vl_multimodal_decoder() -> None:
     assert ir.identity.macro_template.value == "multimodal_decoder"
     assert ir.identity.runtime_target_model_type == "kimi_vl"
     assert ir.identity.supported_by_runtime is True
+    assert ir.traits.modality == Modality.MULTIMODAL
     assert ir.topology.multimodal is True
 
 
@@ -213,6 +236,10 @@ def test_normalize_qwen3_5_moe_multimodal_preserves_hybrid_moe_traits() -> None:
     assert ir.identity.macro_template.value == "multimodal_decoder"
     assert ir.identity.runtime_target_model_type == "qwen3_5_moe"
     assert ir.identity.supported_by_runtime is True
+    assert ir.traits.modality == Modality.MULTIMODAL
+    assert ir.traits.topology_kind == TopologyKind.DECODER
+    assert ir.traits.expert_layout == ExpertLayoutKind.MOE
+    assert ir.traits.sequence_family == SequenceFamilyKind.SSM_HYBRID
     assert ir.topology.multimodal is True
     assert ir.topology.ssm_hybrid is True
     assert ir.topology.density.value == "moe"
@@ -234,6 +261,8 @@ def test_normalize_ssm_hybrid() -> None:
     ir = normalize_inspection(inspection)
 
     assert ir.identity.macro_template.value == "ssm_hybrid"
+    assert ir.traits.expert_layout == ExpertLayoutKind.DENSE
+    assert ir.traits.sequence_family == SequenceFamilyKind.SSM_HYBRID
     assert ir.topology.ssm_hybrid is True
     assert "conv_axis_sensitive" in ir.evidence.selected_rules
 
@@ -254,4 +283,62 @@ def test_normalize_encoder_decoder_marks_unsupported_runtime() -> None:
     ir = normalize_inspection(inspection)
 
     assert ir.identity.macro_template.value == "encoder_decoder"
+    assert ir.traits.topology_kind == TopologyKind.ENCODER_DECODER
     assert ir.identity.supported_by_runtime is False
+
+
+@pytest.mark.parametrize(
+    ("traits", "expected"),
+    [
+        (
+            ArchitectureTraits(
+                modality=Modality.TEXT,
+                topology_kind=TopologyKind.DECODER,
+                expert_layout=ExpertLayoutKind.DENSE,
+                sequence_family=SequenceFamilyKind.ATTENTION,
+            ),
+            MacroTemplate.DECODER_DENSE,
+        ),
+        (
+            ArchitectureTraits(
+                modality=Modality.TEXT,
+                topology_kind=TopologyKind.DECODER,
+                expert_layout=ExpertLayoutKind.MOE,
+                sequence_family=SequenceFamilyKind.ATTENTION,
+            ),
+            MacroTemplate.DECODER_MOE,
+        ),
+        (
+            ArchitectureTraits(
+                modality=Modality.TEXT,
+                topology_kind=TopologyKind.DECODER,
+                expert_layout=ExpertLayoutKind.MOE,
+                sequence_family=SequenceFamilyKind.SSM_HYBRID,
+            ),
+            MacroTemplate.SSM_HYBRID,
+        ),
+        (
+            ArchitectureTraits(
+                modality=Modality.MULTIMODAL,
+                topology_kind=TopologyKind.DECODER,
+                expert_layout=ExpertLayoutKind.MOE,
+                sequence_family=SequenceFamilyKind.SSM_HYBRID,
+            ),
+            MacroTemplate.MULTIMODAL_DECODER,
+        ),
+        (
+            ArchitectureTraits(
+                modality=Modality.MULTIMODAL,
+                topology_kind=TopologyKind.ENCODER_DECODER,
+                expert_layout=ExpertLayoutKind.DENSE,
+                sequence_family=SequenceFamilyKind.ATTENTION,
+            ),
+            MacroTemplate.MULTIMODAL_ENCODER_DECODER,
+        ),
+    ],
+)
+def test_compatibility_macro_template_is_derived_from_traits(
+    traits: ArchitectureTraits,
+    expected: MacroTemplate,
+) -> None:
+    assert _compatibility_macro_template_from_traits(traits) == expected

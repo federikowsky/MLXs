@@ -12,6 +12,7 @@ from mlxs._types import ModelMode
 from mlxs.cache.arrays import ArraysCache
 from mlxs.cache.attention_mask import create_attention_mask, create_ssm_mask
 from mlxs.cache.kv import KVCache
+from mlxs.family_adapters import sanitize_qwen35_moe_family_weights
 from mlxs.layers.moe import SwitchGLU
 from mlxs.models.multimodal_shared import (
     MediaBranch,
@@ -31,15 +32,6 @@ from mlxs.models.qwen3_5 import (
     ModelArgs as Qwen35ModelArgs,
 )
 from mlxs.models.vision.siglip_builder import build_siglip_vision_tower
-
-_VISION_PREFIXES = (
-    "visual.",
-    "vision_tower.",
-    "vision_model.",
-    "multi_modal_projector.",
-    "mm_projector.",
-)
-_VISION_EXACT = ("visual", "vision_tower", "vision_model")
 
 
 @dataclass
@@ -308,34 +300,16 @@ class Model(nn.Module):
         return self.language_model.layers
 
     def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
-        if self._mode == ModelMode.TEXT:
-            filtered = {
-                key: value
-                for key, value in weights.items()
-                if key not in _VISION_EXACT
-                and not any(key.startswith(prefix) for prefix in _VISION_PREFIXES)
-            }
-            return _sanitize_language_weights(self.language_model, filtered)
-
-        language_weights: dict[str, Any] = {}
-        vision_weights: dict[str, Any] = {}
-        for key, value in weights.items():
-            if key.startswith(("multi_modal_projector.", "mm_projector.")):
-                continue
-            if key.startswith("visual."):
-                key = f"vision_tower.{key[len('visual.') :]}"
-            elif key.startswith("vision_model."):
-                key = f"vision_tower.{key[len('vision_model.') :]}"
-
-            if key.startswith("vision_tower."):
-                vision_weights[key] = value
-            else:
-                language_weights[key] = value
-
-        sanitized_language = _sanitize_language_weights(self.language_model, language_weights)
-        if hasattr(self, "vision_tower"):
-            vision_weights = self.vision_tower.sanitize(vision_weights)
-        return sanitized_language | vision_weights
+        return sanitize_qwen35_moe_family_weights(
+            weights,
+            model_mode=self._mode,
+            tie_word_embeddings=self.args.tie_word_embeddings,
+            vision_sanitize=(
+                self.vision_tower.sanitize
+                if hasattr(self, "vision_tower")
+                else None
+            ),
+        )
 
     @property
     def supports_vision(self) -> bool:
@@ -348,46 +322,3 @@ class Model(nn.Module):
     @property
     def image_token_id(self) -> int | None:
         return self._image_token_id if self.supports_vision else None
-
-
-def _normalize_language_model_weights(weights: dict[str, Any]) -> dict[str, Any]:
-    normalized: dict[str, Any] = {}
-    for key, value in weights.items():
-        if key.startswith(("vision_tower", "visual.", "model.visual")):
-            continue
-        if key.startswith("model.language_model"):
-            key = key.replace("model.language_model", "language_model.model", 1)
-        elif not key.startswith("language_model."):
-            key = "language_model." + key
-        normalized[key] = value
-    return normalized
-
-
-def _sanitize_language_weights(
-    language_model: Qwen35LanguageModel,
-    weights: dict[str, Any],
-) -> dict[str, Any]:
-    sanitized = _normalize_language_model_weights(weights)
-    for layer_idx in range(language_model.args.num_hidden_layers):
-        prefix = f"language_model.model.layers.{layer_idx}.mlp"
-        gate_up_key = f"{prefix}.experts.gate_up_proj"
-        if gate_up_key not in sanitized:
-            continue
-
-        gate_up = sanitized.pop(gate_up_key)
-        mid = gate_up.shape[-2] // 2
-        sanitized[f"{prefix}.switch_mlp.gate_proj.weight"] = gate_up[..., :mid, :]
-        sanitized[f"{prefix}.switch_mlp.up_proj.weight"] = gate_up[..., mid:, :]
-
-        down_key = f"{prefix}.experts.down_proj"
-        if down_key in sanitized:
-            sanitized[f"{prefix}.switch_mlp.down_proj.weight"] = sanitized.pop(down_key)
-
-    return _text_model_sanitize(language_model, sanitized)
-
-
-def _text_model_sanitize(
-    language_model: Qwen35LanguageModel,
-    weights: dict[str, Any],
-) -> dict[str, Any]:
-    return language_model.sanitize(weights)

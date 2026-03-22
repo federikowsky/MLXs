@@ -101,3 +101,70 @@ def test_qwen3_5_multimodal_prepare_inputs_with_video() -> None:
     assert input_embeddings is not None
     assert input_embeddings.shape == (1, 4, MINIMAL_QWEN3_5["hidden_size"])
     assert logits.shape == (1, 4, model.vocab_size)
+
+
+def test_qwen3_5_text_sanitize_uses_shared_family_remap() -> None:
+    """qwen3_5 text sanitize keeps qwen3.5-specific cleanup on shared helpers."""
+    ModelCls, ArgsCls = get_model_classes("qwen3_5")
+    args = ArgsCls.from_dict({**MINIMAL_QWEN3_5, "tie_word_embeddings": True})
+    model = ModelCls(args)
+
+    sanitized = model.sanitize(
+        {
+            "language_model.model.embed_tokens.weight": mx.ones((2, 2), dtype=mx.float32),
+            "model.layers.0.linear_attn.conv1d.weight": mx.ones((8, 3, 4), dtype=mx.float32),
+            "model.layers.0.input_layernorm.weight": mx.ones((8,), dtype=mx.float32),
+            "mtp.foo.weight": mx.ones((1,), dtype=mx.float32),
+            "visual.patch_embed.proj.weight": mx.ones((4, 3, 1, 1, 1), dtype=mx.float32),
+            "lm_head.weight": mx.ones((2, 2), dtype=mx.float32),
+        }
+    )
+
+    assert "model.embed_tokens.weight" in sanitized
+    assert "language_model.model.embed_tokens.weight" not in sanitized
+    assert "mtp.foo.weight" not in sanitized
+    assert "visual.patch_embed.proj.weight" not in sanitized
+    assert "lm_head.weight" not in sanitized
+    assert tuple(sanitized["model.layers.0.linear_attn.conv1d.weight"].shape) == (8, 4, 3)
+    assert mx.allclose(
+        sanitized["model.layers.0.input_layernorm.weight"],
+        mx.full((8,), 2.0, dtype=mx.float32),
+    )
+
+
+def test_qwen3_5_multimodal_sanitize_uses_shared_family_remap() -> None:
+    """qwen3_5 multimodal sanitize keeps visual aliasing on the shared helper path."""
+    ModelCls, ArgsCls = get_model_classes("qwen3_5")
+    args = ArgsCls.from_dict(
+        {
+            "model_type": "qwen3_5",
+            "text_config": MINIMAL_QWEN3_5,
+            "vision_config": {
+                "depth": 1,
+                "hidden_size": 16,
+                "out_hidden_size": 64,
+                "num_heads": 4,
+                "patch_size": 1,
+                "temporal_patch_size": 1,
+                "spatial_merge_size": 1,
+                "in_channels": 3,
+                "mlp_ratio": 2.0,
+            },
+            "image_token_id": 250,
+            "video_token_id": 251,
+        }
+    )
+    model = ModelCls(args, model_mode=ModelMode.MULTIMODAL)
+
+    sanitized = model.sanitize(
+        {
+            "language_model.model.embed_tokens.weight": mx.ones((2, 2), dtype=mx.float32),
+            "visual.patch_embed.proj.weight": mx.ones((4, 3, 1, 1, 1), dtype=mx.float32),
+            "vision_model.blocks.0.norm1.weight": mx.ones((16,), dtype=mx.float32),
+        }
+    )
+
+    assert "model.embed_tokens.weight" in sanitized
+    assert "vision_tower.patch_embed.proj.weight" in sanitized
+    assert tuple(sanitized["vision_tower.patch_embed.proj.weight"].shape) == (4, 1, 1, 1, 3)
+    assert "vision_tower.blocks.0.norm1.weight" in sanitized

@@ -1107,8 +1107,68 @@ def test_convert_source_e2e_runtime(case: RuntimeCase, tmp_path: Path) -> None:
     assert manifest["runtime_target_model_type"] == case.runtime_target
     assert manifest["runtime_model_mode"] == result.plan.runtime_model_mode
     assert manifest["target_schema_hash"] == result.plan.target_schema_hash
+    assert manifest["architecture_traits"] == {
+        "modality": result.canonical_ir.traits.modality.value,
+        "topology_kind": result.canonical_ir.traits.topology_kind.value,
+        "expert_layout": result.canonical_ir.traits.expert_layout.value,
+        "sequence_family": result.canonical_ir.traits.sequence_family.value,
+    }
+    assert result.execution.dependency_plan is not None
+    assert result.execution.load_strategy == "selective_safetensors"
+    assert result.execution.loaded_source_tensors == (
+        result.execution.dependency_plan.referenced_source_tensors
+    )
+    assert result.execution.materialization_strategy == "single_file_buffered"
+    assert len(result.execution.output_pack_groups) == 1
+    assert manifest["execution_dependency_summary"]["load_strategy"] == "selective_safetensors"
+    assert (
+        manifest["execution_dependency_summary"]["materialization_strategy"]
+        == "single_file_buffered"
+    )
+    assert manifest["execution_dependency_summary"]["referenced_source_tensor_count"] == len(
+        result.execution.dependency_plan.referenced_source_tensors
+    )
+    assert manifest["execution_dependency_summary"]["loaded_source_tensor_count"] == len(
+        result.execution.loaded_source_tensors
+    )
+    assert manifest["execution_dependency_summary"]["referenced_source_shards"] == list(
+        result.execution.dependency_plan.referenced_source_shards
+    )
+    assert len(manifest["execution_dependency_summary"]["output_pack_groups"]) == 1
+    assert (
+        manifest["execution_dependency_summary"]["output_pack_groups"][0]["target_count"]
+        == len(result.execution.output_pack_groups[0].target_names)
+    )
     assert len(manifest["mapping_provenance"]) == len(result.plan.mappings)
     assert len(manifest["required_target_names"]) == len(result.plan.required_target_names)
+    assert all(
+        {"target_name", "source_names", "rule_id", "match_layer", "transforms"} <= set(entry)
+        for entry in manifest["mapping_provenance"]
+    )
+    if case.name in {"qwen2_multimodal", "qwen3_multimodal"}:
+        assert any(
+            entry["match_layer"] == "family_adapter"
+            and entry["adapter_name"] == "qwen_family"
+            for entry in manifest["mapping_provenance"]
+        )
+    if case.name == "qwen3_5_multimodal":
+        assert any(
+            entry["match_layer"] == "family_adapter"
+            and entry["adapter_name"] == "qwen35_family"
+            for entry in manifest["mapping_provenance"]
+        )
+    if case.name in {"qwen3_5_moe", "qwen3_5_moe_multimodal"}:
+        assert any(
+            entry["match_layer"] == "family_adapter"
+            and entry["adapter_name"] == "qwen35_moe_family"
+            for entry in manifest["mapping_provenance"]
+        )
+    if case.name == "qwen3_moe_multimodal":
+        assert any(
+            entry["match_layer"] == "generic_alias"
+            and entry["adapter_name"] is None
+            for entry in manifest["mapping_provenance"]
+        )
 
     converted = load_file(str(output_dir / "model.safetensors"))
     if case.tensor_compare == "allclose":
@@ -1135,6 +1195,50 @@ def test_convert_source_e2e_runtime(case: RuntimeCase, tmp_path: Path) -> None:
     )
     assert loaded_model is not None
     assert loaded_tokenizer.vocab_size == 5
+
+
+def test_convert_source_e2e_runtime_sharded_output_preserves_index_and_verification(
+    tmp_path: Path,
+) -> None:
+    case = next(runtime_case for runtime_case in SUPPORTED_CASES if runtime_case.name == "qwen3")
+    reference = _build_reference_tensors(
+        case.runtime_target,
+        case.config,
+        multimodal=case.multimodal,
+    )
+    source_tensors = case.source_builder(reference, case.config)
+    source_dir = tmp_path / case.name / "source"
+    output_dir = tmp_path / case.name / "output-sharded"
+    _save_fixture(source_dir, case.config, source_tensors)
+
+    result = convert_source(
+        source_dir,
+        output_dir,
+        options=ConversionOptions(
+            verification_mode=VerificationMode.STRICT,
+            max_shard_bytes=64,
+        ),
+    )
+
+    manifest = json.loads(result.manifest_path.read_text())
+    assert result.execution.materialization_strategy == "incremental_shard_buffered"
+    assert result.execution.weight_index_file == "model.safetensors.index.json"
+    assert len(result.execution.weight_files) > 1
+    assert len(result.execution.output_pack_groups) == len(result.execution.weight_files)
+    assert manifest["execution_dependency_summary"]["materialization_strategy"] == (
+        "incremental_shard_buffered"
+    )
+    assert len(manifest["execution_dependency_summary"]["output_pack_groups"]) == len(
+        result.execution.weight_files
+    )
+    assert (output_dir / "model.safetensors.index.json").is_file()
+    assert all((output_dir / file_name).is_file() for file_name in result.execution.weight_files)
+
+    verification = verify_output(
+        output_dir,
+        options=ConversionOptions(verification_mode=VerificationMode.STRICT),
+    )
+    assert verification.status.value == "passed"
 
 
 @pytest.mark.parametrize(

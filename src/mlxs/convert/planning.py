@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from mlxs._types import ModelMode
 from mlxs.convert.errors import (
     ConverterError,
     MissingRequiredTensorError,
@@ -20,13 +21,18 @@ from mlxs.convert.types import (
     ConversionPhase,
     ConversionPlan,
     InspectionReport,
-    MacroTemplate,
     PlanningContext,
     RuntimeTensorSchemaEntry,
     TensorTargetPlan,
     TensorTransform,
     TensorTransformKind,
     VerificationMode,
+)
+from mlxs.family_adapters import (
+    AdapterAliasMatch,
+    AdapterMappingMatch,
+    AdapterTransformSpec,
+    get_family_adapter,
 )
 
 
@@ -125,29 +131,21 @@ def _mapping_for_target(
     context: PlanningContext,
     canonical_ir: CanonicalIR,
 ) -> TensorTargetPlan | None:
-    exact = _alias_candidates(target_name)
-    for candidate in exact:
-        tensor = context.source_tensors.get(candidate)
-        if tensor is None:
-            continue
-        transforms = list(
-            _shape_adjustments(
-                candidate,
-                tensor.shape,
-                target_name,
-                target_shape,
-                context,
-                canonical_ir,
-            )
-        )
-        context.used_source_names.add(candidate)
-        return TensorTargetPlan(
-            target_name=target_name,
-            source_names=(candidate,),
-            transforms=tuple(transforms),
-            rule_id="exact" if candidate == target_name else "generic_alias",
-            note=None if candidate == target_name else f"Matched via alias candidate {candidate}",
-        )
+    if exact := _mapping_from_exact_match(
+        target_name,
+        target_shape,
+        context,
+        canonical_ir,
+    ):
+        return exact
+
+    if adapter_match := _mapping_from_family_adapter(
+        target_name,
+        target_shape,
+        context,
+        canonical_ir,
+    ):
+        return adapter_match
 
     specialized = (
         _stack_triplet_experts(target_name, context, canonical_ir)
@@ -158,10 +156,205 @@ def _mapping_for_target(
         or _split_feed_forward_experts(target_name, context)
     )
     if specialized is None:
-        return None
+        return _mapping_from_generic_alias(
+            target_name,
+            target_shape,
+            context,
+            canonical_ir,
+        )
     for source_name in specialized.source_names:
         context.used_source_names.add(source_name)
     return specialized
+
+
+def _mapping_from_exact_match(
+    target_name: str,
+    target_shape: tuple[int, ...],
+    context: PlanningContext,
+    canonical_ir: CanonicalIR,
+) -> TensorTargetPlan | None:
+    return _mapping_from_source_names(
+        target_name,
+        target_shape,
+        source_names=(target_name,),
+        context=context,
+        canonical_ir=canonical_ir,
+        rule_id="exact",
+        match_layer="exact",
+    )
+
+
+def _mapping_from_family_adapter(
+    target_name: str,
+    target_shape: tuple[int, ...],
+    context: PlanningContext,
+    canonical_ir: CanonicalIR,
+) -> TensorTargetPlan | None:
+    adapter = get_family_adapter(canonical_ir.identity.runtime_target_model_type)
+    if adapter is None:
+        return None
+    model_mode = _planner_model_mode(canonical_ir)
+    for match in adapter.mapping_matches(target_name, model_mode=model_mode):
+        mapping = _mapping_from_adapter_mapping_match(
+            target_name,
+            target_shape,
+            context,
+            canonical_ir,
+            match,
+            adapter_name=adapter.adapter_name,
+        )
+        if mapping is not None:
+            return mapping
+    for match in adapter.alias_matches(target_name, model_mode=model_mode):
+        mapping = _mapping_from_adapter_alias_match(
+            target_name,
+            target_shape,
+            context,
+            canonical_ir,
+            match,
+            adapter_name=adapter.adapter_name,
+        )
+        if mapping is not None:
+            return mapping
+    return None
+
+
+def _mapping_from_generic_alias(
+    target_name: str,
+    target_shape: tuple[int, ...],
+    context: PlanningContext,
+    canonical_ir: CanonicalIR,
+) -> TensorTargetPlan | None:
+    for candidate in _generic_alias_candidates(target_name):
+        mapping = _mapping_from_source_names(
+            target_name,
+            target_shape,
+            source_names=(candidate,),
+            context=context,
+            canonical_ir=canonical_ir,
+            rule_id="generic_alias",
+            match_layer="generic_alias",
+            note=f"Matched via generic alias candidate {candidate}",
+        )
+        if mapping is not None:
+            return mapping
+    return None
+
+
+def _mapping_from_adapter_alias_match(
+    target_name: str,
+    target_shape: tuple[int, ...],
+    context: PlanningContext,
+    canonical_ir: CanonicalIR,
+    match: AdapterAliasMatch,
+    *,
+    adapter_name: str,
+) -> TensorTargetPlan | None:
+    return _mapping_from_source_names(
+        target_name,
+        target_shape,
+        source_names=match.source_names,
+        context=context,
+        canonical_ir=canonical_ir,
+        rule_id=match.rule_id,
+        match_layer="family_adapter",
+        adapter_name=adapter_name,
+        note=match.note,
+    )
+
+
+def _mapping_from_adapter_mapping_match(
+    target_name: str,
+    target_shape: tuple[int, ...],
+    context: PlanningContext,
+    canonical_ir: CanonicalIR,
+    match: AdapterMappingMatch,
+    *,
+    adapter_name: str,
+) -> TensorTargetPlan | None:
+    return _mapping_from_source_names(
+        target_name,
+        target_shape,
+        source_names=match.source_names,
+        context=context,
+        canonical_ir=canonical_ir,
+        rule_id=match.rule_id,
+        match_layer="family_adapter",
+        adapter_name=adapter_name,
+        note=match.note,
+        transforms=tuple(_adapter_transform(spec) for spec in match.transforms),
+    )
+
+
+def _mapping_from_source_names(
+    target_name: str,
+    target_shape: tuple[int, ...],
+    *,
+    source_names: tuple[str, ...],
+    context: PlanningContext,
+    canonical_ir: CanonicalIR,
+    rule_id: str,
+    match_layer: str,
+    adapter_name: str | None = None,
+    note: str | None = None,
+    transforms: tuple[TensorTransform, ...] = (),
+) -> TensorTargetPlan | None:
+    if len(source_names) != 1:
+        if not all(name in context.source_tensors for name in source_names):
+            return None
+        for source_name in source_names:
+            context.used_source_names.add(source_name)
+        return TensorTargetPlan(
+            target_name=target_name,
+            source_names=source_names,
+            rule_id=rule_id,
+            match_layer=match_layer,
+            adapter_name=adapter_name,
+            note=note,
+            transforms=transforms,
+        )
+
+    candidate = source_names[0]
+    tensor = context.source_tensors.get(candidate)
+    if tensor is None:
+        return None
+    adjusted_transforms = list(transforms)
+    adjusted_transforms.extend(
+        _shape_adjustments(
+            candidate,
+            tensor.shape,
+            target_name,
+            target_shape,
+            context,
+            canonical_ir,
+        )
+    )
+    context.used_source_names.add(candidate)
+    return TensorTargetPlan(
+        target_name=target_name,
+        source_names=(candidate,),
+        transforms=tuple(adjusted_transforms),
+        rule_id=rule_id,
+        match_layer=match_layer,
+        adapter_name=adapter_name,
+        note=note,
+    )
+
+
+def _adapter_transform(spec: AdapterTransformSpec) -> TensorTransform:
+    return TensorTransform(
+        kind=TensorTransformKind(spec.kind),
+        scalar=spec.scalar,
+        axis=spec.axis,
+        permutation=spec.permutation,
+        source_axis=spec.source_axis,
+        target_axis=spec.target_axis,
+        shape=spec.shape,
+        slice_start=spec.slice_start,
+        slice_stop=spec.slice_stop,
+        dtype=spec.dtype,
+        note=spec.note,
+    )
 
 
 def _alias_candidates(target_name: str) -> tuple[str, ...]:
@@ -202,6 +395,12 @@ def _alias_candidates(target_name: str) -> tuple[str, ...]:
         if ".merger.mlp.2." in candidate:
             add(candidate.replace(".merger.mlp.2.", ".merger.linear_fc2.", 1))
     return tuple(candidates)
+
+
+def _generic_alias_candidates(target_name: str) -> tuple[str, ...]:
+    return tuple(
+        candidate for candidate in _alias_candidates(target_name) if candidate != target_name
+    )
 
 
 def _shape_adjustments(
@@ -328,6 +527,7 @@ def _stack_triplet_experts(
             ),
         ),
         rule_id="stack_triplet_experts",
+        match_layer="structural",
     )
 
 
@@ -370,6 +570,7 @@ def _stack_named_experts(
             ),
         ),
         rule_id="stack_named_experts",
+        match_layer="structural",
     )
 
 
@@ -397,6 +598,7 @@ def _split_switch_mlp_input_linear(
                 ),
                 note="switch_mlp_input_linear_split",
                 rule_id="switch_mlp_input_linear_split",
+                match_layer="structural",
             )
     if ".switch_mlp.up_proj.weight" in target_name:
         source_name = target_name.replace(
@@ -418,6 +620,7 @@ def _split_switch_mlp_input_linear(
                 ),
                 note="switch_mlp_input_linear_split",
                 rule_id="switch_mlp_input_linear_split",
+                match_layer="structural",
             )
     if ".switch_mlp.down_proj.weight" in target_name:
         source_name = target_name.replace(
@@ -429,6 +632,7 @@ def _split_switch_mlp_input_linear(
                 target_name=target_name,
                 source_names=(source_name,),
                 rule_id="switch_mlp_output_linear_alias",
+                match_layer="structural",
             )
     return None
 
@@ -474,6 +678,7 @@ def _split_gate_up_proj(target_name: str, context: PlanningContext) -> TensorTar
             ),
             note="gate_up_split",
             rule_id="gate_up_split",
+            match_layer="structural",
         )
     if target_name.endswith(".switch_mlp.down_proj.weight"):
         source_name = _resolve_source_name(
@@ -488,13 +693,17 @@ def _split_gate_up_proj(target_name: str, context: PlanningContext) -> TensorTar
             source_names=(source_name,),
             note="expert_down_proj_alias",
             rule_id="expert_down_proj_alias",
+            match_layer="structural",
         )
     return None
 
 
 def _split_shared_mlp(target_name: str, context: PlanningContext) -> TensorTargetPlan | None:
     if ".mlp.gate_proj.weight" in target_name:
-        source_name = target_name.replace(".mlp.gate_proj.weight", ".shared_mlp.input_linear.weight")
+        source_name = target_name.replace(
+            ".mlp.gate_proj.weight",
+            ".shared_mlp.input_linear.weight",
+        )
         if source_name in context.source_tensors:
             return TensorTargetPlan(
                 target_name=target_name,
@@ -510,9 +719,13 @@ def _split_shared_mlp(target_name: str, context: PlanningContext) -> TensorTarge
                 ),
                 note="shared_mlp_split",
                 rule_id="shared_mlp_split",
+                match_layer="structural",
             )
     if ".mlp.up_proj.weight" in target_name:
-        source_name = target_name.replace(".mlp.up_proj.weight", ".shared_mlp.input_linear.weight")
+        source_name = target_name.replace(
+            ".mlp.up_proj.weight",
+            ".shared_mlp.input_linear.weight",
+        )
         if source_name in context.source_tensors:
             return TensorTargetPlan(
                 target_name=target_name,
@@ -528,19 +741,27 @@ def _split_shared_mlp(target_name: str, context: PlanningContext) -> TensorTarge
                 ),
                 note="shared_mlp_split",
                 rule_id="shared_mlp_split",
+                match_layer="structural",
             )
     if ".mlp.down_proj.weight" in target_name:
-        source_name = target_name.replace(".mlp.down_proj.weight", ".shared_mlp.output_linear.weight")
+        source_name = target_name.replace(
+            ".mlp.down_proj.weight",
+            ".shared_mlp.output_linear.weight",
+        )
         if source_name in context.source_tensors:
             return TensorTargetPlan(
                 target_name=target_name,
                 source_names=(source_name,),
                 rule_id="shared_mlp_output_linear_alias",
+                match_layer="structural",
             )
     return None
 
 
-def _split_feed_forward_experts(target_name: str, context: PlanningContext) -> TensorTargetPlan | None:
+def _split_feed_forward_experts(
+    target_name: str,
+    context: PlanningContext,
+) -> TensorTargetPlan | None:
     if ".feed_forward.experts.gate_proj.weight" in target_name:
         source_name = target_name.replace(
             ".feed_forward.experts.gate_proj.weight",
@@ -566,6 +787,7 @@ def _split_feed_forward_experts(target_name: str, context: PlanningContext) -> T
                     ),
                 ),
                 rule_id="feed_forward_expert_gate_up_split",
+                match_layer="structural",
             )
     if ".feed_forward.experts.up_proj.weight" in target_name:
         source_name = target_name.replace(
@@ -592,6 +814,7 @@ def _split_feed_forward_experts(target_name: str, context: PlanningContext) -> T
                     ),
                 ),
                 rule_id="feed_forward_expert_gate_up_split",
+                match_layer="structural",
             )
     if ".feed_forward.experts.down_proj.weight" in target_name:
         source_name = target_name.replace(
@@ -611,6 +834,7 @@ def _split_feed_forward_experts(target_name: str, context: PlanningContext) -> T
                     ),
                 ),
                 rule_id="feed_forward_expert_down_align",
+                match_layer="structural",
             )
     return None
 
@@ -692,21 +916,34 @@ def _runtime_model_mode(canonical_ir: CanonicalIR) -> str:
     return "text"
 
 
+def _planner_model_mode(canonical_ir: CanonicalIR) -> ModelMode:
+    return ModelMode(_runtime_model_mode(canonical_ir))
+
+
 def _verification_policy_for_mode(mode: VerificationMode) -> tuple[str, ...]:
     if mode == VerificationMode.SKIP:
         return ()
-    base = (
+    basic = (
         "schema",
         "weight_index",
         "config_invariants",
         "required_tensor_coverage",
+    )
+    strict = (
+        *basic,
         "shape",
         "schema_hash",
         "artifacts",
     )
+    if mode == VerificationMode.BASIC:
+        return basic
+    if mode == VerificationMode.STRICT:
+        return strict
     if mode == VerificationMode.REQUIRED:
-        return base + ("runtime_smoke",)
-    return base
+        return (*strict, "runtime_smoke")
+    if mode == VerificationMode.PARANOID:
+        return (*strict, "runtime_smoke", "minimal_forward")
+    return strict
 
 
 def _ensure_unique_names(
