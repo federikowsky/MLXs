@@ -36,7 +36,7 @@ from mlxs.adaptive_kv.recompute import AdaptiveRecomputeCoordinator
 from mlxs.adaptive_kv.scoring import AdaptiveScoreEngine
 from mlxs.adaptive_kv.storage import (
     AdaptiveAttentionSegment,
-    AdaptiveCompressedBlockStore,
+    AdaptiveCompressedRunStore,
     AdaptiveResidentState,
 )
 from mlxs.adaptive_kv.transitions import AdaptiveTransitionEngine
@@ -54,7 +54,9 @@ class AdaptiveLayerCache:
         self._logical_offset = 0
         self._full_cache = KVCache()
         self._full_block_slices: dict[int, tuple[int, int]] = {}
-        self._compressed_blocks: dict[int, AdaptiveCompressedBlockStore] = {}
+        self._compressed_runs: dict[int, AdaptiveCompressedRunStore] = {}
+        self._compressed_block_runs: dict[int, int] = {}
+        self._next_compressed_run_id = 0
         self._resident_state: AdaptiveResidentState | None = None
         self._resident_state_version = -1
         self._assembled_keys: mx.array | None = None
@@ -81,8 +83,8 @@ class AdaptiveLayerCache:
         tensors: list[Any] = []
         if self._full_cache.state is not None:
             tensors.append(self._full_cache.state)
-        for store in self._compressed_blocks.values():
-            tensors.append(store.state_tensors())
+        for run in self._ordered_compressed_runs():
+            tensors.append(run.state_tensors())
         return tuple(tensors) if tensors else None
 
     @property
@@ -92,13 +94,13 @@ class AdaptiveLayerCache:
     @property
     def live_state_size_bytes(self) -> int:
         total = self._full_cache.live_state_size_bytes
-        total += sum(store.live_bytes for store in self._compressed_blocks.values())
+        total += sum(run.live_bytes for run in self._compressed_runs.values())
         return total
 
     @property
     def resident_token_count(self) -> int:
         return self._full_cache.offset + sum(
-            store.token_count for store in self._compressed_blocks.values()
+            run.token_count for run in self._compressed_runs.values()
         )
 
     def update_and_fetch(self, keys: mx.array, values: mx.array) -> tuple[Any, Any]:
@@ -136,14 +138,15 @@ class AdaptiveLayerCache:
             for block_id, _, _ in segment.block_slices:
                 removals.append(block_id)
         for block_id in removals:
-            if block_id in self._compressed_blocks:
-                del self._compressed_blocks[block_id]
+            if block_id in self._compressed_block_runs:
+                self._remove_compressed_block(block_id)
             if block_id in self._full_block_slices:
                 self._remove_full_block(block_id)
-        self._manager.bump_resident_version()
+        if removals:
+            self._manager.bump_resident_version()
 
     def demote_block(self, block_id: int) -> None:
-        if block_id in self._compressed_blocks:
+        if block_id in self._compressed_block_runs:
             return
         full_keys, full_values = self._full_block_tensors(block_id)
         if full_keys is None or full_values is None:
@@ -152,29 +155,35 @@ class AdaptiveLayerCache:
             k_head_dim=full_keys.shape[-1],
             v_head_dim=full_values.shape[-1],
         )
-        self._compressed_blocks[block_id] = AdaptiveCompressedBlockStore.from_full(
-            full_keys,
-            full_values,
+        run = AdaptiveCompressedRunStore.from_full_block(
+            self._allocate_compressed_run_id(),
+            block_id=block_id,
+            keys=full_keys,
+            values=full_values,
             group_size=group_size,
             bits=8,
         )
         self._remove_full_block(block_id)
+        self._insert_compressed_run(block_id, run)
         self._manager.bump_resident_version()
 
     def promote_block(self, block_id: int) -> None:
-        store = self._compressed_blocks.get(block_id)
-        if store is None:
+        run = self._compressed_run(block_id)
+        if run is None:
             raise AdaptiveKVError(
                 f"Cannot promote block {block_id}: missing compressed resident state"
             )
-        keys, values = store.dequantize(dtype=self._dtype)
-        del self._compressed_blocks[block_id]
+        keys, values = run.block_tensors(
+            block_id,
+            dtype=self._dtype if self._dtype is not None else mx.float32,
+        )
+        self._remove_compressed_block(block_id)
         self._insert_full_block(block_id, keys, values)
         self._manager.bump_resident_version()
 
     def evict_block(self, block_id: int) -> None:
-        if block_id in self._compressed_blocks:
-            del self._compressed_blocks[block_id]
+        if block_id in self._compressed_block_runs:
+            self._remove_compressed_block(block_id)
             self._manager.bump_resident_version()
             return
         if block_id in self._full_block_slices:
@@ -184,7 +193,7 @@ class AdaptiveLayerCache:
             )
 
     def recover_block(self, block_id: int, keys: mx.array, values: mx.array) -> None:
-        if block_id in self._full_block_slices or block_id in self._compressed_blocks:
+        if block_id in self._full_block_slices or block_id in self._compressed_block_runs:
             return
         expected = self._manager.registry.get(block_id).token_count
         if keys.shape[2] != expected or values.shape[2] != expected:
@@ -196,12 +205,15 @@ class AdaptiveLayerCache:
             k_head_dim=keys.shape[-1],
             v_head_dim=values.shape[-1],
         )
-        self._compressed_blocks[block_id] = AdaptiveCompressedBlockStore.from_full(
-            keys,
-            values,
+        run = AdaptiveCompressedRunStore.from_full_block(
+            self._allocate_compressed_run_id(),
+            block_id=block_id,
+            keys=keys,
+            values=values,
             group_size=group_size,
             bits=8,
         )
+        self._insert_compressed_run(block_id, run)
         self._manager.bump_resident_version()
 
     def resident_state_for_attention(self) -> AdaptiveResidentState:
@@ -231,6 +243,7 @@ class AdaptiveLayerCache:
             run_slice = None
             run_blocks = []
 
+        emitted_compressed_runs: set[int] = set()
         for block in self._manager.registry.covered_resident_blocks(self._logical_offset):
             if block.tier is BlockTier.FULL:
                 block_slice = self._full_block_slices.get(block.block_id)
@@ -253,23 +266,32 @@ class AdaptiveLayerCache:
                 continue
 
             flush_full_run()
-            store = self._compressed_blocks.get(block.block_id)
-            if store is None:
+            run_id = self._compressed_block_runs.get(block.block_id)
+            if run_id is None:
                 raise AdaptiveKVError(
-                    f"Adaptive resident state is missing COMPRESSED store for block "
+                    f"Adaptive resident state is missing COMPRESSED run for block "
+                    f"{block.block_id}"
+                )
+            if run_id in emitted_compressed_runs:
+                continue
+            run = self._compressed_runs.get(run_id)
+            if run is None:
+                raise AdaptiveKVError(
+                    f"Adaptive resident state is missing COMPRESSED run store for block "
                     f"{block.block_id}"
                 )
             segments.append(
                 AdaptiveAttentionSegment(
                     tier=BlockTier.COMPRESSED,
-                    token_count=store.token_count,
-                    block_slices=((block.block_id, 0, store.token_count),),
-                    q_keys=store.q_keys,
-                    q_values=store.q_values,
-                    group_size=store.group_size,
-                    bits=store.bits,
+                    token_count=run.token_count,
+                    block_slices=run.block_slices,
+                    q_keys=run.q_keys,
+                    q_values=run.q_values,
+                    group_size=run.group_size,
+                    bits=run.bits,
                 )
             )
+            emitted_compressed_runs.add(run_id)
 
         flush_full_run()
         resident_token_count = sum(segment.token_count for segment in segments)
@@ -304,7 +326,9 @@ class AdaptiveLayerCache:
     def reset(self) -> None:
         self._full_cache.reset()
         self._full_block_slices = {}
-        self._compressed_blocks = {}
+        self._compressed_runs = {}
+        self._compressed_block_runs = {}
+        self._next_compressed_run_id = 0
         self._logical_offset = 0
         self._resident_state = None
         self._resident_state_version = -1
@@ -336,8 +360,9 @@ class AdaptiveLayerCache:
             cursor += segment.token_count
 
     def block_live_bytes(self, block_id: int) -> int:
-        if block_id in self._compressed_blocks:
-            return self._compressed_blocks[block_id].live_bytes
+        run = self._compressed_run(block_id)
+        if run is not None:
+            return run.block_live_bytes(block_id)
         block_slice = self._full_block_slices.get(block_id)
         if block_slice is None:
             return 0
@@ -356,7 +381,7 @@ class AdaptiveLayerCache:
     ) -> None:
         block_slice = self._full_block_slices.get(block_id)
         if block_slice is None:
-            if block_id in self._compressed_blocks:
+            if block_id in self._compressed_block_runs:
                 raise AdaptiveKVError(
                     f"Cannot append into COMPRESSED block {block_id} without promotion"
                 )
@@ -505,6 +530,108 @@ class AdaptiveLayerCache:
             self._assembled_values = mx.concatenate(values_parts, axis=2)
         self._assembled_version = self._manager.resident_version
         return self._assembled_keys, self._assembled_values
+
+    def _allocate_compressed_run_id(self) -> int:
+        run_id = self._next_compressed_run_id
+        self._next_compressed_run_id += 1
+        return run_id
+
+    def _ordered_compressed_runs(self) -> list[AdaptiveCompressedRunStore]:
+        ordered: list[AdaptiveCompressedRunStore] = []
+        seen: set[int] = set()
+        for block in self._manager.registry.snapshot():
+            run_id = self._compressed_block_runs.get(block.block_id)
+            if run_id is None or run_id in seen:
+                continue
+            run = self._compressed_runs.get(run_id)
+            if run is None:
+                continue
+            ordered.append(run)
+            seen.add(run_id)
+        return ordered
+
+    def _compressed_run(self, block_id: int | None) -> AdaptiveCompressedRunStore | None:
+        if block_id is None:
+            return None
+        run_id = self._compressed_block_runs.get(block_id)
+        if run_id is None:
+            return None
+        return self._compressed_runs.get(run_id)
+
+    def _register_compressed_run(self, run: AdaptiveCompressedRunStore) -> None:
+        self._compressed_runs[run.run_id] = run
+        for block_id, _, _ in run.block_slices:
+            self._compressed_block_runs[block_id] = run.run_id
+
+    def _unregister_compressed_run(self, run: AdaptiveCompressedRunStore) -> None:
+        self._compressed_runs.pop(run.run_id, None)
+        for block_id, _, _ in run.block_slices:
+            if self._compressed_block_runs.get(block_id) == run.run_id:
+                del self._compressed_block_runs[block_id]
+
+    def _neighbor_block_ids(self, block_id: int) -> tuple[int | None, int | None]:
+        blocks = self._manager.registry.snapshot()
+        for idx, block in enumerate(blocks):
+            if block.block_id != block_id:
+                continue
+            prev_id = blocks[idx - 1].block_id if idx > 0 else None
+            next_id = blocks[idx + 1].block_id if idx + 1 < len(blocks) else None
+            return prev_id, next_id
+        return None, None
+
+    def _compressed_neighbor_runs(
+        self,
+        block_id: int,
+    ) -> tuple[AdaptiveCompressedRunStore | None, AdaptiveCompressedRunStore | None]:
+        prev_id, next_id = self._neighbor_block_ids(block_id)
+        return self._compressed_run(prev_id), self._compressed_run(next_id)
+
+    @staticmethod
+    def _can_merge_runs(
+        left: AdaptiveCompressedRunStore,
+        right: AdaptiveCompressedRunStore,
+    ) -> bool:
+        return (
+            left.group_size == right.group_size
+            and left.bits == right.bits
+            and left.q_keys[0].shape[-1] == right.q_keys[0].shape[-1]
+            and left.q_values[0].shape[-1] == right.q_values[0].shape[-1]
+        )
+
+    def _insert_compressed_run(
+        self,
+        block_id: int,
+        run: AdaptiveCompressedRunStore,
+    ) -> None:
+        prev_run, next_run = self._compressed_neighbor_runs(block_id)
+        merged = run
+        if prev_run is not None and self._can_merge_runs(prev_run, merged):
+            merged = prev_run.merge_with(merged, run_id=prev_run.run_id)
+            self._unregister_compressed_run(prev_run)
+        if (
+            next_run is not None
+            and next_run.run_id != merged.run_id
+            and self._can_merge_runs(merged, next_run)
+        ):
+            merged = merged.merge_with(next_run, run_id=merged.run_id)
+            self._unregister_compressed_run(next_run)
+        self._register_compressed_run(merged)
+
+    def _remove_compressed_block(self, block_id: int) -> None:
+        run = self._compressed_run(block_id)
+        if run is None:
+            return
+        block_start, block_end = run.block_slice(block_id)
+        left_run_id = self._allocate_compressed_run_id() if block_start > 0 else None
+        right_run_id = self._allocate_compressed_run_id() if block_end < run.token_count else None
+        _, fragments = run.split_without_block(
+            block_id,
+            left_run_id=left_run_id,
+            right_run_id=right_run_id,
+        )
+        self._unregister_compressed_run(run)
+        for fragment in fragments:
+            self._register_compressed_run(fragment)
 
     @staticmethod
     def _quantized_group_size(*, k_head_dim: int, v_head_dim: int) -> int:

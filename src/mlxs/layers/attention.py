@@ -10,6 +10,8 @@ from typing import Any
 import mlx.core as mx
 from mlx.utils import tree_map
 
+from mlxs.adaptive_kv.block_types import BlockTier
+
 
 def quantized_scaled_dot_product_attention(
     queries: mx.array,
@@ -194,10 +196,32 @@ def adaptive_scaled_dot_product_attention(
             mask=mask,
             sinks=None,
         )
+    if (
+        len(resident_state.segments) == 1
+        and resident_state.segments[0].tier is BlockTier.COMPRESSED
+        and not sample_usage
+    ):
+        segment = resident_state.segments[0]
+        if (
+            segment.q_keys is None
+            or segment.q_values is None
+            or segment.group_size is None
+            or segment.bits is None
+        ):
+            raise ValueError("Adaptive COMPRESSED segment is missing quantized resident tensors")
+        return quantized_scaled_dot_product_attention(
+            queries,
+            segment.q_keys,
+            segment.q_values,
+            scale=scale,
+            mask=mask,
+            group_size=segment.group_size,
+            bits=segment.bits,
+        )
 
     score_parts: list[mx.array] = []
     for segment in resident_state.segments:
-        if segment.tier.value == "full":
+        if segment.tier is BlockTier.FULL:
             if (
                 full_keys is None
                 or full_values is None
@@ -238,12 +262,12 @@ def adaptive_scaled_dot_product_attention(
     scores, _ = _apply_attention_mask(scores, mask)
     weights = mx.softmax(scores, axis=-1, precise=True)
 
-    outputs: list[mx.array] = []
+    out: mx.array | None = None
     cursor = 0
     for segment in resident_state.segments:
         segment_weights = weights[..., cursor : cursor + segment.token_count]
         cursor += segment.token_count
-        if segment.tier.value == "full":
+        if segment.tier is BlockTier.FULL:
             if (
                 full_keys is None
                 or full_values is None
@@ -251,25 +275,20 @@ def adaptive_scaled_dot_product_attention(
             ):
                 raise ValueError("Adaptive FULL segment is missing contiguous resident tensors")
             start, end = segment.full_slice
-            outputs.append(
-                _full_segment_output(
-                    segment_weights,
-                    full_values[..., start:end, :],
-                )
+            segment_out = _full_segment_output(
+                segment_weights,
+                full_values[..., start:end, :],
             )
-            continue
-        outputs.append(
-            _quantized_segment_output(
+        else:
+            segment_out = _quantized_segment_output(
                 segment_weights,
                 segment.q_values,
                 group_size=segment.group_size,
                 bits=segment.bits,
             )
-        )
-
-    out = outputs[0]
-    for segment_out in outputs[1:]:
-        out = out + segment_out
+        out = segment_out if out is None else out + segment_out
+    if out is None:
+        raise ValueError("Adaptive attention requires at least one resident segment output")
     return out, weights
 
 
