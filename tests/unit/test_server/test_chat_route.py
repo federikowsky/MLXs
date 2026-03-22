@@ -9,10 +9,11 @@ from unittest.mock import MagicMock
 import mlx.core as mx
 from starlette.testclient import TestClient
 
+import mlxs.server.routes.chat as chat_route
 from mlxs._types import FinishReason, TokenEvent
+from mlxs.cache.kv import KVCache
 from mlxs.config.schema import AppConfig
 from mlxs.server.app import create_app
-import mlxs.server.routes.chat as chat_route
 
 
 def _make_data_url(mime_type: str, payload: bytes) -> str:
@@ -58,13 +59,13 @@ def _make_deps(model_type: str = "qwen3_5") -> tuple[SimpleNamespace, list[dict[
     calls: list[dict[str, object]] = []
 
     def generate_fn(model, tokenizer, prompt, options, *, input_embeddings=None, **kwargs):  # type: ignore[no-untyped-def]
-        del kwargs
         calls.append(
             {
                 "model_type": getattr(model, "model_type", ""),
                 "prompt": prompt,
                 "options": options,
                 "input_embeddings": input_embeddings,
+                "kwargs": kwargs,
             }
         )
         return iter(
@@ -88,6 +89,17 @@ def _make_deps(model_type: str = "qwen3_5") -> tuple[SimpleNamespace, list[dict[
         generate_fn=generate_fn,
     )
     return deps, calls
+
+
+class _AdaptiveRouteModel:
+    model_type = "llama"
+
+    def make_cache(self) -> list[KVCache]:
+        return [KVCache()]
+
+
+class _UnsupportedAdaptiveRouteModel(_AdaptiveRouteModel):
+    model_type = "qwen"
 
 
 def test_chat_completions_routes_images_through_real_handler(
@@ -217,6 +229,43 @@ def test_chat_completions_routes_supported_video_through_real_handler(
     assert tuple(int(dim) for dim in calls[0]["input_embeddings"].shape) == (3, 4)
 
 
+def test_chat_completions_passes_adaptive_kwargs_to_generate() -> None:
+    deps, calls = _make_deps(model_type="llama")
+    deps.config = AppConfig(**{"adaptive_kv": {"enabled": True}})
+
+    client = TestClient(create_app(deps))
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "mlxs",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls[0]["kwargs"]["adaptive_config"].enabled is True
+    assert calls[0]["kwargs"]["metrics"] is deps.metrics
+
+
+def test_chat_completions_reports_adaptive_compatibility_cleanly() -> None:
+    deps, calls = _make_deps(model_type="llama")
+    deps.config = AppConfig(**{"adaptive_kv": {"enabled": True}})
+    deps.model = _UnsupportedAdaptiveRouteModel()
+
+    client = TestClient(create_app(deps))
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "mlxs",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "model_type='llama'" in response.json()["error"]["message"]
+    assert calls == []
+
+
 def test_chat_completions_rejects_audio_inputs_in_serving_scope() -> None:
     deps, calls = _make_deps()
     client = TestClient(create_app(deps))
@@ -309,5 +358,8 @@ def test_chat_completions_rejects_mixed_image_and_video_requests() -> None:
     )
 
     assert response.status_code == 400
-    assert "Mixed image and video requests are not supported" in response.json()["error"]["message"]
+    assert (
+        "Mixed image and video requests are not supported"
+        in response.json()["error"]["message"]
+    )
     assert calls == []

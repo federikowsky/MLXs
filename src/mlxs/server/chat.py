@@ -403,7 +403,11 @@ def _run_turn(
         _drop_pending_user_message(session)
         return "retry"
 
-    cache_state, prefix_len = deps.prompt_cache.get(model_id, tuple(prompt_token_ids))
+    adaptive_enabled = deps.config.adaptive_kv.enabled
+    cache_state: list[Any] | None = None
+    prefix_len = 0
+    if not adaptive_enabled:
+        cache_state, prefix_len = deps.prompt_cache.get(model_id, tuple(prompt_token_ids))
     suffix_len = len(prompt_token_ids) - prefix_len
     prompt_for_gen: list[int]
     if cache_state is not None and prefix_len > 0 and suffix_len > 0:
@@ -418,8 +422,11 @@ def _run_turn(
         "prefill_step_size": deps.config.generate.prefill_step_size,
         "compile_decode": deps.config.generate.compile_decode,
         "clear_cache_interval": deps.config.generate.clear_cache_interval,
-        "final_cache_out": final_cache_ref,
+        "adaptive_config": deps.config.adaptive_kv,
+        "metrics": deps.metrics,
     }
+    if not adaptive_enabled:
+        gen_kwargs["final_cache_out"] = final_cache_ref
     if cache_for_gen is not None:
         gen_kwargs["cache"] = cache_for_gen
 
@@ -467,14 +474,15 @@ def _run_turn(
         emitted_text = True
     console.finish_reply(emitted_text=emitted_text)
 
-    cache_to_put = (
-        cache_for_gen
-        if cache_for_gen is not None
-        else (final_cache_ref[0] if final_cache_ref else None)
-    )
-    if cache_to_put is not None:
-        new_prefix = tuple(prompt_token_ids) + tuple(generated_ids)
-        deps.prompt_cache.put(model_id, new_prefix, cache_to_put)
+    if not adaptive_enabled:
+        cache_to_put = (
+            cache_for_gen
+            if cache_for_gen is not None
+            else (final_cache_ref[0] if final_cache_ref else None)
+        )
+        if cache_to_put is not None:
+            new_prefix = tuple(prompt_token_ids) + tuple(generated_ids)
+            deps.prompt_cache.put(model_id, new_prefix, cache_to_put)
 
     full_response = sanitize_assistant_text(deps.tokenizer.decode(generated_ids))
     metadata = {"finish_reason": finish_reason.name.lower()} if finish_reason is not None else None

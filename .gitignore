@@ -58,3 +58,7 @@ logs/
 # tests/fixtures/models/
 CLAUDE.md
 scripts/smoke_ouro.py
+data/taskmanager.db
+data/taskmanager.db-shm
+data/taskmanager.db-wal
+uv.lock

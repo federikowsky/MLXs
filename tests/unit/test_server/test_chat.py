@@ -136,6 +136,28 @@ class TestChatLoopPromptCacheHit:
         assert prompt_arg == [3, 4, 5]
         assert call_args.kwargs.get("cache") is fake_cache_state
 
+    def test_adaptive_mode_bypasses_prompt_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        events = [
+            TokenEvent(token_id=5, text="x", finish_reason=FinishReason.STOP),
+        ]
+        deps = _make_deps(generate_events=events, tokenizer_encode=[1, 2, 3, 4])
+        deps.config = AppConfig(**{"adaptive_kv": {"enabled": True}})
+        deps.generate_fn = MagicMock(return_value=iter(events))
+        lines_iter = iter(["hi", None])
+
+        def fake_read_line(prompt: str | None = None) -> str | None:
+            assert prompt is None
+            return next(lines_iter)
+
+        monkeypatch.setattr("mlxs.server.chat._read_line", fake_read_line)
+        run_chat_loop(deps)
+
+        deps.prompt_cache.get.assert_not_called()
+        deps.prompt_cache.put.assert_not_called()
+        call_kwargs = deps.generate_fn.call_args.kwargs
+        assert call_kwargs["adaptive_config"].enabled is True
+        assert "final_cache_out" not in call_kwargs
+
 
 class TestChatLoopKeyboardInterrupt:
     """KeyboardInterrupt exits cleanly without appending partial assistant."""

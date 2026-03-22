@@ -9,11 +9,13 @@ The hottest path in the library. Design principles:
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
 
 from mlxs._types import GenerateOptions, TokenEvent, TokenLogprobs, TopLogprob
+from mlxs.adaptive_kv.manager import AdaptiveKVManager
 from mlxs.cache.kv import KVCache
 from mlxs.generate.logits import LogitsProcessor
 from mlxs.generate.stop import StopCondition
@@ -21,7 +23,7 @@ from mlxs.generate.stop import StopCondition
 
 def decode_loop(
     model: nn.Module,
-    cache: list[KVCache],
+    cache: list[KVCache] | list[Any],
     first_logits: mx.array,
     *,
     sampler: Callable[[mx.array], mx.array],
@@ -35,6 +37,7 @@ def decode_loop(
     quantized_kv_start: int = 0,
     kv_bits: int | None = None,
     kv_group_size: int = 64,
+    adaptive_manager: AdaptiveKVManager | None = None,
 ) -> Iterator[TokenEvent]:
     """Run the decode loop, yielding TokenEvent per generated token.
 
@@ -132,8 +135,13 @@ def decode_loop(
         n += 1
 
         # Compute next token (§6.1 — mx.eval, not mx.async_eval)
+        if adaptive_manager is not None:
+            adaptive_manager.before_decode_forward(token_id)
+            adaptive_manager.ensure_required_resident()
         next_logits = _forward(y[None], cache=cache)
         next_logits = next_logits[:, -1, :]
+        if adaptive_manager is not None:
+            adaptive_manager.after_decode_forward()
 
         # Apply logits processors if any
         if logits_processors:

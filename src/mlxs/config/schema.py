@@ -16,6 +16,7 @@ from mlxs._types import (
     StreamPolicy,
     WeightFormat,
 )
+from mlxs.adaptive_kv.config import AdaptiveKVConfig
 
 
 class _Frozen(BaseModel):
@@ -62,11 +63,18 @@ class ModelConfig(_Frozen):
     )
     model_hf_revision: str | None = Field(
         default=None,
-        description="Hugging Face repo revision (branch, tag, or commit). Used when model_path is an HF id. Default uses Hub default (usually main).",
+        description=(
+            "Hugging Face repo revision (branch, tag, or commit). "
+            "Used when model_path is an HF id. Default uses Hub default "
+            "(usually main)."
+        ),
     )
     model_hf_token: str | None = Field(
         default=None,
-        description="Hugging Face token for gated/private repos. Prefer HF_TOKEN env for security. Never logged.",
+        description=(
+            "Hugging Face token for gated/private repos. Prefer HF_TOKEN env "
+            "for security. Never logged."
+        ),
     )
     image_max_pixels: int | None = Field(
         default=None,
@@ -317,6 +325,7 @@ class AppConfig(_Frozen):
     generate: GenerateConfig = Field(default_factory=GenerateConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
+    adaptive_kv: AdaptiveKVConfig = Field(default_factory=AdaptiveKVConfig)
     prompt_cache: PromptCacheConfig = Field(default_factory=PromptCacheConfig)
     batch: BatchConfig = Field(default_factory=BatchConfig)
     speculative: SpeculativeConfig = Field(default_factory=SpeculativeConfig)

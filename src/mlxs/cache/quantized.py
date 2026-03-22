@@ -94,6 +94,50 @@ class QuantizedKVCache:
         self._offset -= n
         return n
 
+    def copy_token_range(
+        self,
+        start: int,
+        end: int,
+    ) -> tuple[
+        tuple[mx.array, mx.array, mx.array],
+        tuple[mx.array, mx.array, mx.array],
+    ]:
+        """Return a quantized resident token slice in ``[start, end)``."""
+        if self.keys is None or self.values is None:
+            raise ValueError("Cannot copy from an empty QuantizedKVCache")
+        start = max(0, min(start, self._offset))
+        end = max(start, min(end, self._offset))
+        return (
+            tree_map(lambda x: x[..., start:end, :], self.keys),
+            tree_map(lambda x: x[..., start:end, :], self.values),
+        )
+
+    def remove_token_range(self, start: int, end: int) -> int:
+        """Physically remove resident tokens in ``[start, end)``."""
+        if self.keys is None or self.values is None:
+            return 0
+        start = max(0, min(start, self._offset))
+        end = max(start, min(end, self._offset))
+        removed = end - start
+        if removed == 0:
+            return 0
+        if start == 0 and end == self._offset:
+            self.reset()
+            return removed
+
+        def _splice(x: mx.array) -> mx.array:
+            keep: list[mx.array] = []
+            if start > 0:
+                keep.append(x[..., :start, :])
+            if end < self._offset:
+                keep.append(x[..., end:self._offset, :])
+            return keep[0] if len(keep) == 1 else mx.concatenate(keep, axis=-2)
+
+        self.keys = tree_map(_splice, self.keys)
+        self.values = tree_map(_splice, self.values)
+        self._offset -= removed
+        return removed
+
     @property
     def state(self) -> tuple | None:
         if self.keys is None:
@@ -105,12 +149,21 @@ class QuantizedKVCache:
     @state.setter
     def state(self, v: tuple) -> None:
         self.keys, self.values = v
+        self._offset = 0 if self.keys is None else self.keys[0].shape[2]
 
     @property
     def state_size_bytes(self) -> int:
         if self.keys is None:
             return 0
         return tree_reduce(lambda a, x: a + x.nbytes, (self.keys, self.values), 0)
+
+    @property
+    def live_state_size_bytes(self) -> int:
+        """Exact bytes for the currently live resident prefix."""
+        state = self.state
+        if state is None:
+            return 0
+        return tree_reduce(lambda a, x: a + x.nbytes, state, 0)
 
     def reset(self) -> None:
         self.keys = None

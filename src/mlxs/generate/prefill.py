@@ -7,19 +7,23 @@ intermediate buffers.
 
 from __future__ import annotations
 
+from typing import Any
+
 import mlx.core as mx
 import mlx.nn as nn
 
+from mlxs.adaptive_kv.manager import AdaptiveKVManager
 from mlxs.cache.kv import KVCache
 
 
 def chunked_prefill(
     model: nn.Module,
     prompt_tokens: mx.array,
-    cache: list[KVCache],
+    cache: list[KVCache] | list[Any],
     *,
     prefill_step_size: int = 2048,
     input_embeddings: mx.array | None = None,
+    adaptive_manager: AdaptiveKVManager | None = None,
 ) -> mx.array:
     """Run prefill on a prompt, processing in chunks.
 
@@ -37,6 +41,9 @@ def chunked_prefill(
     Returns:
         Logits array of shape (1, vocab_size) from the last prompt token.
     """
+    if adaptive_manager is not None and adaptive_manager.prompt_token_count == 0:
+        adaptive_manager.initialize_prompt([int(token.item()) for token in prompt_tokens])
+
     total = len(prompt_tokens)
 
     # Process all tokens except the last one in chunks

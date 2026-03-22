@@ -70,10 +70,7 @@ def resolve(
     # When True, _Frozen's extra="forbid" raises on unknown keys.
     strict = merged.get("strict_validation", False)
     try:
-        if strict:
-            config = AppConfig(**merged)
-        else:
-            config = _build_lenient(merged)
+        config = AppConfig(**merged) if strict else _build_lenient(merged)
     except InvalidConfigError:
         raise
     except Exception as exc:
@@ -160,6 +157,7 @@ def _build_lenient(merged: dict[str, Any]) -> AppConfig:
     _Frozen's extra="forbid" does not reject them.
     """
     from mlxs.config.schema import (
+        AdaptiveKVConfig,
         AppConfig,
         BatchConfig,
         CacheConfig,
@@ -178,6 +176,7 @@ def _build_lenient(merged: dict[str, Any]) -> AppConfig:
         "generate": GenerateConfig,
         "memory": MemoryConfig,
         "cache": CacheConfig,
+        "adaptive_kv": AdaptiveKVConfig,
         "prompt_cache": PromptCacheConfig,
         "batch": BatchConfig,
         "speculative": SpeculativeConfig,

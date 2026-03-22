@@ -13,6 +13,7 @@ from mlxs._types import (
     WeightFormat,
 )
 from mlxs.config.schema import (
+    AdaptiveKVConfig,
     AppConfig,
     BatchConfig,
     CacheConfig,
@@ -32,6 +33,7 @@ class TestAppConfigDefaults:
         assert isinstance(config.model, ModelConfig)
         assert isinstance(config.generate, GenerateConfig)
         assert isinstance(config.cache, CacheConfig)
+        assert isinstance(config.adaptive_kv, AdaptiveKVConfig)
         assert config.strict_validation is False
 
     def test_model_defaults(self) -> None:
@@ -69,6 +71,11 @@ class TestAppConfigDefaults:
         assert c.kv_bits is None
         assert c.kv_group_size == 64
         assert c.quantized_kv_start == 0
+
+    def test_adaptive_kv_defaults(self) -> None:
+        cfg = AdaptiveKVConfig()
+        assert cfg.enabled is False
+        assert cfg.block_size_tokens == 64
 
     def test_prompt_cache_defaults(self) -> None:
         pc = PromptCacheConfig()

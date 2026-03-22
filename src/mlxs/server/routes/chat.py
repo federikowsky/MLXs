@@ -15,6 +15,11 @@ from starlette.responses import JSONResponse, Response
 
 from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
+from mlxs.adaptive_kv import (
+    AdaptiveKVCompatibilityError,
+    AdaptiveKVError,
+    assess_generation_compatibility,
+)
 from mlxs.chat.template import build_prompt_str
 from mlxs.server.media import (
     extract_media_from_messages,
@@ -191,17 +196,30 @@ async def _stream_response(
     """Handle streaming (SSE) response."""
     from sse_starlette.sse import EventSourceResponse
 
-    async def event_generator():
-        loop = asyncio.get_event_loop()
-        events = await loop.run_in_executor(
-            None,
-            lambda: list(deps.generate_fn(
-                deps.model, deps.tokenizer, prompt, options,
-                input_embeddings=input_embeddings,
-            )),
-        )
+    compatibility_error = _adaptive_generation_error(
+        deps,
+        input_embeddings=input_embeddings,
+    )
+    if compatibility_error is not None:
+        return compatibility_error
 
-        for sse_chunk in token_events_to_sse(iter(events), model_id=model_id):
+    try:
+        events = deps.generate_fn(
+            deps.model,
+            deps.tokenizer,
+            prompt,
+            options,
+            input_embeddings=input_embeddings,
+            adaptive_config=deps.config.adaptive_kv,
+            metrics=deps.metrics,
+        )
+    except AdaptiveKVCompatibilityError as exc:
+        return JSONResponse({"error": {"message": str(exc)}}, status_code=400)
+    except AdaptiveKVError as exc:
+        return JSONResponse({"error": {"message": str(exc)}}, status_code=500)
+
+    async def event_generator():
+        for sse_chunk in token_events_to_sse(events, model_id=model_id):
             yield sse_chunk
 
     return EventSourceResponse(event_generator(), media_type="text/event-stream")
@@ -215,14 +233,47 @@ async def _non_stream_response(
     input_embeddings: Any = None,
 ) -> JSONResponse:
     """Handle non-streaming response."""
-    loop = asyncio.get_event_loop()
-    events: list[TokenEvent] = await loop.run_in_executor(
-        None,
-        lambda: list(deps.generate_fn(
-            deps.model, deps.tokenizer, prompt, options,
-            input_embeddings=input_embeddings,
-        )),
+    compatibility_error = _adaptive_generation_error(
+        deps,
+        input_embeddings=input_embeddings,
     )
+    if compatibility_error is not None:
+        return compatibility_error
+
+    loop = asyncio.get_event_loop()
+    try:
+        events: list[TokenEvent] = await loop.run_in_executor(
+            None,
+            lambda: list(deps.generate_fn(
+                deps.model, deps.tokenizer, prompt, options,
+                input_embeddings=input_embeddings,
+                adaptive_config=deps.config.adaptive_kv,
+                metrics=deps.metrics,
+            )),
+        )
+    except AdaptiveKVCompatibilityError as exc:
+        return JSONResponse({"error": {"message": str(exc)}}, status_code=400)
+    except AdaptiveKVError as exc:
+        return JSONResponse({"error": {"message": str(exc)}}, status_code=500)
 
     response = build_completion_response(events, model_id=model_id)
     return JSONResponse(response)
+
+
+def _adaptive_generation_error(deps: Any, *, input_embeddings: Any = None) -> JSONResponse | None:
+    config = deps.config.adaptive_kv
+    if not config.enabled:
+        return None
+    if not callable(getattr(deps.model, "make_cache", None)):
+        return None
+    compatibility = assess_generation_compatibility(
+        deps.model,
+        cache=None,
+        compile_decode=deps.config.generate.compile_decode,
+        quantized_kv_start=deps.config.cache.quantized_kv_start,
+        input_embeddings_present=input_embeddings is not None,
+    )
+    if compatibility.supported:
+        return None
+    reason = compatibility.reason or "adaptive_kv_v1 unsupported"
+    return JSONResponse({"error": {"message": reason}}, status_code=400)

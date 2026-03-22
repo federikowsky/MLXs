@@ -7,19 +7,29 @@ and yields a stream of TokenEvent objects.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
 
 from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
+from mlxs.adaptive_kv import (
+    AdaptiveKVCompatibilityError,
+    AdaptiveKVConfig,
+    AdaptiveKVManager,
+    assess_generation_compatibility,
+)
+from mlxs.adaptive_kv.metrics import emit_compatibility_fallback
 from mlxs.cache.kv import KVCache
 from mlxs.generate.decode import decode_loop
 from mlxs.generate.logits import make_logits_processors
 from mlxs.generate.prefill import chunked_prefill
 from mlxs.generate.sampling import make_sampler
 from mlxs.generate.stop import StopCondition
+from mlxs.observability.metrics import NoOpMetrics
 from mlxs.protocols.generate import TokenizerProtocol
+from mlxs.protocols.metrics import MetricsProtocol
 
 
 def generate(
@@ -37,6 +47,9 @@ def generate(
     kv_bits: int | None = None,
     kv_group_size: int = 64,
     final_cache_out: list[list[KVCache]] | None = None,
+    adaptive_config: AdaptiveKVConfig | None = None,
+    metrics: MetricsProtocol | None = None,
+    final_adaptive_state_out: list[dict[str, Any]] | None = None,
 ) -> Iterator[TokenEvent]:
     """Generate tokens from a prompt (§6.1, FR3).
 
@@ -98,8 +111,36 @@ def generate(
     if options.seed is not None:
         mx.random.seed(options.seed)
 
+    metrics_sink = metrics if metrics is not None else NoOpMetrics()
+    adaptive_manager: AdaptiveKVManager | None = None
+    adaptive_enabled = adaptive_config is not None and adaptive_config.enabled
+
     # Create KV cache if not provided
-    if cache is None:
+    if adaptive_enabled:
+        compatibility = assess_generation_compatibility(
+            model,
+            cache=cache,
+            compile_decode=compile_decode,
+            quantized_kv_start=quantized_kv_start,
+            input_embeddings_present=input_embeddings is not None,
+        )
+        if not compatibility.supported:
+            reason = compatibility.reason or "adaptive_kv_v1 unsupported"
+            emit_compatibility_fallback(metrics_sink, reason=reason)
+            if final_adaptive_state_out is not None:
+                final_adaptive_state_out.append({"enabled": False, "reason": reason})
+            raise AdaptiveKVCompatibilityError(reason)
+        adaptive_manager = AdaptiveKVManager(
+            adaptive_config,
+            num_layers=compatibility.num_layers,
+            metrics=metrics_sink,
+        )
+        adaptive_manager.bind_generation_context(
+            model=model,
+            prefill_step_size=prefill_step_size,
+        )
+        cache = adaptive_manager.caches()
+    elif cache is None:
         cache = model.make_cache()
 
     # Build sampler (resolved once, not per token — O2)
@@ -141,6 +182,7 @@ def generate(
         cache,
         prefill_step_size=prefill_step_size,
         input_embeddings=input_embeddings,
+        adaptive_manager=adaptive_manager,
     )
 
     def _gen() -> Iterator[TokenEvent]:
@@ -160,10 +202,13 @@ def generate(
                 quantized_kv_start=quantized_kv_start,
                 kv_bits=kv_bits,
                 kv_group_size=kv_group_size,
+                adaptive_manager=adaptive_manager,
             )
         finally:
-            if final_cache_out is not None:
+            if final_cache_out is not None and adaptive_manager is None:
                 final_cache_out.append(cache)
+            if final_adaptive_state_out is not None and adaptive_manager is not None:
+                final_adaptive_state_out.append(adaptive_manager.debug_snapshot())
 
     return _gen()
 

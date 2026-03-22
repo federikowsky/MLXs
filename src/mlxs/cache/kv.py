@@ -90,6 +90,46 @@ class KVCache:
         self._offset -= n
         return n
 
+    def copy_token_range(self, start: int, end: int) -> tuple[mx.array, mx.array]:
+        """Return a resident token slice in ``[start, end)``."""
+        if self._keys is None or self._values is None:
+            raise ValueError("Cannot copy from an empty KVCache")
+        start = max(0, min(start, self._offset))
+        end = max(start, min(end, self._offset))
+        return (
+            self._keys[..., start:end, :],
+            self._values[..., start:end, :],
+        )
+
+    def remove_token_range(self, start: int, end: int) -> int:
+        """Physically remove resident tokens in ``[start, end)``."""
+        if self._keys is None or self._values is None:
+            return 0
+        start = max(0, min(start, self._offset))
+        end = max(start, min(end, self._offset))
+        removed = end - start
+        if removed == 0:
+            return 0
+        keep_keys: list[mx.array] = []
+        keep_values: list[mx.array] = []
+        if start > 0:
+            keep_keys.append(self._keys[..., :start, :])
+            keep_values.append(self._values[..., :start, :])
+        if end < self._offset:
+            keep_keys.append(self._keys[..., end:self._offset, :])
+            keep_values.append(self._values[..., end:self._offset, :])
+        if not keep_keys:
+            self.reset()
+            return removed
+        self._keys = keep_keys[0] if len(keep_keys) == 1 else mx.concatenate(keep_keys, axis=2)
+        self._values = (
+            keep_values[0]
+            if len(keep_values) == 1
+            else mx.concatenate(keep_values, axis=2)
+        )
+        self._offset -= removed
+        return removed
+
     @property
     def state(self) -> tuple[mx.array, mx.array] | None:
         """Return current state for serialization / prompt cache."""
@@ -109,6 +149,17 @@ class KVCache:
         if self._keys is None:
             return 0
         return self._keys.nbytes + self._values.nbytes
+
+    @property
+    def live_state_size_bytes(self) -> int:
+        """Exact bytes for the currently live resident prefix."""
+        if self._keys is None or self._values is None:
+            return 0
+        keys = self.keys
+        values = self.values
+        if keys is None or values is None:
+            return 0
+        return keys.nbytes + values.nbytes
 
     def reset(self) -> None:
         self._keys = None
