@@ -1,12 +1,12 @@
-# Adaptive KV for MLXs: Exact Adaptive KV-Cache Management for Single-Request Llama Inference
+# Adaptive KV for MLXs: Exact Adaptive KV-Cache Management for Single-Request Text Decoder Inference
 
 ## Abstract
 
 Transformer decoding with append-only KV retention has the simplest semantics but the worst possible memory growth profile: every past token is treated as equally valuable until the context window is exhausted. Fixed sliding windows bound memory, but they do so by imposing a rigid recency prior that can discard semantically important history. Adaptive KV in MLXs addresses this problem by treating KV residency as a memory-management problem rather than an attention-rewrite problem.
 
-The retained system operates at block granularity, moves blocks through three tiers (`FULL`, `COMPRESSED`, `EVICTED`), preserves resident ordering exactly, and restores evicted history through explicit replay from authoritative source-token spans. It is observer-only: it never edits queries, keys, values, logits, or sampling policy. The current retained scope is intentionally narrow: single-request generation only, the verified full-attention Llama baseline only, homogeneous `list[KVCache]` baseline only, and no `compile_decode`, legacy `quantized_kv_start`, or external cache reuse.
+The retained system operates at block granularity, moves blocks through three tiers (`FULL`, `COMPRESSED`, `EVICTED`), preserves resident ordering exactly, and restores evicted history through explicit replay from authoritative source-token spans. It is observer-only: it never edits queries, keys, values, logits, or sampling policy. The current retained scope is intentionally narrow: single-request generation only, the retained Family A `full_kv` substrate only, with the verified Llama path as the control/baseline implementation. Full-attention-only compatible subsets of `qwen3_5` and `ministral3` can bind to the same substrate, while standard `qwen3_5` hybrid-state runtimes and standard `ministral3` windowed runtimes remain unsupported. `compile_decode`, legacy `quantized_kv_start`, and external cache reuse remain out of scope.
 
-Within that scope, the final evidence is strong. In repeated synthetic SOFT-regime runs, `adaptive_soft` reaches `0.97x` to `1.02x` the throughput of `adaptive_full` across the retained scenario set while keeping zero evictions and zero replay requests. In repeated HARD-regime runs, `adaptive_hard` is materially slower than `adaptive_full`, but it remains correct, replay-backed, and stable under pressure, with a remaining throughput gap that is structural to the exact mixed-tier segmented executor rather than a sign of incorrect semantics. Real-workload medians across ten repository-derived prompts place `adaptive_soft` between `0.92x` and `1.07x` of `adaptive_full`. The retained implementation baseline is now a platform architecture in which the generic Adaptive KV core is separated from an explicit capability provider, runtime substrate, replay backend, and composed runtime adapter, with the current Llama path as the first concrete implementation.
+Within that scope, the final evidence is strong. In repeated synthetic SOFT-regime runs, `adaptive_soft` reaches `0.97x` to `1.02x` the throughput of `adaptive_full` across the retained scenario set while keeping zero evictions and zero replay requests. In repeated HARD-regime runs, `adaptive_hard` is materially slower than `adaptive_full`, but it remains correct, replay-backed, and stable under pressure, with a remaining throughput gap that is structural to the exact mixed-tier segmented executor rather than a sign of incorrect semantics. Real-workload medians across ten repository-derived prompts place `adaptive_soft` between `0.92x` and `1.07x` of `adaptive_full`. The retained implementation baseline is now a runtime-family architecture in which the generic Adaptive KV core is separated from an explicit capability provider, runtime-family layer, runtime substrate, replay backend, and composed runtime adapter. Family A `full_kv` is the retained concrete substrate, with Llama as the control path and other families classified explicitly rather than handled by hidden model-local assumptions.
 
 ## 1. Introduction
 
@@ -14,7 +14,7 @@ Long-context autoregressive inference turns the KV cache into a first-class syst
 
 Adaptive KV addresses that problem without changing the transformer’s semantics. Instead of altering attention itself, the system changes the residency of previously computed KV state. Some blocks remain full-fidelity, some are retained in a compressed resident form, and some are evicted altogether. When evicted context becomes necessary again, it is reconstructed by replaying the authoritative source-token span through the model rather than by inventing an approximate surrogate.
 
-That design choice makes the systems problem harder, not easier. It introduces a control plane, a resident-state representation, recovery logic, and mixed-tier attention execution. The work reported here is therefore not just a policy sketch. It is a retained implementation in MLXs, with repeated synthetic benchmarks, focused parity investigations, real-workload evaluation, and a later architecture cleanup that turned the system into a cleaner platform baseline for future extension.
+That design choice makes the systems problem harder, not easier. It introduces a control plane, a resident-state representation, recovery logic, and mixed-tier attention execution. The work reported here is therefore not just a policy sketch. It is a retained implementation in MLXs, with repeated synthetic benchmarks, focused parity investigations, real-workload evaluation, and a later sequence of architecture programs that turned the system into a cleaner runtime-family baseline for future extension.
 
 This document presents the final retained system as a standalone technical report. It separates the design itself from the implementation choices, the guarantees from the non-guarantees, and the measured results from the later engineering programs that hardened and reorganized the implementation.
 
@@ -38,13 +38,14 @@ The retained support envelope is intentionally narrow:
 | Dimension | Retained position |
 |---|---|
 | Generation mode | Single-request generation only |
-| Model family | Verified Llama path only |
-| Baseline attention family | Standard full-attention Llama baseline |
+| Runtime-family substrate | Family A `full_kv` retained concrete substrate |
+| Retained control path | Verified Llama path within Family A `full_kv` |
+| Additional compatible subsets | Full-attention-only `qwen3_5` and `ministral3` subsets that satisfy the homogeneous `list[KVCache]` baseline |
 | Baseline cache shape | Homogeneous `list[KVCache]` |
 | Tiers | `FULL`, `COMPRESSED`, `EVICTED` |
 | Recovery | Real replay-backed recovery |
 | Observer semantics | Required |
-| Unsupported in V1 | `compile_decode`, legacy `quantized_kv_start`, external cache reuse, unsupported families |
+| Unsupported in V1 | Standard `qwen3_5` (`hybrid_state`), standard `ministral3` (`windowed_kv`), `compile_decode`, legacy `quantized_kv_start`, external cache reuse, and other unsupported families |
 
 This report therefore describes a bounded exact system, not a generic cache abstraction that is claimed to work for every model family.
 
@@ -248,31 +249,32 @@ The generic core owns:
 
 This core is intended to remain stable even if additional model families are introduced later.
 
-### 5.2 Platform Runtime Structure
+### 5.2 Runtime-Family Platform Structure
 
-The retained runtime boundary is now explicit. The platform architecture separates four roles:
+The retained runtime boundary is now explicit and organized around runtime families. The generic semantic core remains stable, while runtime-specific behavior is factored into a family layer and model adapters. The retained architecture separates five roles:
 
 1. **Capability provider**  
    Declares whether a model/runtime configuration is fully supported, partially supported, or unsupported, and reports the reason honestly.
-2. **Runtime substrate**  
+2. **Runtime-family layer**  
+   Classifies the concrete runtime shape into an explicit family and supplies the corresponding family bindings. The currently explicit families are Family A `full_kv`, Family B `windowed_kv`, and Family C `hybrid_state`.
+3. **Runtime substrate**  
    Owns per-layer resident state, live-byte accounting, resident-state construction for attention, and tier-local storage behavior.
-3. **Replay backend**  
+4. **Replay backend**  
    Owns scratch replay state, prefix extension, and replay-token extraction.
-4. **Composed runtime adapter**  
-   Binds the three components above into a concrete family/runtime implementation.
+5. **Composed runtime adapter**  
+   Binds the capability provider and resolved family bindings into a concrete model/runtime implementation.
 
-The manager now orchestrates abstract runtime and replay components rather than depending on a Llama-specific architectural assumption.
+The manager now orchestrates abstract runtime and replay components together with resolved family bindings rather than depending on a Llama-specific architectural assumption.
 
-### 5.3 Retained Llama Path
+### 5.3 Runtime Families and the Retained Llama Path
 
-The current verified path remains the full-attention Llama baseline. In the retained architecture:
+The runtime-family layer now distinguishes three concrete cases.
 
-- support assessment is handled by the Llama capability provider,
-- per-layer runtime behavior is supplied by the Llama runtime substrate,
-- replay-backed recovery is supplied by the Llama replay backend,
-- and those pieces are composed into the retained Llama adapter.
+- **Family A `full_kv`** contains homogeneous token-addressable `KVCache` runtimes across layers. The retained Llama path remains the control/baseline implementation here. Full-attention-only compatible subsets of `qwen3_5` and `ministral3` can also bind to this family.
+- **Family B `windowed_kv`** contains still-KV-based runtimes whose resident semantics depend on local, sliding, or rotating windows. Standard `ministral3` falls into this family and remains unsupported under the retained exact substrate.
+- **Family C `hybrid_state`** contains runtimes that mix recurrent or linear state with KV state. Standard `qwen3_5` falls into this family and remains unsupported under the retained exact substrate.
 
-No broader working support is implied by this structure. The platform architecture is a cleaner basis for future work, not evidence that additional families already function.
+No broader working support is implied by this structure. The runtime-family architecture is a cleaner basis for future work, not evidence that all explicit families already have retained concrete substrates.
 
 ### 5.4 Resident Storage and Attention Paths
 
@@ -308,7 +310,7 @@ The retained correctness envelope is intentionally precise:
 
 | Mode | Retained statement |
 |---|---|
-| `adaptive_full` | Expected to match the non-adaptive greedy reference under the supported Llama baseline |
+| `adaptive_full` | Expected to match the non-adaptive greedy reference under the supported Family A `full_kv` baselines, with the verified Llama path as the retained control case |
 | `adaptive_soft` | Preserves adaptive policy semantics and exact mixed-tier attention over the resident state, but does not promise greedy token parity when compressed KV participates |
 | `adaptive_hard` | Preserves replay-backed semantic correctness under pressure, but is not expected to match all-resident throughput |
 
@@ -316,7 +318,7 @@ This distinction matters. A soft-only token difference under active compression 
 
 ### 6.4 Support Honesty
 
-The retained platform architecture exposes support explicitly through a capability model with `FULL`, `PARTIAL`, and `UNSUPPORTED` outcomes. Unsupported families and unsupported configurations fail clearly instead of appearing to work accidentally.
+The retained runtime-family architecture exposes support explicitly through a capability model with `FULL`, `PARTIAL`, and `UNSUPPORTED` outcomes together with explicit runtime-family classification. Unsupported families and unsupported configurations fail clearly instead of appearing to work accidentally.
 
 ## 7. Evaluation Methodology
 
@@ -391,17 +393,17 @@ Historical focused investigations separated two correctness stories:
 
 The currently checked-in focused reproductions for `C5` and `T4` do not show a first-difference on the retained prompt slices, but the scope guarantee remains unchanged: `adaptive_soft` does not promise greedy parity while compressed KV is active.
 
-### 8.5 Architecture-Level Regression Checks
+### 8.5 Runtime-Family Architecture Regression Checks
 
-Later platform-architecture refactors were accepted only if they preserved the retained path within benchmark noise. Same-machine regression checks did not show a material retained-path regression. In particular, the within-run adaptive/full ratios were stable or slightly improved:
+Later architecture work retained the runtime-family layer only if the Family A control path stayed within benchmark noise. Same-machine spot checks on the retained Llama path did not show a credible material regression. The first SOFT one-shot moved from `0.939` to `0.902` on the adaptive/full ratio, but an immediate rerun reversed direction to `1.137`, so the SOFT absolute signal was treated as noisy. The harder cases were more stable:
 
-| Case | Before ratio | After ratio |
+| Case | Earlier sanity ratio | Runtime-family run ratio |
 |---|---:|---:|
-| SOFT `adaptive_soft / adaptive_full` | 0.964 | 0.991 |
-| HARD 512 `adaptive_hard / adaptive_full` | 0.921 | 0.970 |
-| HARD 1024 `adaptive_hard / adaptive_full` | 0.709 | 0.723 |
+| SOFT `adaptive_soft / adaptive_full` | 0.939 | 0.902 on first run, 1.137 on rerun |
+| HARD 512 `adaptive_hard / adaptive_full` | 0.919 | 0.949 |
+| HARD 1024 `adaptive_hard / adaptive_full` | 0.726 | 0.721 |
 
-These checks are important because they justify retaining the cleaned platform architecture as the implementation baseline rather than treating it as a purely cosmetic refactor.
+That is the relevant architectural reading: no semantic regression signal, no stable material slowdown on the retained control path, and a cleaner support boundary. The same program also made compatible Family A subsets explicit: full-attention-only `qwen3_5` and `ministral3` configurations can bind to `full_kv`, while standard `qwen3_5` and standard `ministral3` remain classified as unsupported `hybrid_state` and `windowed_kv` runtimes respectively.
 
 ## 9. Engineering Evolution and Validation Trajectory
 
@@ -414,7 +416,7 @@ The final system became credible through a small number of turning points rather
 | Compressed-run coalescing | Fragmented resident state imposed avoidable mixed-tier overhead | Coalesced adjacent compressed blocks into runs | Reduced resident fragmentation cost without changing semantics |
 | Deferred usage extraction | Observer materialization dominated mixed-tier wall time | Moved usage batching and materialization to policy-window flush | Shifted SOFT from clearly bottlenecked to near-`adaptive_full` performance |
 | Parity restoration and classification | Different correctness issues were being conflated | Restored the fused all-FULL path for `adaptive_full` and separated compression-sensitive drift from control bugs | Clarified the real guarantee boundary |
-| Platform architecture refactor | The retained implementation was correct but too family-specific internally | Separated capability provider, runtime substrate, replay backend, and composed runtime adapter | Produced the current retained baseline and the intended foundation for future family support |
+| Runtime-families architecture program | The retained implementation was correct but still organized too much around model-local substrate ownership | Separated the generic core from an explicit runtime-family layer and moved model adapters to family classification and binding | Produced the current retained baseline and a cleaner path toward future family-specific substrates |
 
 ## 10. Discussion
 
@@ -426,15 +428,16 @@ Second, the main target regime is now in the right performance band. The final r
 
 Third, the remaining HARD gap is no longer best interpreted as a control bug, a replay-safety bug, or an obvious Python overhead bug. Earlier bottlenecks of those kinds were found and addressed. What remains is structural to the retained exact segmented executor and replay-backed stress path.
 
-The later runtime and architecture programs reinforce that reading. Broader executor fusion, deeper exact-runtime redesigns, and runtime-architecture prototypes were explored seriously and benchmarked, but they either regressed or did not clear the retention threshold. The system is therefore at a principled stopping point for V1 rather than merely at a convenient stopping point.
+The later runtime and architecture programs reinforce that reading. Broader executor fusion, deeper exact-runtime redesigns, and runtime-architecture prototypes were explored seriously and benchmarked, but they either regressed or did not clear the retention threshold. The later runtime-families program then reorganized support around explicit runtime families without showing a credible material regression on the retained control path. The system is therefore at a principled stopping point for V1 rather than merely at a convenient stopping point.
 
 ## 11. Limitations and Non-Goals
 
 The retained limitations are explicit:
 
 - single-request generation only,
-- verified Llama full-attention path only,
-- no claim of broader working family support,
+- retained Llama control path within Family A `full_kv`,
+- only Family A-compatible full-attention subsets beyond Llama are currently supported,
+- no claim of support for standard `windowed_kv` or `hybrid_state` runtimes,
 - no guarantee of greedy token parity for `adaptive_soft` while compressed KV participates,
 - no goal of matching `adaptive_full` throughput under HARD pressure,
 - no `compile_decode`, legacy `quantized_kv_start`, or external cache reuse within the retained scope,
@@ -452,13 +455,13 @@ The most plausible future directions are:
    If tighter soft-mode parity is required under active compression, the natural target is quantized KV fidelity rather than adaptive-policy control.
 2. **Optional deeper HARD executor R&D**  
    The remaining HARD gap is structural to the current exact mixed-tier segmented executor and replay-backed stress path. Any further improvement there should be treated as dedicated R&D, not routine hardening.
-3. **Explicit multi-family expansion**  
-   The retained platform architecture is now designed so future model families can plug in through capability, runtime, and replay components. That architecture is the foundation for future expansion, but it does not itself imply that additional families are already supported.
+3. **Real Family B and Family C substrate work**  
+   The retained runtime-family architecture is now designed so future families can plug in through explicit family bindings rather than model-by-model patching. The natural next step is therefore a real `windowed_kv` and/or `hybrid_state` substrate, not another hidden reuse of the Family A assumptions.
 
 ## 13. Conclusion
 
-Adaptive KV for MLXs is now a retained, bounded exact system rather than a speculative design. It manages KV residency at block granularity, preserves attention semantics over the resident state, uses real replay-backed recovery for evicted content, and exposes support honestly through an explicit platform architecture.
+Adaptive KV for MLXs is now a retained, bounded exact system rather than a speculative design. It manages KV residency at block granularity, preserves attention semantics over the resident state, uses real replay-backed recovery for evicted content, and exposes support honestly through an explicit runtime-family architecture.
 
-Within its approved scope, the result is clear. `adaptive_full` is aligned with the supported non-adaptive baseline, `adaptive_soft` is performant enough in the normal compression regime to be practically useful, and `adaptive_hard` is semantically safe and good enough under stress even though its remaining throughput gap is structural. The later architecture refactors strengthened the implementation boundary without materially regressing the retained path, so the platform architecture is now the correct baseline for future work.
+Within its approved scope, the result is clear. `adaptive_full` is aligned with the supported non-adaptive baseline, `adaptive_soft` is performant enough in the normal compression regime to be practically useful, and `adaptive_hard` is semantically safe and good enough under stress even though its remaining throughput gap is structural. The later architecture refactors strengthened the implementation boundary without materially regressing the retained path, and the runtime-families program turned that boundary into an explicit retained architecture baseline.
 
-That is the right final position for V1: not universal support, not maximal throughput under every pressure regime, but a serious exact implementation with clear guarantees, honest limits, and a clean architectural foundation for any future expansion.
+That is the right final position for V1: not universal support, not maximal throughput under every pressure regime, but a serious exact implementation with clear guarantees, honest limits, a retained Family A control path, and a clean architectural foundation for any future Family B or Family C expansion.

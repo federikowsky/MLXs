@@ -200,17 +200,25 @@ class AdaptiveKVManager:
         self.metrics.counter(POST_RECOVERY_DECODE_FORWARDS_TOTAL)
 
     def attention_path_stats(self) -> dict[str, Any]:
-        """Diagnostic only: segment structure for mixed-tier attention (layer 0).
+        """Diagnostic only: segment structure for a representative attention-bearing layer.
 
         Counts match ``AdaptiveLayerCache.resident_state_for_attention`` — the hot-path
         segment list (FULL runs coalesced; each compressed *run* is one segment).
         """
         if not self._layer_caches:
             return {}
-        try:
-            rs = self._layer_caches[0].resident_state_for_attention()
-        except AdaptiveKVError as exc:
-            return {"error": str(exc)}
+        rs = None
+        last_error: str | None = None
+        for layer_cache in self._layer_caches:
+            if not layer_cache.should_sample_usage():
+                continue
+            try:
+                rs = layer_cache.resident_state_for_attention()
+                break
+            except (AdaptiveKVError, RuntimeError) as exc:
+                last_error = str(exc)
+        if rs is None:
+            return {"error": last_error or "no attention-bearing adaptive layer is available"}
         n_full = sum(1 for s in rs.segments if s.tier is BlockTier.FULL)
         n_comp = sum(1 for s in rs.segments if s.tier is BlockTier.COMPRESSED)
         logical_in_comp_runs = sum(
@@ -408,25 +416,12 @@ class AdaptiveKVManager:
         recovered_any = False
         materialize_started = time.perf_counter()
         for recovery_group in self._recovery_groups(request.block_ids):
-            start_token = recovery_group[0].start_token
-            end_token = recovery_group[-1].end_token
             for layer_cache, scratch_layer in zip(self._layer_caches, scratch, strict=True):
-                keys, values = self.replay_backend.copy_replay_token_range(
+                layer_cache.recover_blocks_from_scratch(
+                    recovery_group,
                     scratch_layer,
-                    start_token,
-                    end_token,
+                    self.replay_backend,
                 )
-                expected_tokens = end_token - start_token
-                if (
-                    keys.shape[2] != expected_tokens
-                    or values.shape[2] != expected_tokens
-                ):
-                    raise AdaptiveKVError(
-                        "Replay recovery returned inconsistent run token count: "
-                        f"expected {expected_tokens}, got "
-                        f"keys={keys.shape[2]}, values={values.shape[2]}"
-                    )
-                layer_cache.recover_blocks(recovery_group, keys, values)
             for block in recovery_group:
                 updated = self._mark_transition(
                     block,

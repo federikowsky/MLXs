@@ -15,6 +15,13 @@ class SupportLevel(StrEnum):
     UNSUPPORTED = "unsupported"
 
 
+class RuntimeFamily(StrEnum):
+    FULL_KV = "full_kv"
+    WINDOWED_KV = "windowed_kv"
+    HYBRID_STATE = "hybrid_state"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class CapabilityStatus:
     level: SupportLevel
@@ -40,6 +47,7 @@ class CapabilityStatus:
 @dataclass(frozen=True, slots=True)
 class AdapterCapabilities:
     adapter_name: str
+    runtime_family: RuntimeFamily
     overall: CapabilityStatus
     baseline_cache: CapabilityStatus
     resident_attention: CapabilityStatus
@@ -61,6 +69,16 @@ class ScratchReplayState:
     cache: list[Any]
     replayed_tokens: int
     materialized: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeFamilyDescriptor:
+    family: RuntimeFamily
+    display_name: str
+    summary: str
+    token_addressable: bool
+    sliding_window: bool = False
+    hybrid_state: bool = False
 
 
 @runtime_checkable
@@ -97,6 +115,13 @@ class AdaptiveKVLayerRuntime(Protocol):
         blocks: tuple[Any, ...],
         keys: mx.array,
         values: mx.array,
+    ) -> None: ...
+
+    def recover_blocks_from_scratch(
+        self,
+        blocks: tuple[Any, ...],
+        replay_layer: Any,
+        replay_backend: AdaptiveKVReplayBackend,
     ) -> None: ...
 
     def resident_state_for_attention(self) -> Any: ...
@@ -167,13 +192,29 @@ class AdaptiveKVReplayBackend(Protocol):
     ) -> tuple[mx.array, mx.array]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeFamilyBindings:
+    descriptor: RuntimeFamilyDescriptor
+    runtime_substrate: AdaptiveKVRuntimeSubstrate
+    replay_backend: AdaptiveKVReplayBackend
+    layer_runtime_type: type[Any] | None = None
+
+
 @runtime_checkable
 class AdaptiveKVRuntimeAdapter(Protocol):
     name: str
     capability_provider: AdaptiveKVCapabilityProvider
-    runtime_substrate: AdaptiveKVRuntimeSubstrate
-    replay_backend: AdaptiveKVReplayBackend
-    layer_runtime_type: type[Any] | None
+    default_family: RuntimeFamily
+    family_bindings: dict[RuntimeFamily, RuntimeFamilyBindings]
+
+    @property
+    def runtime_substrate(self) -> AdaptiveKVRuntimeSubstrate: ...
+
+    @property
+    def replay_backend(self) -> AdaptiveKVReplayBackend: ...
+
+    @property
+    def layer_runtime_type(self) -> type[Any] | None: ...
 
     def matches_model(self, model: Any) -> bool: ...
 
@@ -187,16 +228,20 @@ class AdaptiveKVRuntimeAdapter(Protocol):
         input_embeddings_present: bool = False,
     ) -> AdapterCapabilities: ...
 
+    def resolve_family_bindings(
+        self,
+        family: RuntimeFamily,
+    ) -> RuntimeFamilyBindings | None: ...
+
 
 class ComposedAdaptiveKVRuntimeAdapter:
     """Concrete adapter assembled from independent capability/runtime components."""
 
     __slots__ = (
         "capability_provider",
-        "layer_runtime_type",
+        "default_family",
+        "family_bindings",
         "name",
-        "replay_backend",
-        "runtime_substrate",
     )
 
     def __init__(
@@ -204,15 +249,31 @@ class ComposedAdaptiveKVRuntimeAdapter:
         *,
         name: str,
         capability_provider: AdaptiveKVCapabilityProvider,
-        runtime_substrate: AdaptiveKVRuntimeSubstrate,
-        replay_backend: AdaptiveKVReplayBackend,
-        layer_runtime_type: type[Any] | None = None,
+        default_family: RuntimeFamily,
+        family_bindings: tuple[RuntimeFamilyBindings, ...],
     ) -> None:
+        bindings_map = {binding.descriptor.family: binding for binding in family_bindings}
+        if default_family not in bindings_map:
+            raise ValueError(
+                f"Adaptive KV adapter {name!r} is missing bindings for default family "
+                f"{default_family.value!r}"
+            )
         self.name = name
         self.capability_provider = capability_provider
-        self.runtime_substrate = runtime_substrate
-        self.replay_backend = replay_backend
-        self.layer_runtime_type = layer_runtime_type
+        self.default_family = default_family
+        self.family_bindings = bindings_map
+
+    @property
+    def runtime_substrate(self) -> AdaptiveKVRuntimeSubstrate:
+        return self.family_bindings[self.default_family].runtime_substrate
+
+    @property
+    def replay_backend(self) -> AdaptiveKVReplayBackend:
+        return self.family_bindings[self.default_family].replay_backend
+
+    @property
+    def layer_runtime_type(self) -> type[Any] | None:
+        return self.family_bindings[self.default_family].layer_runtime_type
 
     def matches_model(self, model: Any) -> bool:
         return self.capability_provider.matches_model(model)
@@ -233,6 +294,12 @@ class ComposedAdaptiveKVRuntimeAdapter:
             quantized_kv_start=quantized_kv_start,
             input_embeddings_present=input_embeddings_present,
         )
+
+    def resolve_family_bindings(
+        self,
+        family: RuntimeFamily,
+    ) -> RuntimeFamilyBindings | None:
+        return self.family_bindings.get(family)
 
     def make_layer_runtime(self, manager: Any, layer_index: int) -> AdaptiveKVLayerRuntime:
         return self.runtime_substrate.make_layer_runtime(manager, layer_index)
@@ -277,10 +344,15 @@ class ComposedAdaptiveKVRuntimeAdapter:
 class AdapterSelection:
     adapter: AdaptiveKVRuntimeAdapter | None
     capabilities: AdapterCapabilities
+    family_bindings: RuntimeFamilyBindings | None = None
 
     @property
     def platform(self) -> AdaptiveKVRuntimeAdapter | None:
         return self.adapter
+
+    @property
+    def runtime_family(self) -> RuntimeFamily:
+        return self.capabilities.runtime_family
 
     @property
     def num_layers(self) -> int:
@@ -288,12 +360,18 @@ class AdapterSelection:
 
     @property
     def runtime_substrate(self) -> AdaptiveKVRuntimeSubstrate | None:
-        if self.adapter is None:
+        if self.family_bindings is None:
             return None
-        return self.adapter.runtime_substrate
+        return self.family_bindings.runtime_substrate
 
     @property
     def replay_backend(self) -> AdaptiveKVReplayBackend | None:
-        if self.adapter is None:
+        if self.family_bindings is None:
             return None
-        return self.adapter.replay_backend
+        return self.family_bindings.replay_backend
+
+    @property
+    def layer_runtime_type(self) -> type[Any] | None:
+        if self.family_bindings is None:
+            return None
+        return self.family_bindings.layer_runtime_type

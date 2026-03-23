@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from mlxs.adaptive_kv.adapters.llama import LlamaAdaptiveKVAdapter, LlamaAdaptiveLayerCache
+from mlxs.adaptive_kv.adapters.ministral3 import Ministral3AdaptiveKVAdapter
+from mlxs.adaptive_kv.adapters.qwen35 import Qwen35AdaptiveKVAdapter
 from mlxs.adaptive_kv.runtime import AdaptiveKVRuntimeAdapter
 
 
@@ -31,7 +33,13 @@ class AdaptiveKVAdapterRegistry:
         return None
 
 
-_GENERATION_REGISTRY = AdaptiveKVAdapterRegistry((LlamaAdaptiveKVAdapter(),))
+_GENERATION_REGISTRY = AdaptiveKVAdapterRegistry(
+    (
+        LlamaAdaptiveKVAdapter(),
+        Ministral3AdaptiveKVAdapter(),
+        Qwen35AdaptiveKVAdapter(),
+    )
+)
 
 
 def generation_adapter_registry() -> AdaptiveKVAdapterRegistry:
@@ -54,6 +62,8 @@ __all__ = [
     "AdaptiveKVAdapterRegistry",
     "LlamaAdaptiveKVAdapter",
     "LlamaAdaptiveLayerCache",
+    "Ministral3AdaptiveKVAdapter",
+    "Qwen35AdaptiveKVAdapter",
     "default_generation_adapter",
     "generation_adapter_registry",
     "generation_adapters",

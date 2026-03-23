@@ -14,6 +14,10 @@ from mlxs.generate import generate
 from mlxs.layers.attention import scaled_dot_product_attention
 from mlxs.models.llama import Model as LlamaModel
 from mlxs.models.llama import ModelArgs as LlamaModelArgs
+from mlxs.models.ministral3 import Model as Ministral3Model
+from mlxs.models.ministral3 import ModelArgs as Ministral3ModelArgs
+from mlxs.models.qwen3_5 import Model as Qwen35Model
+from mlxs.models.qwen3_5 import ModelArgs as Qwen35ModelArgs
 from mlxs.observability.metrics import InMemoryMetrics
 
 
@@ -134,7 +138,7 @@ def test_adaptive_enabled_unsupported_family_fails_clearly() -> None:
     tokenizer = _Tokenizer()
     model = _UnsupportedModel()
 
-    with pytest.raises(Exception, match="model_type='llama'"):
+    with pytest.raises(Exception, match="no registered exact adapter"):
         list(
             generate(
                 model,
@@ -144,6 +148,126 @@ def test_adaptive_enabled_unsupported_family_fails_clearly() -> None:
                 adaptive_config=AdaptiveKVConfig(enabled=True),
             )
         )
+
+
+def test_adaptive_enabled_standard_qwen35_hybrid_runtime_preserves_generation() -> None:
+    mx.random.seed(19)
+    tokenizer = _NoStopTokenizer()
+    model = Qwen35Model(
+        Qwen35ModelArgs(
+            hidden_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=32,
+            intermediate_size=256,
+            linear_num_value_heads=4,
+            linear_num_key_heads=2,
+            linear_key_head_dim=32,
+            linear_value_head_dim=32,
+            linear_conv_kernel_dim=4,
+            full_attention_interval=2,
+            vocab_size=128,
+            tie_word_embeddings=False,
+        )
+    )
+
+    baseline = [
+        event.token_id
+        for event in generate(
+            model,
+            tokenizer,
+            [1, 2, 3, 4],
+            GenerateOptions(max_tokens=4, temperature=0),
+        )
+    ]
+
+    metrics = InMemoryMetrics()
+    final_state: list[dict[str, Any]] = []
+    adaptive = [
+        event.token_id
+        for event in generate(
+            model,
+            tokenizer,
+            [1, 2, 3, 4],
+            GenerateOptions(max_tokens=4, temperature=0),
+            adaptive_config=AdaptiveKVConfig(
+                enabled=True,
+                block_size_tokens=2,
+                update_window_steps=1,
+                soft_budget_bytes=800,
+                hard_budget_bytes=1200,
+                recent_tail_protect_blocks=0,
+                t_full_promote=0.95,
+                t_full_demote=0.9,
+                t_evict_candidate=0.99,
+            ),
+            metrics=metrics,
+            final_adaptive_state_out=final_state,
+        )
+    ]
+
+    assert adaptive == baseline
+    assert final_state
+    assert "n_attention_segments" in final_state[0]["attention_path"]
+    assert metrics.get_counter("adaptive_kv_evictions_total") > 0
+    assert metrics.get_counter("adaptive_kv_recomputations_total") > 0
+
+
+def test_adaptive_enabled_standard_ministral3_sliding_runtime_preserves_generation() -> None:
+    mx.random.seed(23)
+    tokenizer = _NoStopTokenizer()
+    model = Ministral3Model(
+        Ministral3ModelArgs(
+            hidden_size=128,
+            num_hidden_layers=2,
+            intermediate_size=256,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            head_dim=32,
+            vocab_size=128,
+            tie_word_embeddings=False,
+            layer_types=["full_attention", "sliding_attention"],
+            sliding_window=64,
+        )
+    )
+
+    baseline = [
+        event.token_id
+        for event in generate(
+            model,
+            tokenizer,
+            [1, 2, 3, 4],
+            GenerateOptions(max_tokens=4, temperature=0),
+        )
+    ]
+
+    metrics = InMemoryMetrics()
+    adaptive = [
+        event.token_id
+        for event in generate(
+            model,
+            tokenizer,
+            [1, 2, 3, 4],
+            GenerateOptions(max_tokens=4, temperature=0),
+            adaptive_config=AdaptiveKVConfig(
+                enabled=True,
+                block_size_tokens=2,
+                update_window_steps=1,
+                soft_budget_bytes=800,
+                hard_budget_bytes=1200,
+                recent_tail_protect_blocks=0,
+                t_full_promote=0.95,
+                t_full_demote=0.9,
+                t_evict_candidate=0.99,
+            ),
+            metrics=metrics,
+        )
+    ]
+
+    assert adaptive == baseline
+    assert metrics.get_counter("adaptive_kv_evictions_total") > 0
+    assert metrics.get_counter("adaptive_kv_recomputations_total") > 0
 
 
 def test_adaptive_enabled_rejects_compile_decode() -> None:
@@ -203,6 +327,122 @@ def test_adaptive_real_llama_recovery_preserves_generation_under_pressure() -> N
                 update_window_steps=1,
                 soft_budget_bytes=500,
                 hard_budget_bytes=900,
+                recent_tail_protect_blocks=0,
+                t_full_promote=0.95,
+                t_full_demote=0.9,
+                t_evict_candidate=0.99,
+            ),
+            metrics=metrics,
+        )
+    ]
+
+    assert adaptive == baseline
+    assert metrics.get_counter("adaptive_kv_evictions_total") > 0
+    assert metrics.get_counter("adaptive_kv_recomputations_total") > 0
+
+
+def test_adaptive_qwen35_full_attention_only_recovery_preserves_generation() -> None:
+    mx.random.seed(11)
+    tokenizer = _NoStopTokenizer()
+    model = Qwen35Model(
+        Qwen35ModelArgs(
+            hidden_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=32,
+            intermediate_size=256,
+            linear_num_value_heads=4,
+            linear_num_key_heads=2,
+            linear_key_head_dim=32,
+            linear_value_head_dim=32,
+            linear_conv_kernel_dim=4,
+            full_attention_interval=1,
+            vocab_size=128,
+            tie_word_embeddings=False,
+        )
+    )
+
+    baseline = [
+        event.token_id
+        for event in generate(
+            model,
+            tokenizer,
+            [1, 2, 3, 4],
+            GenerateOptions(max_tokens=4, temperature=0),
+        )
+    ]
+
+    metrics = InMemoryMetrics()
+    adaptive = [
+        event.token_id
+        for event in generate(
+            model,
+            tokenizer,
+            [1, 2, 3, 4],
+            GenerateOptions(max_tokens=4, temperature=0),
+            adaptive_config=AdaptiveKVConfig(
+                enabled=True,
+                block_size_tokens=2,
+                update_window_steps=1,
+                soft_budget_bytes=800,
+                hard_budget_bytes=1200,
+                recent_tail_protect_blocks=0,
+                t_full_promote=0.95,
+                t_full_demote=0.9,
+                t_evict_candidate=0.99,
+            ),
+            metrics=metrics,
+        )
+    ]
+
+    assert adaptive == baseline
+    assert metrics.get_counter("adaptive_kv_evictions_total") > 0
+    assert metrics.get_counter("adaptive_kv_recomputations_total") > 0
+
+
+def test_adaptive_ministral3_full_attention_only_recovery_preserves_generation() -> None:
+    mx.random.seed(13)
+    tokenizer = _NoStopTokenizer()
+    model = Ministral3Model(
+        Ministral3ModelArgs(
+            hidden_size=128,
+            num_hidden_layers=2,
+            intermediate_size=256,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            head_dim=32,
+            vocab_size=128,
+            tie_word_embeddings=False,
+            layer_types=["full_attention", "full_attention"],
+            sliding_window=None,
+        )
+    )
+
+    baseline = [
+        event.token_id
+        for event in generate(
+            model,
+            tokenizer,
+            [1, 2, 3, 4],
+            GenerateOptions(max_tokens=4, temperature=0),
+        )
+    ]
+
+    metrics = InMemoryMetrics()
+    adaptive = [
+        event.token_id
+        for event in generate(
+            model,
+            tokenizer,
+            [1, 2, 3, 4],
+            GenerateOptions(max_tokens=4, temperature=0),
+            adaptive_config=AdaptiveKVConfig(
+                enabled=True,
+                block_size_tokens=2,
+                update_window_steps=1,
+                soft_budget_bytes=800,
+                hard_budget_bytes=1200,
                 recent_tail_protect_blocks=0,
                 t_full_promote=0.95,
                 t_full_demote=0.9,

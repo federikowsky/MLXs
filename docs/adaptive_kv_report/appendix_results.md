@@ -99,22 +99,38 @@ Focused checked-in reproductions currently report no first-difference on the ret
 
 These reproductions are useful as tight regression checks, but they do not supersede the broader scope statement: `adaptive_soft` still does not promise greedy parity while compressed KV is active.
 
-## B.8 Platform-Architecture Regression Checks
+## B.8 Runtime-Families Architecture Regression Checks
 
-Later same-machine one-shot checks used during the platform architecture refactor:
+Later same-machine spot checks used during the runtime-families architecture program kept the retained Llama path as the Family A control gate.
 
-| Case | Baseline tok/s | Refactored tok/s | Relative signal |
+The current-tree spot checks were:
+
+| Case | Adaptive tok/s | Evictions | Recompute requests | Final pressure | Final resident bytes | `reference_token_match` |
+|---|---:|---:|---:|---|---:|---|
+| SOFT `long_static` `adaptive_soft` | 187.98 | 0 | 0 | `soft` | 44,613,632 | true |
+| HARD 512 `hard_pressure_context` `adaptive_hard` | 182.62 | 1 | 1 | `soft` | 41,058,304 | true |
+| HARD 1024 `hard_pressure_context` `adaptive_hard` | 196.77 | 6 | 1 | `hard` | 71,335,936 | true |
+
+The more stable architectural readout is still the adaptive/full ratio against earlier retained sanity artifacts:
+
+| Case | Earlier sanity adaptive / full | Runtime-family run adaptive / full | Interpretation |
 |---|---:|---:|---|
-| SOFT `long_static` `adaptive_soft` | 240.11 | 244.28 | +1.74% |
-| HARD 512 `adaptive_hard` | 226.95 | 214.78 | one-shot absolute drop, but same-run ratio to `adaptive_full` improved |
-| HARD 1024 `adaptive_hard` | 228.97 | 231.10 | +0.93% |
+| SOFT `adaptive_soft / adaptive_full` | 0.939 | 0.902 on first run, 1.137 on immediate rerun | One-shot SOFT signal was noisy and not treated as evidence of regression |
+| HARD 512 `adaptive_hard / adaptive_full` | 0.919 | 0.949 | Stable to slightly improved |
+| HARD 1024 `adaptive_hard / adaptive_full` | 0.726 | 0.721 | Effectively unchanged |
 
-Within-run adaptive ratios are the more stable architectural readout:
+These checks were used as regression gates, not as the primary synthetic performance claim for the system. Their purpose was to decide whether the explicit runtime-family layer could be retained without a credible material slowdown on the Family A control path.
 
-| Case | Baseline adaptive / full | Refactored adaptive / full |
-|---|---:|---:|
-| SOFT `adaptive_soft / adaptive_full` | 0.964 | 0.991 |
-| HARD 512 `adaptive_hard / adaptive_full` | 0.921 | 0.970 |
-| HARD 1024 `adaptive_hard / adaptive_full` | 0.709 | 0.723 |
+## B.9 Runtime-Family Support Outcomes
 
-These checks were used as regression gates, not as the primary synthetic performance claim for the system.
+The retained runtime-family architecture makes the support boundary explicit:
+
+| Model/runtime shape | Runtime family | Retained status |
+|---|---|---|
+| Llama retained path | Family A `full_kv` | Supported control/baseline path |
+| Full-attention-only `qwen3_5` subset | Family A `full_kv` | Supported compatible subset |
+| Standard `qwen3_5` | Family C `hybrid_state` | Unsupported |
+| Full-attention-only `ministral3` subset | Family A `full_kv` | Supported compatible subset |
+| Standard `ministral3` | Family B `windowed_kv` | Unsupported |
+
+The checked-in `family_subset_micro.json` artifact is useful as architectural smoke evidence for the compatible Family A subsets, but it should not be read as a broad production benchmark claim for the standard Qwen or Ministral runtimes.

@@ -56,7 +56,7 @@ class RotatingKVCache:
         return self._values
 
     def _trim_and_cat(
-        self, v: mx.array, trim_size: int, append: mx.array | None = None
+        self, trim_size: int, v: mx.array, append: mx.array | None = None
     ) -> mx.array:
         to_cat: list[mx.array] = []
         if trim_size > 0:

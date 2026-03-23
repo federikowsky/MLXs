@@ -16,6 +16,19 @@ from mlxs.adaptive_kv.manager import AdaptiveKVManager
 from mlxs.cache.kv import KVCache
 
 
+def _cache_eval_tensors(cache_entry: Any) -> list[mx.array]:
+    state = getattr(cache_entry, "state", None)
+    if state is not None:
+        if isinstance(state, tuple):
+            return [tensor for tensor in state if hasattr(tensor, "nbytes")]
+        if hasattr(state, "nbytes"):
+            return [state]
+    cache_list = getattr(cache_entry, "cache", None)
+    if cache_list is None:
+        return []
+    return [tensor for tensor in cache_list if hasattr(tensor, "nbytes")]
+
+
 def chunked_prefill(
     model: nn.Module,
     prompt_tokens: mx.array,
@@ -57,7 +70,13 @@ def chunked_prefill(
             model(chunk[None], cache=cache, input_embeddings=chunk_embeds[None])
         else:
             model(chunk[None], cache=cache)
-        mx.eval([c.state for c in cache if c.state is not None])
+        tensors = [
+            tensor
+            for cache_entry in cache
+            for tensor in _cache_eval_tensors(cache_entry)
+        ]
+        if tensors:
+            mx.eval(tensors)
         offset += n
         mx.clear_cache()
 
