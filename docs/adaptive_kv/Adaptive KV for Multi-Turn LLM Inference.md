@@ -467,6 +467,8 @@ On fresh same-machine before/after benchmark gating, that retained subset improv
 
 A deeper structural continuation of the Exact Runtime Optimization Program then explored a more aggressive exact mixed-tier executor redesign. That redesign remained exact and passed validation, but the decisive same-process 1024-token HARD gate improved by only about 1.6%, below the intended retention threshold for materially more complex executor work. It was therefore reverted, and the retained runtime baseline remained the earlier implementation already described above.
 
+A final Runtime Architecture R&D program then tested whether a materially better exact runtime/data-plane substrate could replace the retained baseline outright. It explored deeper exact mixed-tier executor and resident-plan redesigns, including a streaming mixed-tier decode path and an incremental resident-plan refresh path. Both remained exact and were benchmarked seriously. The streaming decode prototype regressed and was rejected, while the resident-plan refresh path failed the decisive same-process HARD gate and was also rejected. As a result, the retained runtime baseline remained unchanged.
+
 12.5 Regression correctness and token parity
 
 On the synthetic benchmark matrix used for V1 regression, reference_token_match remained true for adaptive_full versus non_adaptive in the final repeated rerun.
@@ -558,7 +560,7 @@ The key result is not merely that adaptive KV can be made to work, but that it c
 	•	production-serious,
 	•	and performant enough within a well-defined supported scope.
 
-That is the correct stopping point for V1. The HARD track and the later Exact Runtime Optimization Program are closed, with the existing retained runtime baseline left in place; any further improvement belongs to optional deeper executor R&D only if product goals justify it.
+That is the correct stopping point for V1. The HARD track, the later Exact Runtime Optimization Program, and the final Runtime Architecture R&D program are closed, with the existing retained runtime baseline left in place; any further improvement belongs to optional deeper executor/data-plane R&D only if product goals justify it.
 
 ⸻
 
@@ -572,7 +574,7 @@ If greedy parity or tighter output distributions are required while COMPRESSED b
 
 16.2 HARD-pressure optimization
 
-The ordinary HARD hardening track and the later Exact Runtime Optimization Program are complete for V1. The existing retained runtime baseline stays in place, and the remaining limitation is still structural to the current exact mixed-tier segmented executor.
+The ordinary HARD hardening track, the later Exact Runtime Optimization Program, and the final Runtime Architecture R&D program are complete for V1. The existing retained runtime baseline stays in place, and the remaining limitation is still structural to the current exact mixed-tier segmented executor.
 
 Any further work should therefore be treated as optional executor R&D, for example:
 	•	a deeper exact mixed-tier executor restructuring for the stable HARD decode shape,

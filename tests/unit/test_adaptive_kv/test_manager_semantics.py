@@ -606,6 +606,40 @@ def test_single_token_mixed_tier_attention_matches_reference_and_usage() -> None
     ).item()
 
 
+def test_single_token_mixed_tier_attention_without_usage_matches_reference() -> None:
+    manager = _make_manager(prompt_tokens=[1, 2, 3, 4, 5, 6, 7, 8], recent_tail_protect_blocks=0)
+    cache = manager.caches()[0]
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._demote_block(manager.registry.get(2), reason="test_demote")
+
+    resident_state = cache.resident_state_for_attention()
+    queries = _q_from_tokens([9])
+    assembled_keys = cache.keys
+    assembled_values = cache.values
+
+    assert assembled_keys is not None
+    assert assembled_values is not None
+
+    out = adaptive_scaled_dot_product_attention(
+        queries,
+        resident_state,
+        scale=1.0,
+        mask=None,
+        sample_usage=False,
+    )
+    ref_out = mx.fast.scaled_dot_product_attention(
+        queries,
+        assembled_keys,
+        assembled_values,
+        scale=1.0,
+        mask=None,
+        sinks=None,
+    )
+
+    assert mx.allclose(out, ref_out, rtol=1e-5, atol=1e-5).item()
+
+
 def test_single_token_mixed_tier_uses_decode_specialized_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -62,3 +62,5 @@ data/taskmanager.db
 data/taskmanager.db-shm
 data/taskmanager.db-wal
 uv.lock
+docs/dev/*
+
