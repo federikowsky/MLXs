@@ -461,9 +461,11 @@ Representative retained HARD references show:
 
 The remaining gap is therefore no longer best described as a replay-wave explosion, an observer-path bug, or an obvious manager-side inefficiency. It is structural to the current exact mixed-tier segmented executor under compressed-heavy HARD steady state.
 
-The later runtime program did not keep every attempted change. A broader executor-fusion variant was benchmark-negative and was reverted. The retained subset kept executor-ready resident slice metadata, a score-side decode specialization for q_len == 1 mixed-tier resident state, and the generic segmented executor as the exact oracle and fallback.
+The earlier retained runtime work did not keep every attempted change. A broader executor-fusion variant was benchmark-negative and was reverted. The retained subset kept executor-ready resident slice metadata, a score-side decode specialization for q_len == 1 mixed-tier resident state, and the generic segmented executor as the exact oracle and fallback.
 
 On fresh same-machine before/after benchmark gating, that retained subset improved adaptive_soft by about 1.6% on long_static and 0.6% on hard_pressure_context, improved adaptive_hard by about 13.6% at 512 prompt tokens and 3.7% at 1024 prompt tokens, and left recompute counts, eviction counts, final pressure state, final resident bytes, and correctness signals semantically consistent.
+
+A deeper structural continuation of the Exact Runtime Optimization Program then explored a more aggressive exact mixed-tier executor redesign. That redesign remained exact and passed validation, but the decisive same-process 1024-token HARD gate improved by only about 1.6%, below the intended retention threshold for materially more complex executor work. It was therefore reverted, and the retained runtime baseline remained the earlier implementation already described above.
 
 12.5 Regression correctness and token parity
 
@@ -556,7 +558,7 @@ The key result is not merely that adaptive KV can be made to work, but that it c
 	•	production-serious,
 	•	and performant enough within a well-defined supported scope.
 
-That is the correct stopping point for V1. The HARD track and the later Exact Runtime Optimization Program are closed; any further improvement belongs to optional deeper executor R&D only if product goals justify it.
+That is the correct stopping point for V1. The HARD track and the later Exact Runtime Optimization Program are closed, with the existing retained runtime baseline left in place; any further improvement belongs to optional deeper executor R&D only if product goals justify it.
 
 ⸻
 
@@ -570,7 +572,7 @@ If greedy parity or tighter output distributions are required while COMPRESSED b
 
 16.2 HARD-pressure optimization
 
-The ordinary HARD hardening track and the later Exact Runtime Optimization Program are complete for V1. The retained subset of the runtime work improves the current baseline, but the remaining limitation is still structural to the current exact mixed-tier segmented executor.
+The ordinary HARD hardening track and the later Exact Runtime Optimization Program are complete for V1. The existing retained runtime baseline stays in place, and the remaining limitation is still structural to the current exact mixed-tier segmented executor.
 
 Any further work should therefore be treated as optional executor R&D, for example:
 	•	a deeper exact mixed-tier executor restructuring for the stable HARD decode shape,
