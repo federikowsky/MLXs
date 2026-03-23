@@ -167,6 +167,25 @@ def _apply_attention_mask(
     return scores, mask
 
 
+def _is_all_full_contiguous_resident_state(
+    resident_state: Any,
+    full_keys: mx.array | None,
+    full_values: mx.array | None,
+) -> bool:
+    if full_keys is None or full_values is None or resident_state.has_compressed:
+        return False
+    if len(resident_state.segments) != 1:
+        return False
+    segment = resident_state.segments[0]
+    return (
+        segment.tier is BlockTier.FULL
+        and segment.token_count == resident_state.total_tokens
+        and segment.full_slice == (0, resident_state.total_tokens)
+        and full_keys.shape[2] == resident_state.total_tokens
+        and full_values.shape[2] == resident_state.total_tokens
+    )
+
+
 def adaptive_scaled_dot_product_attention(
     queries: mx.array,
     resident_state: Any,
@@ -183,12 +202,17 @@ def adaptive_scaled_dot_product_attention(
         full_values = resident_state.full_values
 
     if (
-        not resident_state.has_compressed
-        and not sample_usage
+        _is_all_full_contiguous_resident_state(
+            resident_state,
+            full_keys,
+            full_values,
+        )
         and full_keys is not None
         and full_values is not None
     ):
-        return mx.fast.scaled_dot_product_attention(
+        # Keep the generation result on fused SDPA when adaptive resident state is
+        # semantically identical to the baseline contiguous FULL cache.
+        out = mx.fast.scaled_dot_product_attention(
             queries,
             full_keys,
             full_values,
@@ -196,6 +220,12 @@ def adaptive_scaled_dot_product_attention(
             mask=mask,
             sinks=None,
         )
+        if not sample_usage:
+            return out
+        scores = _full_segment_scores(queries, full_keys, scale=scale)
+        scores, _ = _apply_attention_mask(scores, mask)
+        weights = mx.softmax(scores, axis=-1, precise=True)
+        return out, weights
     if (
         len(resident_state.segments) == 1
         and resident_state.segments[0].tier is BlockTier.COMPRESSED

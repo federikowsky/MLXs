@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 
 import mlx.core as mx
+import pytest
 
 from mlxs.adaptive_kv.block_types import BlockTier, PressureState
 from mlxs.adaptive_kv.config import AdaptiveKVConfig
 from mlxs.adaptive_kv.manager import AdaptiveKVManager
+from mlxs.layers.attention import scaled_dot_product_attention
 from mlxs.observability.metrics import InMemoryMetrics
 
 
@@ -15,6 +17,11 @@ def _kv_from_tokens(tokens: list[int], *, head_dim: int = 32) -> tuple[mx.array,
     keys = mx.broadcast_to(base + 1.0, (1, 1, len(tokens), head_dim))
     values = mx.broadcast_to(base + 2.0, (1, 1, len(tokens), head_dim))
     return keys, values
+
+
+def _q_from_tokens(tokens: list[int], *, head_dim: int = 32) -> mx.array:
+    base = mx.array(tokens, dtype=mx.float32).reshape(1, 1, len(tokens), 1)
+    return mx.broadcast_to(base, (1, 1, len(tokens), head_dim))
 
 
 class _ReplayModel:
@@ -185,3 +192,51 @@ def test_usage_timing_accumulates_only_at_window_flush() -> None:
     assert usage
     assert manager._adaptive_usage_timing_acc.get("eval_ns", 0) > 0
     assert manager._adaptive_usage_timing_acc.get("host_ns", 0) >= 0
+
+
+def test_sampled_all_full_forward_keeps_fused_output_and_records_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _make_manager(prompt_tokens=[1, 2, 3, 4], recent_tail_protect_blocks=0)
+    cache = manager.caches()[0]
+
+    manager.before_decode_forward(5)
+    assert cache.should_sample_usage() is True
+
+    queries = _q_from_tokens([5])
+    keys, values = _kv_from_tokens([5])
+    resident_state, _ = cache.update_and_fetch(keys, values)
+    sentinel = mx.full((1, 1, 1, queries.shape[-1]), 7.0, dtype=mx.float32)
+    fast_calls = 0
+
+    def fake_sdpa(
+        q: mx.array,
+        k: mx.array,
+        v: mx.array,
+        *,
+        scale: float,
+        mask: mx.array | str | None,
+        sinks: mx.array | None,
+    ) -> mx.array:
+        del q, k, v, scale, mask, sinks
+        nonlocal fast_calls
+        fast_calls += 1
+        return sentinel
+
+    monkeypatch.setattr(mx.fast, "scaled_dot_product_attention", fake_sdpa)
+
+    out = scaled_dot_product_attention(
+        queries,
+        resident_state,
+        resident_state,
+        cache=cache,
+        scale=1.0,
+        mask=cache.make_mask(1),
+    )
+    usage = manager.usage.snapshot_and_reset()
+    mx.eval(out)
+
+    assert fast_calls == 1
+    assert out.tolist() == sentinel.tolist()
+    assert usage
+    assert manager.registry.block_for_token(cache.offset - 1).block_id in usage
