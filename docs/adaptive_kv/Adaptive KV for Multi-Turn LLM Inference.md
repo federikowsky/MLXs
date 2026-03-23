@@ -591,15 +591,3 @@ Any expansion to:
 	•	prompt-cache interop,
 
 must be treated as a new explicit design/integration track.
-
-⸻
-
-17. Freeze Recommendation
-
-Recommended repository action:
-	1.	save this document as the V1 freeze record,
-	2.	preserve final benchmark artifacts as baseline references,
-	3.	stop implementation churn on V1,
-	4.	reopen only if:
-	•	HARD-pressure performance becomes a real product requirement that justifies dedicated executor R&D,
-	•	or scope expansion is needed.
