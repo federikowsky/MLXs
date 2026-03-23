@@ -127,10 +127,12 @@ The retained runtime-family architecture makes the support boundary explicit:
 
 | Model/runtime shape | Runtime family | Retained status |
 |---|---|---|
-| Llama retained path | Family A `full_kv` | Supported control/baseline path |
-| Full-attention-only `qwen3_5` subset | Family A `full_kv` | Supported compatible subset |
-| Standard `qwen3_5` | Family C `hybrid_state` | Unsupported |
-| Full-attention-only `ministral3` subset | Family A `full_kv` | Supported compatible subset |
-| Standard `ministral3` | Family B `windowed_kv` | Unsupported |
+| Llama retained path | Family A `full_kv` | Supported control/baseline path (principal benchmark surface in this report) |
+| Full-attention-only `qwen3_5` subset | Family A `full_kv` | Supported when homogeneous `list[KVCache]` baseline and other gates pass |
+| Standard text-only `qwen3_5` | Family C `hybrid_state` | Supported when hybrid layer/cache contract passes the gate |
+| Full-attention-only `ministral3` subset | Family A `full_kv` | Supported when homogeneous `list[KVCache]` baseline and other gates pass |
+| Standard `ministral3` (sliding-window layers) | Family B `windowed_kv` | Supported when `sliding_window`, layer alignment, and `KVCache`/`RotatingKVCache` contract pass the gate |
+| Multimodal `qwen3_5` or `ministral3` | — | Unsupported (`input_embeddings` paths) |
+| `compile_decode`, legacy `quantized_kv_start`, external cache reuse | — | Unsupported |
 
-The checked-in `family_subset_micro.json` artifact is useful as architectural smoke evidence for the compatible Family A subsets, but it should not be read as a broad production benchmark claim for the standard Qwen or Ministral runtimes.
+The checked-in `family_subset_micro.json` artifact remains useful as tight smoke evidence for Family A-compatible subsets; separate artifacts (for example under `results/bench_adaptive/`) document Family B/C regression-style runs and must not be over-interpreted as universal production throughput claims.

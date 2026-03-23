@@ -4,7 +4,7 @@
 
 | Regime | What is exact | What is not promised |
 |---|---|---|
-| `adaptive_full` | Full resident visibility, observer-only usage collection, greedy-token parity with the supported non-adaptive baseline under the retained Llama configuration | Broader model-family support, unsupported cache shapes, or unsupported runtime features |
+| `adaptive_full` | Full resident visibility, observer-only usage collection, greedy-token parity with the supported non-adaptive baseline under each **fully gated** configuration; Llama Family A remains the principal documented benchmark case | Partially gated configurations, multimodal paths, `compile_decode`, legacy `quantized_kv_start`, external cache reuse, or unsupported model types |
 | `adaptive_soft` | Exact adaptive policy semantics, exact ordering of resident state, observer-only control, exact mixed-tier attention over the actual resident state | Greedy-token parity once compressed KV fidelity influences logits |
 | `adaptive_hard` | Real replay-backed recovery, exact required-resident barrier before decode, honest pressure and live-byte accounting | Throughput parity with an all-resident baseline under small budgets |
 
@@ -74,7 +74,7 @@ The retained platform architecture now exposes support explicitly through a stru
 - partial or unsupported configurations are rejected with explicit reasons,
 - and the architecture does not imply broader working model support than the implementation actually provides.
 
-At the time of this report, the only verified working family is the retained Llama full-attention baseline.
+At the time of this report, the implementation retains **three** exact runtime substrates (Families A, B, and C). The **principal parity and throughput evidence packaged here** remains the Llama full-attention Family A baseline; Family B (`ministral3`) and Family C (text-only `qwen3_5`) are retained exact paths where the capability gate reports full support, without expanding the unsupported-feature list.
 
 ## C.8 How to Read Noisy Source Material
 

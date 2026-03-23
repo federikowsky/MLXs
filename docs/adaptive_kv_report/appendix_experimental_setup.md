@@ -7,14 +7,15 @@ All reported results are within the retained Adaptive KV V1 scope:
 | Dimension | Retained scope |
 |---|---|
 | Generation mode | Single-request generation only |
-| Verified model family | `model_type == "llama"` |
-| Verified baseline | Full-attention Llama baseline with homogeneous `list[KVCache]` |
+| Principal evaluation model | `model_type == "llama"` (tables in this report) |
+| Principal evaluation baseline | Full-attention Llama with homogeneous `list[KVCache]` |
+| Additional retained implementations | Standard `ministral3` on Family B and standard text-only `qwen3_5` on Family C when compatibility passes (not substituting for the Llama tables here) |
 | Adaptive tiers | `FULL`, `COMPRESSED`, `EVICTED` |
 | Recovery model | Real replay-backed recovery from authoritative source tokens |
 | Observer semantics | Observer-only; no query/key/value/logit modification |
 | Excluded features | `compile_decode`, legacy `quantized_kv_start`, external cache reuse, unsupported families |
 
-The current retained implementation baseline is the platform architecture in which the generic Adaptive KV core is separated from four runtime-facing roles: capability provider, runtime substrate, replay backend, and composed runtime adapter. The only verified working family under this baseline remains the retained Llama path.
+The current retained implementation baseline is the platform architecture in which the generic Adaptive KV core is separated from five runtime-facing roles: capability provider, runtime-family layer, runtime substrate (with retained exact Family A/B/C substrate implementations), replay backend, and composed runtime adapter. **Benchmark evidence in this appendix and the main report is anchored on the Llama Family A path**; Family B/C are retained exact production paths in code with their own narrower regression artifacts elsewhere in the repository.
 
 ## A.2 Software and Runtime Context
 
