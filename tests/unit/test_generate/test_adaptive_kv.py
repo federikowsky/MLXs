@@ -215,3 +215,56 @@ def test_adaptive_real_llama_recovery_preserves_generation_under_pressure() -> N
     assert adaptive == baseline
     assert metrics.get_counter("adaptive_kv_evictions_total") > 0
     assert metrics.get_counter("adaptive_kv_recomputations_total") > 0
+
+
+def test_adaptive_hard_stabilization_preserves_parity_and_avoids_repeat_churn() -> None:
+    tokenizer = _NoStopTokenizer()
+    model = _AdaptiveBaselineModel()
+
+    baseline = [
+        event.token_id
+        for event in generate(
+            model,
+            tokenizer,
+            [1, 2, 3, 4, 5, 6],
+            GenerateOptions(max_tokens=4, temperature=0),
+        )
+    ]
+
+    metrics = InMemoryMetrics()
+    final_state: list[dict[str, Any]] = []
+    adaptive = [
+        event.token_id
+        for event in generate(
+            model,
+            tokenizer,
+            [1, 2, 3, 4, 5, 6],
+            GenerateOptions(max_tokens=4, temperature=0),
+            adaptive_config=AdaptiveKVConfig(
+                enabled=True,
+                block_size_tokens=2,
+                update_window_steps=1,
+                soft_budget_bytes=1,
+                hard_budget_bytes=1,
+                recent_tail_protect_blocks=0,
+                t_full_promote=0.95,
+                t_full_demote=0.9,
+                t_evict_candidate=0.99,
+            ),
+            metrics=metrics,
+            final_adaptive_state_out=final_state,
+        )
+    ]
+
+    assert adaptive == baseline
+    assert metrics.get_counter("adaptive_kv_recomputations_total") == 1
+    assert final_state
+    stabilization = final_state[0]["hard_stabilization"]
+    assert metrics.get_counter("adaptive_kv_evictions_total") == (
+        len(stabilization["stabilized_block_ids"]) + 1
+    )
+    assert final_state[0]["pressure_state"] == "hard"
+    assert stabilization["episode_active"] is True
+    assert stabilization["best_achievable_under_current_forward_semantics"] is True
+    assert stabilization["reason"] == "required_history_recovered_under_hard_episode"
+    assert stabilization["stabilized_block_ids"] == [1, 2]

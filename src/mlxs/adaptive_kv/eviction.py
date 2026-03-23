@@ -20,15 +20,18 @@ class AdaptiveEvictionEngine:
         *,
         pressure: PressureState,
         recent_tail: set[int],
+        avoid_block_ids: set[int] | None = None,
     ) -> list[BlockRecord]:
         if pressure is not PressureState.HARD:
             return []
+        avoid = avoid_block_ids or set()
         candidates = [
             block
             for block in blocks
             if block.tier is BlockTier.COMPRESSED
             and block.pin_state is PinState.NORMAL
             and block.block_id not in recent_tail
+            and block.block_id not in avoid
         ]
         candidates.sort(key=self._rank_key)
         return candidates

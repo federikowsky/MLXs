@@ -62,6 +62,14 @@ def _make_manager(
     return manager
 
 
+def _recover_block_in_hard_episode(manager: AdaptiveKVManager, block_id: int) -> None:
+    manager._pressure_state = PressureState.HARD
+    manager._update_hard_episode_state(PressureState.HARD)
+    manager._demote_block(manager.registry.get(block_id), reason="test_demote")
+    manager._evict_block(manager.registry.get(block_id), reason="test_evict")
+    manager.ensure_required_resident()
+
+
 def test_replay_recovery_restores_evicted_block_as_resident() -> None:
     manager = _make_manager(prompt_tokens=[1, 2, 3, 4])
     block = manager.registry.get(1)
@@ -77,6 +85,83 @@ def test_replay_recovery_restores_evicted_block_as_resident() -> None:
     recovered = manager.registry.get(1)
     assert recovered.tier is BlockTier.COMPRESSED
     assert manager.caches()[0].block_live_bytes(1) > 0
+
+
+def test_recovered_block_is_not_re_evicted_in_same_hard_episode() -> None:
+    manager = _make_manager(
+        prompt_tokens=[1, 2, 3, 4, 5, 6],
+        hard_budget_bytes=1,
+        recent_tail_protect_blocks=0,
+    )
+
+    _recover_block_in_hard_episode(manager, 1)
+
+    manager._evict_if_needed(
+        pressure=PressureState.HARD,
+        protected=manager._protected_block_ids(),
+    )
+
+    assert manager.registry.get(1).tier is BlockTier.COMPRESSED
+    snap = manager.debug_snapshot()["hard_stabilization"]
+    assert snap["best_achievable_under_current_forward_semantics"] is True
+    assert snap["reason"] == "required_history_recovered_under_hard_episode"
+    assert 1 in snap["stabilized_block_ids"]
+
+
+def test_hard_stabilization_resets_on_hard_to_soft() -> None:
+    manager = _make_manager(
+        prompt_tokens=[1, 2, 3, 4, 5, 6],
+        hard_budget_bytes=1,
+        recent_tail_protect_blocks=0,
+    )
+
+    _recover_block_in_hard_episode(manager, 1)
+    manager._pressure_state = PressureState.SOFT
+    manager._update_hard_episode_state(PressureState.SOFT)
+
+    snap = manager.debug_snapshot()["hard_stabilization"]
+    assert snap["episode_active"] is False
+    assert snap["stabilized_block_ids"] == []
+    assert snap["best_achievable_under_current_forward_semantics"] is False
+    assert snap["reason"] is None
+
+
+def test_hard_stabilization_resets_on_hard_to_normal() -> None:
+    manager = _make_manager(
+        prompt_tokens=[1, 2, 3, 4, 5, 6],
+        hard_budget_bytes=1,
+        recent_tail_protect_blocks=0,
+    )
+
+    _recover_block_in_hard_episode(manager, 1)
+    manager._pressure_state = PressureState.NORMAL
+    manager._update_hard_episode_state(PressureState.NORMAL)
+
+    snap = manager.debug_snapshot()["hard_stabilization"]
+    assert snap["episode_active"] is False
+    assert snap["stabilized_block_ids"] == []
+    assert snap["best_achievable_under_current_forward_semantics"] is False
+    assert snap["reason"] is None
+
+
+def test_best_achievable_over_budget_state_is_explicit() -> None:
+    manager = _make_manager(
+        prompt_tokens=[1, 2, 3, 4, 5, 6],
+        hard_budget_bytes=1,
+        recent_tail_protect_blocks=0,
+    )
+
+    _recover_block_in_hard_episode(manager, 1)
+    manager._evict_if_needed(
+        pressure=PressureState.HARD,
+        protected=manager._protected_block_ids(),
+    )
+
+    snap = manager.debug_snapshot()["hard_stabilization"]
+    assert snap["best_achievable_under_current_forward_semantics"] is True
+    assert snap["reason"] == "required_history_recovered_under_hard_episode"
+    assert snap["over_budget_bytes"] > 0
+    assert snap["blocking_block_ids"]
 
 
 def test_manager_resident_bytes_use_live_tokens_not_slab_capacity() -> None:

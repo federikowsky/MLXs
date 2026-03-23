@@ -670,6 +670,12 @@ class AdaptiveKVManager:
         self._prefill_step_size = 2048
         self._pending_recompute_requests = 0
         self._adaptive_usage_timing_acc: dict[str, int] | None = None
+        self._hard_episode_active = False
+        self._hard_episode_stabilized_blocks: set[int] = set()
+        self._hard_best_achievable = False
+        self._hard_best_achievable_reason: str | None = None
+        self._hard_best_achievable_over_budget_bytes = 0
+        self._hard_best_achievable_blocking_block_ids: tuple[int, ...] = ()
         self.recompute = AdaptiveRecomputeCoordinator(
             self.registry,
             on_request=self._increment_recompute_requests,
@@ -719,6 +725,7 @@ class AdaptiveKVManager:
         usage = self.usage.snapshot_and_reset(timing_acc=self._adaptive_usage_timing_acc)
         self._update_scores(usage)
         pressure = self._compute_pressure_state()
+        self._update_hard_episode_state(pressure)
         protected = self._protected_block_ids()
         self._apply_transitions(pressure=pressure, protected=protected)
         self._evict_if_needed(pressure=pressure, protected=protected)
@@ -784,6 +791,14 @@ class AdaptiveKVManager:
             "pressure_state": self._pressure_state.value,
             "resident_bytes": self.resident_bytes(),
             "attention_path": self.attention_path_stats(),
+            "hard_stabilization": {
+                "episode_active": self._hard_episode_active,
+                "stabilized_block_ids": sorted(self._hard_episode_stabilized_blocks),
+                "best_achievable_under_current_forward_semantics": self._hard_best_achievable,
+                "reason": self._hard_best_achievable_reason,
+                "over_budget_bytes": self._hard_best_achievable_over_budget_bytes,
+                "blocking_block_ids": list(self._hard_best_achievable_blocking_block_ids),
+            },
             "blocks": [
                 block_debug_view(block, ghost_present=self.ghost_store.has(block.block_id))
                 for block in blocks
@@ -842,6 +857,18 @@ class AdaptiveKVManager:
             self._pressure_state = PressureState.NORMAL
         return self._pressure_state
 
+    def _update_hard_episode_state(self, pressure: PressureState) -> None:
+        if pressure is PressureState.HARD:
+            if not self._hard_episode_active:
+                self._hard_episode_active = True
+                self._hard_episode_stabilized_blocks = set()
+                self._clear_hard_best_achievable_state()
+            return
+        if self._hard_episode_active:
+            self._hard_episode_active = False
+            self._hard_episode_stabilized_blocks = set()
+        self._clear_hard_best_achievable_state()
+
     def _apply_transitions(self, *, pressure: PressureState, protected: set[int]) -> None:
         for block in self.registry.snapshot():
             if self.transitions.should_promote(block, pressure=pressure, step=self.decode_steps):
@@ -862,6 +889,7 @@ class AdaptiveKVManager:
             self.registry.snapshot(),
             pressure=pressure,
             recent_tail=protected,
+            avoid_block_ids=self._hard_episode_stabilized_blocks,
         )
         for block in candidates:
             current = self.registry.get(block.block_id)
@@ -872,6 +900,7 @@ class AdaptiveKVManager:
                 break
             if self.resident_bytes() <= self.config.hard_budget_bytes:
                 break
+        self._update_hard_best_achievable_state(pressure=pressure, protected=protected)
 
     def _promote_block(self, block: BlockRecord, *, reason: str) -> None:
         if block.tier is BlockTier.FULL:
@@ -942,6 +971,8 @@ class AdaptiveKVManager:
             )
             self.registry.update(updated)
             self.ghost_store.mark_reactivated(block.block_id)
+            if self._hard_episode_active:
+                self._hard_episode_stabilized_blocks.add(block.block_id)
 
     def _replay_prefix(self, total_tokens: int) -> list[KVCache]:
         scratch = [KVCache() for _ in range(self._num_layers)]
@@ -995,6 +1026,54 @@ class AdaptiveKVManager:
         if not self.config.emit_metrics:
             return
         emit_population(self.metrics, self.registry.snapshot())
+
+    def _clear_hard_best_achievable_state(self) -> None:
+        self._hard_best_achievable = False
+        self._hard_best_achievable_reason = None
+        self._hard_best_achievable_over_budget_bytes = 0
+        self._hard_best_achievable_blocking_block_ids = ()
+
+    def _update_hard_best_achievable_state(
+        self,
+        *,
+        pressure: PressureState,
+        protected: set[int],
+    ) -> None:
+        self._clear_hard_best_achievable_state()
+        if pressure is not PressureState.HARD or self.config.hard_budget_bytes is None:
+            return
+        resident_bytes = self.resident_bytes()
+        if resident_bytes <= self.config.hard_budget_bytes:
+            return
+        remaining_candidates = self.evictions.select_candidates(
+            self.registry.snapshot(),
+            pressure=pressure,
+            recent_tail=protected,
+            avoid_block_ids=self._hard_episode_stabilized_blocks,
+        )
+        if remaining_candidates:
+            return
+        blocking_blocks = [
+            block.block_id
+            for block in self.registry.snapshot()
+            if block.tier is not BlockTier.EVICTED
+            and (
+                block.pin_state is PinState.HARD
+                or block.block_id in protected
+                or block.block_id in self._hard_episode_stabilized_blocks
+            )
+        ]
+        if not blocking_blocks:
+            return
+        self._hard_best_achievable = True
+        if self._hard_episode_stabilized_blocks:
+            self._hard_best_achievable_reason = "required_history_recovered_under_hard_episode"
+        else:
+            self._hard_best_achievable_reason = "only_protected_blocks_remain"
+        self._hard_best_achievable_over_budget_bytes = (
+            resident_bytes - self.config.hard_budget_bytes
+        )
+        self._hard_best_achievable_blocking_block_ids = tuple(sorted(blocking_blocks))
 
     def _increment_recompute_requests(self) -> None:
         self._pending_recompute_requests += 1
