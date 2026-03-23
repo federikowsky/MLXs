@@ -8,6 +8,7 @@ The hottest path in the library. Design principles:
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -138,9 +139,11 @@ def decode_loop(
         if adaptive_manager is not None:
             adaptive_manager.before_decode_forward(token_id)
             adaptive_manager.ensure_required_resident()
+        forward_started = time.perf_counter()
         next_logits = _forward(y[None], cache=cache)
         next_logits = next_logits[:, -1, :]
         if adaptive_manager is not None:
+            adaptive_manager.record_decode_forward_time(time.perf_counter() - forward_started)
             adaptive_manager.after_decode_forward()
 
         # Apply logits processors if any

@@ -19,6 +19,14 @@ PRESSURE_SOFT_COUNT = "adaptive_kv_pressure_soft_count"
 PRESSURE_HARD_COUNT = "adaptive_kv_pressure_hard_count"
 POLICY_TIME_SECONDS = "adaptive_kv_policy_time_seconds"
 COMPATIBILITY_FALLBACKS_TOTAL = "adaptive_kv_compatibility_fallbacks_total"
+REPLAY_FORWARD_TIME_SECONDS_TOTAL = "adaptive_kv_replay_forward_seconds_total"
+REPLAY_FORWARD_EVENTS_TOTAL = "adaptive_kv_replay_forward_events_total"
+RECOVERY_MATERIALIZATION_TIME_SECONDS_TOTAL = (
+    "adaptive_kv_recovery_materialization_seconds_total"
+)
+RECOVERY_MATERIALIZATION_EVENTS_TOTAL = "adaptive_kv_recovery_materialization_events_total"
+POST_RECOVERY_DECODE_TIME_SECONDS_TOTAL = "adaptive_kv_post_recovery_decode_seconds_total"
+POST_RECOVERY_DECODE_FORWARDS_TOTAL = "adaptive_kv_post_recovery_decode_forwards_total"
 
 
 def emit_population(metrics: Any, blocks: list[BlockRecord]) -> None:
@@ -64,4 +72,3 @@ def block_debug_view(block: BlockRecord, *, ghost_present: bool) -> dict[str, An
         ),
         "ghost_present": ghost_present,
     }
-

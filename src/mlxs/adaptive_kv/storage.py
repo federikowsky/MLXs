@@ -150,6 +150,43 @@ class AdaptiveCompressedRunStore:
             token_count=token_count,
         )
 
+    @classmethod
+    def from_full_run(
+        cls,
+        run_id: int,
+        *,
+        block_slices: tuple[tuple[int, int, int], ...],
+        keys: mx.array,
+        values: mx.array,
+        group_size: int,
+        bits: int,
+    ) -> AdaptiveCompressedRunStore:
+        token_count = keys.shape[2]
+        if values.shape[2] != token_count:
+            raise ValueError("Compressed run keys/values must cover the same token count")
+        if not block_slices:
+            raise ValueError("Compressed run recovery requires at least one block slice")
+        cursor = 0
+        for _, start, end in block_slices:
+            if start != cursor or end < start:
+                raise ValueError("Compressed run block_slices must be contiguous and ordered")
+            cursor = end
+        if cursor != token_count:
+            raise ValueError(
+                "Compressed run block_slices must cover the full recovered token range"
+            )
+        q_keys = mx.quantize(keys, group_size=group_size, bits=bits)
+        q_values = mx.quantize(values, group_size=group_size, bits=bits)
+        return cls(
+            run_id=run_id,
+            q_keys=q_keys,
+            q_values=q_values,
+            group_size=group_size,
+            bits=bits,
+            block_slices=block_slices,
+            token_count=token_count,
+        )
+
     @property
     def live_bytes(self) -> int:
         return tree_reduce(lambda a, x: a + x.nbytes, (self.q_keys, self.q_values), 0)

@@ -149,6 +149,69 @@ def _quantized_segment_output(
     )
 
 
+def _segment_scores(
+    queries: mx.array,
+    segment: Any,
+    *,
+    full_keys: mx.array | None,
+    scale: float,
+) -> mx.array:
+    if segment.tier is BlockTier.FULL:
+        if full_keys is None or segment.full_slice is None:
+            raise ValueError("Adaptive FULL segment is missing contiguous resident tensors")
+        start, end = segment.full_slice
+        return _full_segment_scores(
+            queries,
+            full_keys[..., start:end, :],
+            scale=scale,
+        )
+    if (
+        segment.q_keys is None
+        or segment.group_size is None
+        or segment.bits is None
+    ):
+        raise ValueError("Adaptive COMPRESSED segment is missing quantized resident tensors")
+    return _quantized_segment_scores(
+        queries,
+        segment.q_keys,
+        scale=scale,
+        group_size=segment.group_size,
+        bits=segment.bits,
+    )
+
+
+def _segment_output(
+    weights: mx.array,
+    segment: Any,
+    *,
+    full_values: mx.array | None,
+) -> mx.array:
+    if segment.tier is BlockTier.FULL:
+        if full_values is None or segment.full_slice is None:
+            raise ValueError("Adaptive FULL segment is missing contiguous resident tensors")
+        start, end = segment.full_slice
+        return _full_segment_output(
+            weights,
+            full_values[..., start:end, :],
+        )
+    if (
+        segment.q_values is None
+        or segment.group_size is None
+        or segment.bits is None
+    ):
+        raise ValueError("Adaptive COMPRESSED segment is missing quantized resident tensors")
+    return _quantized_segment_output(
+        weights,
+        segment.q_values,
+        group_size=segment.group_size,
+        bits=segment.bits,
+    )
+
+
+def _usage_by_token(segment_weights: mx.array) -> mx.array:
+    return segment_weights.mean(axis=(0, 1, 2))
+
+
 def _apply_attention_mask(
     scores: mx.array,
     mask: mx.array | str | None,
@@ -222,10 +285,14 @@ def adaptive_scaled_dot_product_attention(
         )
         if not sample_usage:
             return out
-        scores = _full_segment_scores(queries, full_keys, scale=scale)
+        scores = _full_segment_scores(
+            queries,
+            full_keys,
+            scale=scale,
+        )
         scores, _ = _apply_attention_mask(scores, mask)
         weights = mx.softmax(scores, axis=-1, precise=True)
-        return out, weights
+        return out, weights.mean(axis=(0, 1, 2))
     if (
         len(resident_state.segments) == 1
         and resident_state.segments[0].tier is BlockTier.COMPRESSED
@@ -251,37 +318,12 @@ def adaptive_scaled_dot_product_attention(
 
     score_parts: list[mx.array] = []
     for segment in resident_state.segments:
-        if segment.tier is BlockTier.FULL:
-            if (
-                full_keys is None
-                or full_values is None
-                or segment.full_slice is None
-            ):
-                raise ValueError("Adaptive FULL segment is missing contiguous resident tensors")
-            start, end = segment.full_slice
-            score_parts.append(
-                _full_segment_scores(
-                    queries,
-                    full_keys[..., start:end, :],
-                    scale=scale,
-                )
-            )
-            continue
-
-        if (
-            segment.q_keys is None
-            or segment.q_values is None
-            or segment.group_size is None
-            or segment.bits is None
-        ):
-            raise ValueError("Adaptive COMPRESSED segment is missing quantized resident tensors")
         score_parts.append(
-            _quantized_segment_scores(
+            _segment_scores(
                 queries,
-                segment.q_keys,
+                segment,
+                full_keys=full_keys,
                 scale=scale,
-                group_size=segment.group_size,
-                bits=segment.bits,
             )
         )
 
@@ -293,33 +335,29 @@ def adaptive_scaled_dot_product_attention(
     weights = mx.softmax(scores, axis=-1, precise=True)
 
     out: mx.array | None = None
+    usage_parts: list[mx.array] | None = [] if sample_usage else None
     cursor = 0
     for segment in resident_state.segments:
         segment_weights = weights[..., cursor : cursor + segment.token_count]
         cursor += segment.token_count
-        if segment.tier is BlockTier.FULL:
-            if (
-                full_keys is None
-                or full_values is None
-                or segment.full_slice is None
-            ):
-                raise ValueError("Adaptive FULL segment is missing contiguous resident tensors")
-            start, end = segment.full_slice
-            segment_out = _full_segment_output(
-                segment_weights,
-                full_values[..., start:end, :],
-            )
-        else:
-            segment_out = _quantized_segment_output(
-                segment_weights,
-                segment.q_values,
-                group_size=segment.group_size,
-                bits=segment.bits,
-            )
+        if usage_parts is not None:
+            usage_parts.append(_usage_by_token(segment_weights))
+        segment_out = _segment_output(
+            segment_weights,
+            segment,
+            full_values=full_values,
+        )
         out = segment_out if out is None else out + segment_out
     if out is None:
         raise ValueError("Adaptive attention requires at least one resident segment output")
-    return out, weights
+    if usage_parts is None:
+        return out
+    usage_by_token = (
+        usage_parts[0]
+        if len(usage_parts) == 1
+        else mx.concatenate(usage_parts, axis=0)
+    )
+    return out, usage_by_token
 
 
 def scaled_dot_product_attention(
@@ -343,8 +381,8 @@ def scaled_dot_product_attention(
             sample_usage=cache.should_sample_usage(),
         )
         if isinstance(out, tuple):
-            out_tensor, weights = out
-            cache.record_usage_from_attention(keys, weights)
+            out_tensor, usage_by_token = out
+            cache.record_usage_from_attention(keys, usage_by_token)
             return out_tensor
         return out
     if hasattr(cache, "bits"):

@@ -1,14 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import mlx.core as mx
 import pytest
 
 from mlxs.adaptive_kv.block_types import BlockTier, PressureState
 from mlxs.adaptive_kv.config import AdaptiveKVConfig
-from mlxs.adaptive_kv.manager import AdaptiveKVManager
-from mlxs.layers.attention import scaled_dot_product_attention
+from mlxs.adaptive_kv.manager import AdaptiveKVManager, AdaptiveLayerCache
+from mlxs.adaptive_kv.metrics import (
+    POST_RECOVERY_DECODE_FORWARDS_TOTAL,
+    POST_RECOVERY_DECODE_TIME_SECONDS_TOTAL,
+    RECOVERY_MATERIALIZATION_EVENTS_TOTAL,
+    RECOVERY_MATERIALIZATION_TIME_SECONDS_TOTAL,
+    REPLAY_FORWARD_EVENTS_TOTAL,
+    REPLAY_FORWARD_TIME_SECONDS_TOTAL,
+)
+from mlxs.layers.attention import (
+    adaptive_scaled_dot_product_attention,
+    scaled_dot_product_attention,
+)
 from mlxs.observability.metrics import InMemoryMetrics
 
 
@@ -25,8 +37,15 @@ def _q_from_tokens(tokens: list[int], *, head_dim: int = 32) -> mx.array:
 
 
 class _ReplayModel:
+    def __init__(self) -> None:
+        self.replayed_tokens = 0
+        self.replay_chunks: list[int] = []
+
     def __call__(self, inputs: mx.array, *, cache=None, input_embeddings=None):  # type: ignore[no-untyped-def]
         del input_embeddings
+        n_tokens = int(inputs.shape[1])
+        self.replayed_tokens += n_tokens
+        self.replay_chunks.append(n_tokens)
         if cache is not None:
             keys, values = _kv_from_tokens([int(token.item()) for token in inputs.reshape(-1)])
             for layer_cache in cache:
@@ -87,6 +106,214 @@ def test_replay_recovery_restores_evicted_block_as_resident() -> None:
     assert manager.caches()[0].block_live_bytes(1) > 0
 
 
+def test_replay_only_rebuilds_prefix_needed_for_requested_blocks() -> None:
+    replay_model = _ReplayModel()
+    config = AdaptiveKVConfig(
+        enabled=True,
+        block_size_tokens=2,
+        update_window_steps=1,
+        hard_budget_bytes=1,
+        recent_tail_protect_blocks=0,
+        t_full_promote=0.95,
+        t_full_demote=0.9,
+        t_evict_candidate=0.99,
+    )
+    manager = AdaptiveKVManager(config, num_layers=1, metrics=InMemoryMetrics())
+    manager.bind_generation_context(model=replay_model, prefill_step_size=16)
+    manager.initialize_prompt([1, 2, 3, 4, 5, 6, 7, 8])
+    keys, values = _kv_from_tokens([1, 2, 3, 4, 5, 6, 7, 8])
+    manager.caches()[0].update_and_fetch(keys, values)
+
+    replay_model.replayed_tokens = 0
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._evict_block(manager.registry.get(1), reason="test_evict")
+    manager.ensure_required_resident()
+
+    assert manager.registry.get(1).tier is BlockTier.COMPRESSED
+    assert replay_model.replayed_tokens == manager.registry.get(1).end_token
+
+
+def test_recovery_records_replay_and_materialization_timing() -> None:
+    replay_model = _ReplayModel()
+    metrics = InMemoryMetrics()
+    config = AdaptiveKVConfig(
+        enabled=True,
+        block_size_tokens=2,
+        update_window_steps=1,
+        hard_budget_bytes=1,
+        recent_tail_protect_blocks=0,
+        t_full_promote=0.95,
+        t_full_demote=0.9,
+        t_evict_candidate=0.99,
+    )
+    manager = AdaptiveKVManager(config, num_layers=1, metrics=metrics)
+    manager.bind_generation_context(model=replay_model, prefill_step_size=16)
+    manager.initialize_prompt([1, 2, 3, 4, 5, 6, 7, 8])
+    keys, values = _kv_from_tokens([1, 2, 3, 4, 5, 6, 7, 8])
+    manager.caches()[0].update_and_fetch(keys, values)
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._evict_block(manager.registry.get(1), reason="test_evict")
+    manager.ensure_required_resident()
+
+    assert metrics.get_counter(REPLAY_FORWARD_EVENTS_TOTAL) == 1
+    assert metrics.get_counter(REPLAY_FORWARD_TIME_SECONDS_TOTAL) > 0
+    assert metrics.get_counter(RECOVERY_MATERIALIZATION_EVENTS_TOTAL) == 1
+    assert metrics.get_counter(RECOVERY_MATERIALIZATION_TIME_SECONDS_TOTAL) > 0
+
+
+def test_post_recovery_decode_timing_only_starts_after_recovery_wave() -> None:
+    manager = _make_manager(prompt_tokens=[1, 2, 3, 4])
+    metrics = manager.metrics
+
+    manager.record_decode_forward_time(0.25)
+    assert metrics.get_counter(POST_RECOVERY_DECODE_FORWARDS_TOTAL) == 0
+    assert metrics.get_counter(POST_RECOVERY_DECODE_TIME_SECONDS_TOTAL) == 0
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._evict_block(manager.registry.get(1), reason="test_evict")
+    manager.ensure_required_resident()
+    manager.record_decode_forward_time(0.5)
+
+    assert metrics.get_counter(POST_RECOVERY_DECODE_FORWARDS_TOTAL) == 1
+    assert metrics.get_counter(POST_RECOVERY_DECODE_TIME_SECONDS_TOTAL) == 0.5
+
+
+def test_scratch_replay_extends_incrementally_across_recovery_waves() -> None:
+    replay_model = _ReplayModel()
+    config = AdaptiveKVConfig(
+        enabled=True,
+        block_size_tokens=2,
+        update_window_steps=1,
+        hard_budget_bytes=1,
+        recent_tail_protect_blocks=0,
+        t_full_promote=0.95,
+        t_full_demote=0.9,
+        t_evict_candidate=0.99,
+    )
+    manager = AdaptiveKVManager(config, num_layers=1, metrics=InMemoryMetrics())
+    manager.bind_generation_context(model=replay_model, prefill_step_size=16)
+    manager.initialize_prompt([1, 2, 3, 4, 5, 6, 7, 8])
+    keys, values = _kv_from_tokens([1, 2, 3, 4, 5, 6, 7, 8])
+    manager.caches()[0].update_and_fetch(keys, values)
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._evict_block(manager.registry.get(1), reason="test_evict")
+    manager.ensure_required_resident()
+    assert replay_model.replayed_tokens == 4
+    assert manager._scratch_replayed_tokens == 4
+    assert manager._scratch_replay_materialized is False
+
+    replay_model.replayed_tokens = 0
+    replay_model.replay_chunks = []
+    manager._demote_block(manager.registry.get(2), reason="test_demote")
+    manager._evict_block(manager.registry.get(2), reason="test_evict")
+    manager.ensure_required_resident()
+
+    assert manager.registry.get(2).tier is BlockTier.COMPRESSED
+    assert replay_model.replayed_tokens == 2
+    assert replay_model.replay_chunks == [2]
+    assert manager._scratch_replayed_tokens == 6
+    assert manager._scratch_replay_materialized is False
+
+
+def test_scratch_replay_reuses_cached_prefix_without_new_forward_work() -> None:
+    replay_model = _ReplayModel()
+    config = AdaptiveKVConfig(
+        enabled=True,
+        block_size_tokens=2,
+        update_window_steps=1,
+        hard_budget_bytes=1,
+        recent_tail_protect_blocks=0,
+        t_full_promote=0.95,
+        t_full_demote=0.9,
+        t_evict_candidate=0.99,
+    )
+    manager = AdaptiveKVManager(config, num_layers=1, metrics=InMemoryMetrics())
+    manager.bind_generation_context(model=replay_model, prefill_step_size=16)
+    manager.initialize_prompt([1, 2, 3, 4, 5, 6, 7, 8])
+    keys, values = _kv_from_tokens([1, 2, 3, 4, 5, 6, 7, 8])
+    manager.caches()[0].update_and_fetch(keys, values)
+
+    manager._demote_block(manager.registry.get(2), reason="test_demote")
+    manager._evict_block(manager.registry.get(2), reason="test_evict")
+    manager.ensure_required_resident()
+    assert replay_model.replayed_tokens == 6
+    assert manager._scratch_replayed_tokens == 6
+    assert manager._scratch_replay_materialized is False
+
+    replay_model.replayed_tokens = 0
+    replay_model.replay_chunks = []
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._evict_block(manager.registry.get(1), reason="test_evict")
+    manager.ensure_required_resident()
+
+    assert manager.registry.get(1).tier is BlockTier.COMPRESSED
+    assert replay_model.replayed_tokens == 0
+    assert replay_model.replay_chunks == []
+    assert manager._scratch_replayed_tokens == 6
+    assert manager._scratch_replay_materialized is False
+
+
+def test_adjacent_recovery_groups_use_run_level_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay_model = _ReplayModel()
+    config = AdaptiveKVConfig(
+        enabled=True,
+        block_size_tokens=2,
+        update_window_steps=1,
+        hard_budget_bytes=1,
+        recent_tail_protect_blocks=0,
+        t_full_promote=0.95,
+        t_full_demote=0.9,
+        t_evict_candidate=0.99,
+    )
+    manager = AdaptiveKVManager(config, num_layers=1, metrics=InMemoryMetrics())
+    manager.bind_generation_context(model=replay_model, prefill_step_size=16)
+    manager.initialize_prompt([1, 2, 3, 4, 5, 6, 7, 8])
+    keys, values = _kv_from_tokens([1, 2, 3, 4, 5, 6, 7, 8])
+    manager.caches()[0].update_and_fetch(keys, values)
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._demote_block(manager.registry.get(2), reason="test_demote")
+    manager._evict_block(manager.registry.get(1), reason="test_evict")
+    manager._evict_block(manager.registry.get(2), reason="test_evict")
+
+    used_run_recovery = {"value": False}
+
+    original_recover_blocks = AdaptiveLayerCache.recover_blocks
+
+    def _recover_blocks(
+        self: AdaptiveLayerCache,
+        blocks: tuple[Any, ...],
+        run_keys: mx.array,
+        run_values: mx.array,
+    ) -> None:
+        if len(blocks) > 1:
+            used_run_recovery["value"] = True
+        original_recover_blocks(self, blocks, run_keys, run_values)
+
+    def _recover_block_fail(
+        self: AdaptiveLayerCache,
+        block_id: int,
+        block_keys: mx.array,
+        block_values: mx.array,
+    ) -> None:
+        raise AssertionError(
+            f"Per-block recovery should not be used for adjacent recovered blocks: {block_id}"
+        )
+
+    monkeypatch.setattr(AdaptiveLayerCache, "recover_blocks", _recover_blocks)
+    monkeypatch.setattr(AdaptiveLayerCache, "recover_block", _recover_block_fail)
+
+    manager.ensure_required_resident()
+
+    assert used_run_recovery["value"] is True
+    assert manager.registry.get(1).tier is BlockTier.COMPRESSED
+    assert manager.registry.get(2).tier is BlockTier.COMPRESSED
+
+
 def test_recovered_block_is_not_re_evicted_in_same_hard_episode() -> None:
     manager = _make_manager(
         prompt_tokens=[1, 2, 3, 4, 5, 6],
@@ -103,9 +330,37 @@ def test_recovered_block_is_not_re_evicted_in_same_hard_episode() -> None:
 
     assert manager.registry.get(1).tier is BlockTier.COMPRESSED
     snap = manager.debug_snapshot()["hard_stabilization"]
+    assert snap["recovery_hold_active"] is True
     assert snap["best_achievable_under_current_forward_semantics"] is True
     assert snap["reason"] == "required_history_recovered_under_hard_episode"
     assert 1 in snap["stabilized_block_ids"]
+
+
+def test_recovery_hold_blocks_new_wave_eviction_of_other_compressed_history() -> None:
+    manager = _make_manager(
+        prompt_tokens=[1, 2, 3, 4, 5, 6, 7, 8],
+        hard_budget_bytes=1,
+        recent_tail_protect_blocks=0,
+    )
+    manager._pressure_state = PressureState.HARD
+    manager._update_hard_episode_state(PressureState.HARD)
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._demote_block(manager.registry.get(2), reason="test_demote")
+    manager._evict_block(manager.registry.get(1), reason="test_evict")
+    manager.ensure_required_resident()
+
+    manager._evict_if_needed(
+        pressure=PressureState.HARD,
+        protected=manager._protected_block_ids(),
+    )
+
+    assert manager.registry.get(1).tier is BlockTier.COMPRESSED
+    assert manager.registry.get(2).tier is BlockTier.COMPRESSED
+    snap = manager.debug_snapshot()["hard_stabilization"]
+    assert snap["recovery_hold_active"] is True
+    assert snap["best_achievable_under_current_forward_semantics"] is True
+    assert snap["reason"] == "required_history_recovered_under_hard_episode"
 
 
 def test_hard_stabilization_resets_on_hard_to_soft() -> None:
@@ -122,6 +377,7 @@ def test_hard_stabilization_resets_on_hard_to_soft() -> None:
     snap = manager.debug_snapshot()["hard_stabilization"]
     assert snap["episode_active"] is False
     assert snap["stabilized_block_ids"] == []
+    assert snap["recovery_hold_active"] is False
     assert snap["best_achievable_under_current_forward_semantics"] is False
     assert snap["reason"] is None
 
@@ -140,6 +396,7 @@ def test_hard_stabilization_resets_on_hard_to_normal() -> None:
     snap = manager.debug_snapshot()["hard_stabilization"]
     assert snap["episode_active"] is False
     assert snap["stabilized_block_ids"] == []
+    assert snap["recovery_hold_active"] is False
     assert snap["best_achievable_under_current_forward_semantics"] is False
     assert snap["reason"] is None
 
@@ -158,6 +415,7 @@ def test_best_achievable_over_budget_state_is_explicit() -> None:
     )
 
     snap = manager.debug_snapshot()["hard_stabilization"]
+    assert snap["recovery_hold_active"] is True
     assert snap["best_achievable_under_current_forward_semantics"] is True
     assert snap["reason"] == "required_history_recovered_under_hard_episode"
     assert snap["over_budget_bytes"] > 0
@@ -266,9 +524,9 @@ def test_usage_timing_accumulates_only_at_window_flush() -> None:
 
     manager._demote_block(manager.registry.get(1), reason="test_demote")
     resident_state = cache.resident_state_for_attention()
-    weights = mx.array([[[[0.1, 0.2, 0.3, 0.4]]]], dtype=mx.float32)
+    usage_by_token = mx.array([0.1, 0.2, 0.3, 0.4], dtype=mx.float32)
 
-    cache.record_usage_from_attention(resident_state, weights)
+    cache.record_usage_from_attention(resident_state, usage_by_token)
 
     assert manager._adaptive_usage_timing_acc == {}
 
@@ -277,6 +535,50 @@ def test_usage_timing_accumulates_only_at_window_flush() -> None:
     assert usage
     assert manager._adaptive_usage_timing_acc.get("eval_ns", 0) > 0
     assert manager._adaptive_usage_timing_acc.get("host_ns", 0) >= 0
+
+
+def test_single_token_mixed_tier_attention_matches_reference_and_usage() -> None:
+    manager = _make_manager(prompt_tokens=[1, 2, 3, 4, 5, 6, 7, 8], recent_tail_protect_blocks=0)
+    cache = manager.caches()[0]
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._demote_block(manager.registry.get(2), reason="test_demote")
+
+    resident_state = cache.resident_state_for_attention()
+    queries = _q_from_tokens([9])
+    assembled_keys = cache.keys
+    assembled_values = cache.values
+
+    assert assembled_keys is not None
+    assert assembled_values is not None
+    assert len(resident_state.segments) == 3
+
+    out, usage_by_token = adaptive_scaled_dot_product_attention(
+        queries,
+        resident_state,
+        scale=1.0,
+        mask=None,
+        sample_usage=True,
+    )
+    ref_out = mx.fast.scaled_dot_product_attention(
+        queries,
+        assembled_keys,
+        assembled_values,
+        scale=1.0,
+        mask=None,
+        sinks=None,
+    )
+    ref_scores = queries @ assembled_keys.swapaxes(-1, -2)
+    ref_weights = mx.softmax(ref_scores, axis=-1, precise=True)
+    ref_usage_by_token = ref_weights.mean(axis=(0, 1, 2))
+
+    assert mx.allclose(out, ref_out, rtol=1e-5, atol=1e-5).item()
+    assert mx.allclose(
+        usage_by_token,
+        ref_usage_by_token,
+        rtol=1e-5,
+        atol=1e-5,
+    ).item()
 
 
 def test_sampled_all_full_forward_keeps_fused_output_and_records_usage(

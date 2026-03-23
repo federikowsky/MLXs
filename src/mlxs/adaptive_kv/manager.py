@@ -24,10 +24,16 @@ from mlxs.adaptive_kv.metrics import (
     DEMOTIONS_TOTAL,
     EVICTIONS_TOTAL,
     POLICY_TIME_SECONDS,
+    POST_RECOVERY_DECODE_FORWARDS_TOTAL,
+    POST_RECOVERY_DECODE_TIME_SECONDS_TOTAL,
     PRESSURE_HARD_COUNT,
     PRESSURE_SOFT_COUNT,
     PROMOTIONS_TOTAL,
     RECOMPUTATIONS_TOTAL,
+    RECOVERY_MATERIALIZATION_EVENTS_TOTAL,
+    RECOVERY_MATERIALIZATION_TIME_SECONDS_TOTAL,
+    REPLAY_FORWARD_EVENTS_TOTAL,
+    REPLAY_FORWARD_TIME_SECONDS_TOTAL,
     SCORE_UPDATES_TOTAL,
     block_debug_view,
     emit_population,
@@ -216,6 +222,54 @@ class AdaptiveLayerCache:
         self._insert_compressed_run(block_id, run)
         self._manager.bump_resident_version()
 
+    def recover_blocks(
+        self,
+        blocks: tuple[BlockRecord, ...],
+        keys: mx.array,
+        values: mx.array,
+    ) -> None:
+        if not blocks:
+            return
+        if len(blocks) == 1:
+            self.recover_block(blocks[0].block_id, keys, values)
+            return
+        if any(
+            block.block_id in self._full_block_slices
+            or block.block_id in self._compressed_block_runs
+            for block in blocks
+        ):
+            return
+        expected = sum(block.token_count for block in blocks)
+        if keys.shape[2] != expected or values.shape[2] != expected:
+            raise AdaptiveKVError(
+                "Recovered block run has inconsistent token count: "
+                f"expected {expected}, got keys={keys.shape[2]}, values={values.shape[2]}"
+            )
+        group_size = self._quantized_group_size(
+            k_head_dim=keys.shape[-1],
+            v_head_dim=values.shape[-1],
+        )
+        cursor = 0
+        block_slices: list[tuple[int, int, int]] = []
+        for block in blocks:
+            next_cursor = cursor + block.token_count
+            block_slices.append((block.block_id, cursor, next_cursor))
+            cursor = next_cursor
+        run = AdaptiveCompressedRunStore.from_full_run(
+            self._allocate_compressed_run_id(),
+            block_slices=tuple(block_slices),
+            keys=keys,
+            values=values,
+            group_size=group_size,
+            bits=8,
+        )
+        self._insert_compressed_run_span(
+            first_block_id=blocks[0].block_id,
+            last_block_id=blocks[-1].block_id,
+            run=run,
+        )
+        self._manager.bump_resident_version()
+
     def resident_state_for_attention(self) -> AdaptiveResidentState:
         if self._resident_state_version == self._manager.resident_version:
             if self._resident_state is None:
@@ -346,9 +400,8 @@ class AdaptiveLayerCache:
     def record_usage_from_attention(
         self,
         resident_state: AdaptiveResidentState,
-        weights: mx.array,
+        usage_by_token: mx.array,
     ) -> None:
-        usage_by_token = weights.mean(axis=(0, 1, 2))
         cursor = 0
         block_ids: list[int] = []
         block_usage: list[mx.array] = []
@@ -580,11 +633,39 @@ class AdaptiveLayerCache:
             return prev_id, next_id
         return None, None
 
+    def _neighbor_block_ids_for_span(
+        self,
+        first_block_id: int,
+        last_block_id: int,
+    ) -> tuple[int | None, int | None]:
+        blocks = self._manager.registry.snapshot()
+        first_idx = -1
+        last_idx = -1
+        for idx, block in enumerate(blocks):
+            if block.block_id == first_block_id:
+                first_idx = idx
+            if block.block_id == last_block_id:
+                last_idx = idx
+        if first_idx < 0 or last_idx < 0 or last_idx < first_idx:
+            return None, None
+        prev_id = blocks[first_idx - 1].block_id if first_idx > 0 else None
+        next_id = blocks[last_idx + 1].block_id if last_idx + 1 < len(blocks) else None
+        return prev_id, next_id
+
     def _compressed_neighbor_runs(
         self,
         block_id: int,
     ) -> tuple[AdaptiveCompressedRunStore | None, AdaptiveCompressedRunStore | None]:
         prev_id, next_id = self._neighbor_block_ids(block_id)
+        return self._compressed_run(prev_id), self._compressed_run(next_id)
+
+    def _compressed_neighbor_runs_for_span(
+        self,
+        *,
+        first_block_id: int,
+        last_block_id: int,
+    ) -> tuple[AdaptiveCompressedRunStore | None, AdaptiveCompressedRunStore | None]:
+        prev_id, next_id = self._neighbor_block_ids_for_span(first_block_id, last_block_id)
         return self._compressed_run(prev_id), self._compressed_run(next_id)
 
     @staticmethod
@@ -605,6 +686,30 @@ class AdaptiveLayerCache:
         run: AdaptiveCompressedRunStore,
     ) -> None:
         prev_run, next_run = self._compressed_neighbor_runs(block_id)
+        merged = run
+        if prev_run is not None and self._can_merge_runs(prev_run, merged):
+            merged = prev_run.merge_with(merged, run_id=prev_run.run_id)
+            self._unregister_compressed_run(prev_run)
+        if (
+            next_run is not None
+            and next_run.run_id != merged.run_id
+            and self._can_merge_runs(merged, next_run)
+        ):
+            merged = merged.merge_with(next_run, run_id=merged.run_id)
+            self._unregister_compressed_run(next_run)
+        self._register_compressed_run(merged)
+
+    def _insert_compressed_run_span(
+        self,
+        *,
+        first_block_id: int,
+        last_block_id: int,
+        run: AdaptiveCompressedRunStore,
+    ) -> None:
+        prev_run, next_run = self._compressed_neighbor_runs_for_span(
+            first_block_id=first_block_id,
+            last_block_id=last_block_id,
+        )
         merged = run
         if prev_run is not None and self._can_merge_runs(prev_run, merged):
             merged = prev_run.merge_with(merged, run_id=prev_run.run_id)
@@ -672,10 +777,15 @@ class AdaptiveKVManager:
         self._adaptive_usage_timing_acc: dict[str, int] | None = None
         self._hard_episode_active = False
         self._hard_episode_stabilized_blocks: set[int] = set()
+        self._hard_episode_recovery_hold = False
         self._hard_best_achievable = False
         self._hard_best_achievable_reason: str | None = None
         self._hard_best_achievable_over_budget_bytes = 0
         self._hard_best_achievable_blocking_block_ids: tuple[int, ...] = ()
+        self._scratch_replay_cache: list[KVCache] | None = None
+        self._scratch_replayed_tokens = 0
+        self._scratch_replay_materialized = True
+        self._recovery_wave_seen = False
         self.recompute = AdaptiveRecomputeCoordinator(
             self.registry,
             on_request=self._increment_recompute_requests,
@@ -689,6 +799,8 @@ class AdaptiveKVManager:
     def bind_generation_context(self, *, model: Any, prefill_step_size: int) -> None:
         self._model = model
         self._prefill_step_size = prefill_step_size
+        self._reset_scratch_replay()
+        self._recovery_wave_seen = False
 
     def bump_resident_version(self) -> None:
         self._resident_version += 1
@@ -697,6 +809,8 @@ class AdaptiveKVManager:
         return self._layer_caches
 
     def initialize_prompt(self, prompt_tokens: list[int]) -> None:
+        self._reset_scratch_replay()
+        self._recovery_wave_seen = False
         self.source_tokens = list(prompt_tokens)
         self.prompt_token_count = len(prompt_tokens)
         self.registry.initialize_prompt(len(prompt_tokens), step=0)
@@ -751,6 +865,12 @@ class AdaptiveKVManager:
     def request_recompute(self, block_ids: tuple[int, ...], *, reason: str) -> Any:
         return self.recompute.request(block_ids, reason=reason)
 
+    def record_decode_forward_time(self, seconds: float) -> None:
+        if not self._recovery_wave_seen:
+            return
+        self.metrics.counter(POST_RECOVERY_DECODE_TIME_SECONDS_TOTAL, seconds)
+        self.metrics.counter(POST_RECOVERY_DECODE_FORWARDS_TOTAL)
+
     def attention_path_stats(self) -> dict[str, Any]:
         """Diagnostic only: segment structure for mixed-tier attention (layer 0).
 
@@ -794,6 +914,7 @@ class AdaptiveKVManager:
             "hard_stabilization": {
                 "episode_active": self._hard_episode_active,
                 "stabilized_block_ids": sorted(self._hard_episode_stabilized_blocks),
+                "recovery_hold_active": self._hard_episode_recovery_hold,
                 "best_achievable_under_current_forward_semantics": self._hard_best_achievable,
                 "reason": self._hard_best_achievable_reason,
                 "over_budget_bytes": self._hard_best_achievable_over_budget_bytes,
@@ -862,11 +983,13 @@ class AdaptiveKVManager:
             if not self._hard_episode_active:
                 self._hard_episode_active = True
                 self._hard_episode_stabilized_blocks = set()
+                self._hard_episode_recovery_hold = False
                 self._clear_hard_best_achievable_state()
             return
         if self._hard_episode_active:
             self._hard_episode_active = False
             self._hard_episode_stabilized_blocks = set()
+            self._hard_episode_recovery_hold = False
         self._clear_hard_best_achievable_state()
 
     def _apply_transitions(self, *, pressure: PressureState, protected: set[int]) -> None:
@@ -889,7 +1012,7 @@ class AdaptiveKVManager:
             self.registry.snapshot(),
             pressure=pressure,
             recent_tail=protected,
-            avoid_block_ids=self._hard_episode_stabilized_blocks,
+            avoid_block_ids=self._hard_eviction_avoid_block_ids(),
         )
         for block in candidates:
             current = self.registry.get(block.block_id)
@@ -950,43 +1073,108 @@ class AdaptiveKVManager:
         history_tokens = self.history_token_count()
         if history_tokens <= 0:
             return
-        scratch = self._replay_prefix(history_tokens)
-        for block_id in request.block_ids:
+        replay_tokens = self._replay_token_count_for_request(request, history_tokens)
+        if replay_tokens <= 0:
+            return
+        scratch = self._ensure_scratch_replay_prefix(replay_tokens)
+        recovered_any = False
+        materialize_started = time.perf_counter()
+        for recovery_group in self._recovery_groups(request.block_ids):
+            start_token = recovery_group[0].start_token
+            end_token = recovery_group[-1].end_token
+            for layer_cache, scratch_layer in zip(self._layer_caches, scratch, strict=True):
+                keys, values = scratch_layer.copy_token_range(start_token, end_token)
+                expected_tokens = end_token - start_token
+                if (
+                    keys.shape[2] != expected_tokens
+                    or values.shape[2] != expected_tokens
+                ):
+                    raise AdaptiveKVError(
+                        "Replay recovery returned inconsistent run token count: "
+                        f"expected {expected_tokens}, got "
+                        f"keys={keys.shape[2]}, values={values.shape[2]}"
+                    )
+                layer_cache.recover_blocks(recovery_group, keys, values)
+            for block in recovery_group:
+                updated = self._mark_transition(
+                    block,
+                    to_tier=BlockTier.COMPRESSED,
+                    reason="recovered_replay",
+                )
+                self.registry.update(updated)
+                self.ghost_store.mark_reactivated(block.block_id)
+                recovered_any = True
+                if self._hard_episode_active:
+                    self._hard_episode_stabilized_blocks.add(block.block_id)
+        if recovered_any:
+            self.metrics.counter(
+                RECOVERY_MATERIALIZATION_TIME_SECONDS_TOTAL,
+                time.perf_counter() - materialize_started,
+            )
+            self.metrics.counter(RECOVERY_MATERIALIZATION_EVENTS_TOTAL)
+            self._recovery_wave_seen = True
+        if recovered_any and self._hard_episode_active:
+            self._hard_episode_recovery_hold = True
+
+    @staticmethod
+    def _replay_token_count_for_request(request: Any, history_tokens: int) -> int:
+        if history_tokens <= 0:
+            return 0
+        needed = max((end for _, end in request.source_spans), default=0)
+        return min(history_tokens, needed)
+
+    def _recovery_groups(self, block_ids: tuple[int, ...]) -> tuple[tuple[BlockRecord, ...], ...]:
+        groups: list[list[BlockRecord]] = []
+        current: list[BlockRecord] = []
+        for block_id in block_ids:
             block = self.registry.get(block_id)
             if block.tier is not BlockTier.EVICTED:
                 continue
-            for layer_cache, scratch_layer in zip(self._layer_caches, scratch, strict=True):
-                keys, values = scratch_layer.copy_token_range(block.start_token, block.end_token)
-                if keys.shape[2] != block.token_count or values.shape[2] != block.token_count:
-                    raise AdaptiveKVError(
-                        f"Replay recovery for block {block.block_id} returned inconsistent "
-                        f"token count: expected {block.token_count}, got "
-                        f"keys={keys.shape[2]}, values={values.shape[2]}"
-                    )
-                layer_cache.recover_block(block.block_id, keys, values)
-            updated = self._mark_transition(
-                block,
-                to_tier=BlockTier.COMPRESSED,
-                reason="recovered_replay",
-            )
-            self.registry.update(updated)
-            self.ghost_store.mark_reactivated(block.block_id)
-            if self._hard_episode_active:
-                self._hard_episode_stabilized_blocks.add(block.block_id)
+            if current and current[-1].end_token != block.start_token:
+                groups.append(current)
+                current = []
+            current.append(block)
+        if current:
+            groups.append(current)
+        return tuple(tuple(group) for group in groups)
 
-    def _replay_prefix(self, total_tokens: int) -> list[KVCache]:
-        scratch = [KVCache() for _ in range(self._num_layers)]
-        tokens = mx.array(self.source_tokens[:total_tokens])
-        offset = 0
+    def _ensure_scratch_replay_prefix(self, total_tokens: int) -> list[KVCache]:
+        total_tokens = max(0, min(total_tokens, len(self.source_tokens)))
+        if self._scratch_replay_cache is None:
+            self._scratch_replay_cache = [KVCache() for _ in range(self._num_layers)]
+            self._scratch_replayed_tokens = 0
+            self._scratch_replay_materialized = True
+        scratch = self._scratch_replay_cache
+        offset = self._scratch_replayed_tokens
+        if total_tokens <= offset:
+            return scratch
+        replay_started = time.perf_counter()
+        if not self._scratch_replay_materialized and offset > 0:
+            mx.eval([cache.state for cache in scratch if cache.state is not None])
+            self._scratch_replay_materialized = True
         while offset < total_tokens:
             n = min(self._prefill_step_size, total_tokens - offset)
-            chunk = tokens[offset : offset + n]
+            chunk = mx.array(self.source_tokens[offset : offset + n])
             self._model(chunk[None], cache=scratch)
-            mx.eval([cache.state for cache in scratch if cache.state is not None])
             offset += n
             if offset < total_tokens:
+                mx.eval([cache.state for cache in scratch if cache.state is not None])
+                self._scratch_replay_materialized = True
                 mx.clear_cache()
+            else:
+                self._scratch_replay_materialized = False
+        self._scratch_replayed_tokens = total_tokens
+        self.metrics.counter(
+            REPLAY_FORWARD_TIME_SECONDS_TOTAL,
+            time.perf_counter() - replay_started,
+        )
+        self.metrics.counter(REPLAY_FORWARD_EVENTS_TOTAL)
         return scratch
+
+    def _reset_scratch_replay(self) -> None:
+        self._scratch_replay_cache = None
+        self._scratch_replayed_tokens = 0
+        self._scratch_replay_materialized = True
 
     def _mark_transition(
         self,
@@ -1033,6 +1221,20 @@ class AdaptiveKVManager:
         self._hard_best_achievable_over_budget_bytes = 0
         self._hard_best_achievable_blocking_block_ids = ()
 
+    def _hard_eviction_avoid_block_ids(self) -> set[int]:
+        avoid = set(self._hard_episode_stabilized_blocks)
+        if not self._hard_episode_recovery_hold:
+            return avoid
+        history_tokens = self.history_token_count()
+        if history_tokens <= 0:
+            return avoid
+        avoid.update(
+            block.block_id
+            for block in self.registry.snapshot()
+            if block.tier is BlockTier.COMPRESSED and block.start_token < history_tokens
+        )
+        return avoid
+
     def _update_hard_best_achievable_state(
         self,
         *,
@@ -1045,11 +1247,12 @@ class AdaptiveKVManager:
         resident_bytes = self.resident_bytes()
         if resident_bytes <= self.config.hard_budget_bytes:
             return
+        avoid_block_ids = self._hard_eviction_avoid_block_ids()
         remaining_candidates = self.evictions.select_candidates(
             self.registry.snapshot(),
             pressure=pressure,
             recent_tail=protected,
-            avoid_block_ids=self._hard_episode_stabilized_blocks,
+            avoid_block_ids=avoid_block_ids,
         )
         if remaining_candidates:
             return
@@ -1060,7 +1263,7 @@ class AdaptiveKVManager:
             and (
                 block.pin_state is PinState.HARD
                 or block.block_id in protected
-                or block.block_id in self._hard_episode_stabilized_blocks
+                or block.block_id in avoid_block_ids
             )
         ]
         if not blocking_blocks:

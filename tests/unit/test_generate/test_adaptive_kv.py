@@ -227,7 +227,7 @@ def test_adaptive_hard_stabilization_preserves_parity_and_avoids_repeat_churn() 
             model,
             tokenizer,
             [1, 2, 3, 4, 5, 6],
-            GenerateOptions(max_tokens=4, temperature=0),
+            GenerateOptions(max_tokens=8, temperature=0),
         )
     ]
 
@@ -239,7 +239,7 @@ def test_adaptive_hard_stabilization_preserves_parity_and_avoids_repeat_churn() 
             model,
             tokenizer,
             [1, 2, 3, 4, 5, 6],
-            GenerateOptions(max_tokens=4, temperature=0),
+            GenerateOptions(max_tokens=8, temperature=0),
             adaptive_config=AdaptiveKVConfig(
                 enabled=True,
                 block_size_tokens=2,
@@ -260,11 +260,12 @@ def test_adaptive_hard_stabilization_preserves_parity_and_avoids_repeat_churn() 
     assert metrics.get_counter("adaptive_kv_recomputations_total") == 1
     assert final_state
     stabilization = final_state[0]["hard_stabilization"]
-    assert metrics.get_counter("adaptive_kv_evictions_total") == (
-        len(stabilization["stabilized_block_ids"]) + 1
-    )
     assert final_state[0]["pressure_state"] == "hard"
     assert stabilization["episode_active"] is True
+    assert stabilization["recovery_hold_active"] is True
     assert stabilization["best_achievable_under_current_forward_semantics"] is True
     assert stabilization["reason"] == "required_history_recovered_under_hard_episode"
     assert stabilization["stabilized_block_ids"] == [1, 2]
+    assert metrics.get_counter("adaptive_kv_evictions_total") == len(
+        stabilization["stabilized_block_ids"]
+    )

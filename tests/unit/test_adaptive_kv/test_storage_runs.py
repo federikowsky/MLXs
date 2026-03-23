@@ -67,3 +67,20 @@ def test_split_without_block_preserves_left_and_right_local_offsets() -> None:
     assert fragments[1].block_slices == ((12, 0, 2),)
     assert fragments[0].token_count == 2
     assert fragments[1].token_count == 2
+
+
+def test_from_full_run_preserves_block_local_slices() -> None:
+    keys, values = _full_state(4)
+    run = AdaptiveCompressedRunStore.from_full_run(
+        3,
+        block_slices=((20, 0, 2), (21, 2, 4)),
+        keys=keys,
+        values=values,
+        group_size=32,
+        bits=8,
+    )
+
+    assert run.token_count == 4
+    assert run.block_slices == ((20, 0, 2), (21, 2, 4))
+    assert run.block_live_bytes(20) > 0
+    assert run.block_live_bytes(21) > 0
