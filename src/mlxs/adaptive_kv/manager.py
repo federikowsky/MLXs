@@ -277,8 +277,20 @@ class AdaptiveLayerCache:
             return self._resident_state
 
         segments: list[AdaptiveAttentionSegment] = []
+        full_segments: list[AdaptiveAttentionSegment] = []
+        compressed_segments: list[AdaptiveAttentionSegment] = []
         run_slice: tuple[int, int] | None = None
         run_blocks: list[tuple[int, int, int]] = []
+        resident_cursor = 0
+
+        def append_segment(segment: AdaptiveAttentionSegment) -> None:
+            nonlocal resident_cursor
+            segments.append(segment)
+            if segment.tier is BlockTier.FULL:
+                full_segments.append(segment)
+            else:
+                compressed_segments.append(segment)
+            resident_cursor = segment.resident_slice[1]
 
         def flush_full_run() -> None:
             nonlocal run_slice, run_blocks
@@ -286,11 +298,15 @@ class AdaptiveLayerCache:
                 run_slice = None
                 run_blocks = []
                 return
-            segments.append(
+            append_segment(
                 AdaptiveAttentionSegment(
                     tier=BlockTier.FULL,
                     token_count=run_slice[1] - run_slice[0],
                     block_slices=tuple(run_blocks),
+                    resident_slice=(
+                        resident_cursor,
+                        resident_cursor + (run_slice[1] - run_slice[0]),
+                    ),
                     full_slice=run_slice,
                 )
             )
@@ -333,11 +349,12 @@ class AdaptiveLayerCache:
                     f"Adaptive resident state is missing COMPRESSED run store for block "
                     f"{block.block_id}"
                 )
-            segments.append(
+            append_segment(
                 AdaptiveAttentionSegment(
                     tier=BlockTier.COMPRESSED,
                     token_count=run.token_count,
                     block_slices=run.block_slices,
+                    resident_slice=(resident_cursor, resident_cursor + run.token_count),
                     q_keys=run.q_keys,
                     q_values=run.q_values,
                     group_size=run.group_size,
@@ -347,7 +364,7 @@ class AdaptiveLayerCache:
             emitted_compressed_runs.add(run_id)
 
         flush_full_run()
-        resident_token_count = sum(segment.token_count for segment in segments)
+        resident_token_count = resident_cursor
         if resident_token_count != self._logical_offset:
             raise AdaptiveKVError(
                 "Adaptive resident state is incomplete for attention: "
@@ -356,6 +373,8 @@ class AdaptiveLayerCache:
         self._resident_state = AdaptiveResidentState(
             total_tokens=self._logical_offset,
             segments=tuple(segments),
+            full_segments=tuple(full_segments),
+            compressed_segments=tuple(compressed_segments),
             full_keys=self._full_cache.keys,
             full_values=self._full_cache.values,
         )
@@ -402,15 +421,14 @@ class AdaptiveLayerCache:
         resident_state: AdaptiveResidentState,
         usage_by_token: mx.array,
     ) -> None:
-        cursor = 0
         block_ids: list[int] = []
         block_usage: list[mx.array] = []
         for segment in resident_state.segments:
-            segment_usage = usage_by_token[cursor : cursor + segment.token_count]
+            start, end = segment.resident_slice
+            segment_usage = usage_by_token[start:end]
             for block_id, local_start, local_end in segment.block_slices:
                 block_ids.append(block_id)
                 block_usage.append(segment_usage[local_start:local_end].sum())
-            cursor += segment.token_count
         if not block_usage:
             return
         usage_values = mx.stack(block_usage, axis=0)

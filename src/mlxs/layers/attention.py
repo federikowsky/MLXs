@@ -249,6 +249,125 @@ def _is_all_full_contiguous_resident_state(
     )
 
 
+def _adaptive_segmented_reference_attention(
+    queries: mx.array,
+    resident_state: Any,
+    *,
+    full_keys: mx.array | None,
+    full_values: mx.array | None,
+    scale: float,
+    mask: mx.array | str | None,
+    sample_usage: bool,
+) -> mx.array | tuple[mx.array, mx.array]:
+    score_parts: list[mx.array] = []
+    for segment in resident_state.segments:
+        score_parts.append(
+            _segment_scores(
+                queries,
+                segment,
+                full_keys=full_keys,
+                scale=scale,
+            )
+        )
+
+    if not score_parts:
+        raise ValueError("Adaptive attention requires at least one resident segment")
+
+    scores = score_parts[0] if len(score_parts) == 1 else mx.concatenate(score_parts, axis=-1)
+    scores, _ = _apply_attention_mask(scores, mask)
+    weights = mx.softmax(scores, axis=-1, precise=True)
+
+    out: mx.array | None = None
+    usage_parts: list[mx.array] | None = [] if sample_usage else None
+    for segment in resident_state.segments:
+        start, end = segment.resident_slice
+        segment_weights = weights[..., start:end]
+        if usage_parts is not None:
+            usage_parts.append(_usage_by_token(segment_weights))
+        segment_out = _segment_output(
+            segment_weights,
+            segment,
+            full_values=full_values,
+        )
+        out = segment_out if out is None else out + segment_out
+    if out is None:
+        raise ValueError("Adaptive attention requires at least one resident segment output")
+    if usage_parts is None:
+        return out
+    usage_by_token = (
+        usage_parts[0]
+        if len(usage_parts) == 1
+        else mx.concatenate(usage_parts, axis=0)
+    )
+    return out, usage_by_token
+
+
+def _adaptive_decode_mixed_tier_attention(
+    queries: mx.array,
+    resident_state: Any,
+    *,
+    full_keys: mx.array,
+    full_values: mx.array | None,
+    scale: float,
+    mask: mx.array | str | None,
+    sample_usage: bool,
+) -> mx.array | tuple[mx.array, mx.array]:
+    full_scores = _full_segment_scores(
+        queries,
+        full_keys,
+        scale=scale,
+    )
+
+    score_parts: list[mx.array] = []
+    for segment in resident_state.segments:
+        if segment.tier is BlockTier.FULL:
+            if segment.full_slice is None:
+                raise ValueError("Adaptive FULL segment is missing contiguous resident tensors")
+            start, end = segment.full_slice
+            score_parts.append(full_scores[..., start:end])
+            continue
+        score_parts.append(
+            _segment_scores(
+                queries,
+                segment,
+                full_keys=None,
+                scale=scale,
+            )
+        )
+
+    if not score_parts:
+        raise ValueError("Adaptive attention requires at least one resident segment")
+
+    scores = score_parts[0] if len(score_parts) == 1 else mx.concatenate(score_parts, axis=-1)
+    scores, _ = _apply_attention_mask(scores, mask)
+    weights = mx.softmax(scores, axis=-1, precise=True)
+
+    out: mx.array | None = None
+    usage_parts: list[mx.array] | None = [] if sample_usage else None
+    for segment in resident_state.segments:
+        start, end = segment.resident_slice
+        segment_weights = weights[..., start:end]
+        if usage_parts is not None:
+            usage_parts.append(_usage_by_token(segment_weights))
+        segment_out = _segment_output(
+            segment_weights,
+            segment,
+            full_values=full_values,
+        )
+        out = segment_out if out is None else out + segment_out
+
+    if out is None:
+        raise ValueError("Adaptive attention requires at least one resident segment output")
+    if usage_parts is None:
+        return out
+    usage_by_token = (
+        usage_parts[0]
+        if len(usage_parts) == 1
+        else mx.concatenate(usage_parts, axis=0)
+    )
+    return out, usage_by_token
+
+
 def adaptive_scaled_dot_product_attention(
     queries: mx.array,
     resident_state: Any,
@@ -315,49 +434,31 @@ def adaptive_scaled_dot_product_attention(
             group_size=segment.group_size,
             bits=segment.bits,
         )
-
-    score_parts: list[mx.array] = []
-    for segment in resident_state.segments:
-        score_parts.append(
-            _segment_scores(
-                queries,
-                segment,
-                full_keys=full_keys,
-                scale=scale,
-            )
-        )
-
-    if not score_parts:
-        raise ValueError("Adaptive attention requires at least one resident segment")
-
-    scores = score_parts[0] if len(score_parts) == 1 else mx.concatenate(score_parts, axis=-1)
-    scores, _ = _apply_attention_mask(scores, mask)
-    weights = mx.softmax(scores, axis=-1, precise=True)
-
-    out: mx.array | None = None
-    usage_parts: list[mx.array] | None = [] if sample_usage else None
-    cursor = 0
-    for segment in resident_state.segments:
-        segment_weights = weights[..., cursor : cursor + segment.token_count]
-        cursor += segment.token_count
-        if usage_parts is not None:
-            usage_parts.append(_usage_by_token(segment_weights))
-        segment_out = _segment_output(
-            segment_weights,
-            segment,
+    if (
+        queries.shape[-2] == 1
+        and full_keys is not None
+        and full_values is not None
+        and resident_state.full_segments
+        and len(resident_state.segments) > 1
+    ):
+        return _adaptive_decode_mixed_tier_attention(
+            queries,
+            resident_state,
+            full_keys=full_keys,
             full_values=full_values,
+            scale=scale,
+            mask=mask,
+            sample_usage=sample_usage,
         )
-        out = segment_out if out is None else out + segment_out
-    if out is None:
-        raise ValueError("Adaptive attention requires at least one resident segment output")
-    if usage_parts is None:
-        return out
-    usage_by_token = (
-        usage_parts[0]
-        if len(usage_parts) == 1
-        else mx.concatenate(usage_parts, axis=0)
+    return _adaptive_segmented_reference_attention(
+        queries,
+        resident_state,
+        full_keys=full_keys,
+        full_values=full_values,
+        scale=scale,
+        mask=mask,
+        sample_usage=sample_usage,
     )
-    return out, usage_by_token
 
 
 def scaled_dot_product_attention(

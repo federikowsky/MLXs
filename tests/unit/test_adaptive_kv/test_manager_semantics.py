@@ -6,6 +6,7 @@ from typing import Any
 import mlx.core as mx
 import pytest
 
+import mlxs.layers.attention as attention_mod
 from mlxs.adaptive_kv.block_types import BlockTier, PressureState
 from mlxs.adaptive_kv.config import AdaptiveKVConfig
 from mlxs.adaptive_kv.manager import AdaptiveKVManager, AdaptiveLayerCache
@@ -17,7 +18,9 @@ from mlxs.adaptive_kv.metrics import (
     REPLAY_FORWARD_EVENTS_TOTAL,
     REPLAY_FORWARD_TIME_SECONDS_TOTAL,
 )
+from mlxs.adaptive_kv.storage import AdaptiveAttentionSegment, AdaptiveResidentState
 from mlxs.layers.attention import (
+    _adaptive_segmented_reference_attention,
     adaptive_scaled_dot_product_attention,
     scaled_dot_product_attention,
 )
@@ -537,6 +540,28 @@ def test_usage_timing_accumulates_only_at_window_flush() -> None:
     assert manager._adaptive_usage_timing_acc.get("host_ns", 0) >= 0
 
 
+def test_record_usage_preserves_block_attribution_in_resident_order() -> None:
+    manager = _make_manager(prompt_tokens=[1, 2, 3, 4, 5, 6], recent_tail_protect_blocks=0)
+    cache = manager.caches()[0]
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._demote_block(manager.registry.get(2), reason="test_demote")
+
+    resident_state = cache.resident_state_for_attention()
+    usage_by_token = mx.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], dtype=mx.float32)
+
+    cache.record_usage_from_attention(resident_state, usage_by_token)
+    usage = manager.usage.snapshot_and_reset()
+
+    assert usage == pytest.approx(
+        {
+            0: 3.0 / 11.0,
+            1: 7.0 / 11.0,
+            2: 1.0,
+        }
+    )
+
+
 def test_single_token_mixed_tier_attention_matches_reference_and_usage() -> None:
     manager = _make_manager(prompt_tokens=[1, 2, 3, 4, 5, 6, 7, 8], recent_tail_protect_blocks=0)
     cache = manager.caches()[0]
@@ -572,6 +597,171 @@ def test_single_token_mixed_tier_attention_matches_reference_and_usage() -> None
     ref_weights = mx.softmax(ref_scores, axis=-1, precise=True)
     ref_usage_by_token = ref_weights.mean(axis=(0, 1, 2))
 
+    assert mx.allclose(out, ref_out, rtol=1e-5, atol=1e-5).item()
+    assert mx.allclose(
+        usage_by_token,
+        ref_usage_by_token,
+        rtol=1e-5,
+        atol=1e-5,
+    ).item()
+
+
+def test_single_token_mixed_tier_uses_decode_specialized_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _make_manager(prompt_tokens=[1, 2, 3, 4, 5, 6, 7, 8], recent_tail_protect_blocks=0)
+    cache = manager.caches()[0]
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._demote_block(manager.registry.get(2), reason="test_demote")
+
+    resident_state = cache.resident_state_for_attention()
+    queries = _q_from_tokens([9])
+    called = {"specialized": 0, "reference": 0}
+    original_specialized = attention_mod._adaptive_decode_mixed_tier_attention
+    original_reference = attention_mod._adaptive_segmented_reference_attention
+
+    def _wrapped_specialized(*args: Any, **kwargs: Any) -> Any:
+        called["specialized"] += 1
+        return original_specialized(*args, **kwargs)
+
+    def _wrapped_reference(*args: Any, **kwargs: Any) -> Any:
+        called["reference"] += 1
+        return original_reference(*args, **kwargs)
+
+    monkeypatch.setattr(
+        attention_mod,
+        "_adaptive_decode_mixed_tier_attention",
+        _wrapped_specialized,
+    )
+    monkeypatch.setattr(
+        attention_mod,
+        "_adaptive_segmented_reference_attention",
+        _wrapped_reference,
+    )
+
+    adaptive_scaled_dot_product_attention(
+        queries,
+        resident_state,
+        scale=1.0,
+        mask=None,
+        sample_usage=True,
+    )
+
+    assert called == {"specialized": 1, "reference": 0}
+
+
+def test_multi_full_segment_single_token_path_matches_reference_and_usage() -> None:
+    full_keys_a, full_values_a = _kv_from_tokens([1, 2])
+    full_keys_b, full_values_b = _kv_from_tokens([5, 6])
+    full_keys = mx.concatenate([full_keys_a, full_keys_b], axis=2)
+    full_values = mx.concatenate([full_values_a, full_values_b], axis=2)
+    segments = (
+        AdaptiveAttentionSegment(
+            tier=BlockTier.FULL,
+            token_count=2,
+            block_slices=((0, 0, 2),),
+            resident_slice=(0, 2),
+            full_slice=(0, 2),
+        ),
+        AdaptiveAttentionSegment(
+            tier=BlockTier.FULL,
+            token_count=2,
+            block_slices=((3, 0, 2),),
+            resident_slice=(2, 4),
+            full_slice=(2, 4),
+        ),
+    )
+    resident_state = AdaptiveResidentState(
+        total_tokens=4,
+        segments=segments,
+        full_segments=segments,
+        compressed_segments=(),
+        full_keys=full_keys,
+        full_values=full_values,
+    )
+    queries = _q_from_tokens([9])
+
+    out, usage_by_token = adaptive_scaled_dot_product_attention(
+        queries,
+        resident_state,
+        scale=1.0,
+        mask=None,
+        sample_usage=True,
+    )
+    ref_out = mx.fast.scaled_dot_product_attention(
+        queries,
+        full_keys,
+        full_values,
+        scale=1.0,
+        mask=None,
+        sinks=None,
+    )
+    ref_scores = queries @ full_keys.swapaxes(-1, -2)
+    ref_weights = mx.softmax(ref_scores, axis=-1, precise=True)
+    ref_usage_by_token = ref_weights.mean(axis=(0, 1, 2))
+
+    assert mx.allclose(out, ref_out, rtol=1e-5, atol=1e-5).item()
+    assert mx.allclose(
+        usage_by_token,
+        ref_usage_by_token,
+        rtol=1e-5,
+        atol=1e-5,
+    ).item()
+
+
+def test_multi_token_mixed_tier_falls_back_to_reference_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _make_manager(prompt_tokens=[1, 2, 3, 4, 5, 6, 7, 8], recent_tail_protect_blocks=0)
+    cache = manager.caches()[0]
+
+    manager._demote_block(manager.registry.get(1), reason="test_demote")
+    manager._demote_block(manager.registry.get(2), reason="test_demote")
+
+    resident_state = cache.resident_state_for_attention()
+    queries = _q_from_tokens([9, 10])
+    called = {"specialized": 0, "reference": 0}
+    original_specialized = attention_mod._adaptive_decode_mixed_tier_attention
+    original_reference = attention_mod._adaptive_segmented_reference_attention
+
+    def _wrapped_specialized(*args: Any, **kwargs: Any) -> Any:
+        called["specialized"] += 1
+        return original_specialized(*args, **kwargs)
+
+    def _wrapped_reference(*args: Any, **kwargs: Any) -> Any:
+        called["reference"] += 1
+        return original_reference(*args, **kwargs)
+
+    monkeypatch.setattr(
+        attention_mod,
+        "_adaptive_decode_mixed_tier_attention",
+        _wrapped_specialized,
+    )
+    monkeypatch.setattr(
+        attention_mod,
+        "_adaptive_segmented_reference_attention",
+        _wrapped_reference,
+    )
+
+    out, usage_by_token = adaptive_scaled_dot_product_attention(
+        queries,
+        resident_state,
+        scale=1.0,
+        mask=None,
+        sample_usage=True,
+    )
+    ref_out, ref_usage_by_token = _adaptive_segmented_reference_attention(
+        queries,
+        resident_state,
+        full_keys=resident_state.full_keys,
+        full_values=resident_state.full_values,
+        scale=1.0,
+        mask=None,
+        sample_usage=True,
+    )
+
+    assert called == {"specialized": 0, "reference": 1}
     assert mx.allclose(out, ref_out, rtol=1e-5, atol=1e-5).item()
     assert mx.allclose(
         usage_by_token,

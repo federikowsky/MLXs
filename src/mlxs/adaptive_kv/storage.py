@@ -20,6 +20,7 @@ class AdaptiveAttentionSegment:
     tier: BlockTier
     token_count: int
     block_slices: tuple[tuple[int, int, int], ...]
+    resident_slice: tuple[int, int]
     full_slice: tuple[int, int] | None = None
     q_keys: QuantizedState | None = None
     q_values: QuantizedState | None = None
@@ -33,12 +34,14 @@ class AdaptiveResidentState:
 
     total_tokens: int
     segments: tuple[AdaptiveAttentionSegment, ...]
+    full_segments: tuple[AdaptiveAttentionSegment, ...] = ()
+    compressed_segments: tuple[AdaptiveAttentionSegment, ...] = ()
     full_keys: mx.array | None = None
     full_values: mx.array | None = None
 
     @property
     def has_compressed(self) -> bool:
-        return any(segment.tier is BlockTier.COMPRESSED for segment in self.segments)
+        return bool(self.compressed_segments)
 
 
 def _slice_quantized_state(
