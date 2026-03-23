@@ -18,8 +18,8 @@ from mlxs.adaptive_kv import (
     AdaptiveKVCompatibilityError,
     AdaptiveKVConfig,
     AdaptiveKVManager,
-    assess_generation_compatibility,
 )
+from mlxs.adaptive_kv.compatibility import select_generation_adapter
 from mlxs.adaptive_kv.metrics import emit_compatibility_fallback
 from mlxs.cache.kv import KVCache
 from mlxs.generate.decode import decode_loop
@@ -121,23 +121,24 @@ def generate(
 
     # Create KV cache if not provided
     if adaptive_enabled:
-        compatibility = assess_generation_compatibility(
+        selection = select_generation_adapter(
             model,
             cache=cache,
             compile_decode=compile_decode,
             quantized_kv_start=quantized_kv_start,
             input_embeddings_present=input_embeddings is not None,
         )
-        if not compatibility.supported:
-            reason = compatibility.reason or "adaptive_kv_v1 unsupported"
+        if not selection.capabilities.supported:
+            reason = selection.capabilities.reason or "adaptive_kv_v1 unsupported"
             emit_compatibility_fallback(metrics_sink, reason=reason)
             if final_adaptive_state_out is not None:
                 final_adaptive_state_out.append({"enabled": False, "reason": reason})
             raise AdaptiveKVCompatibilityError(reason)
         adaptive_manager = AdaptiveKVManager(
             adaptive_config,
-            num_layers=compatibility.num_layers,
+            num_layers=selection.num_layers,
             metrics=metrics_sink,
+            runtime_adapter=selection.adapter,
         )
         if adaptive_usage_timing_acc is not None:
             adaptive_manager._adaptive_usage_timing_acc = adaptive_usage_timing_acc

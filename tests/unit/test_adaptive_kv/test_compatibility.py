@@ -3,7 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from mlxs.adaptive_kv.compatibility import assess_generation_compatibility
+from mlxs.adaptive_kv.compatibility import (
+    assess_generation_compatibility,
+    select_generation_adapter,
+)
+from mlxs.adaptive_kv.runtime import SupportLevel
 from mlxs.cache.kv import KVCache
 
 
@@ -56,6 +60,8 @@ def test_llama_kvcache_baseline_is_supported() -> None:
 
     assert result.supported is True
     assert result.num_layers == 2
+    assert result.adapter_name == "llama"
+    assert result.support_level is SupportLevel.FULL
 
 
 def test_unsupported_model_type_is_rejected() -> None:
@@ -68,6 +74,7 @@ def test_unsupported_model_type_is_rejected() -> None:
 
     assert result.supported is False
     assert "model_type='llama'" in (result.reason or "")
+    assert result.support_level is SupportLevel.UNSUPPORTED
 
 
 def test_mixed_cache_list_is_rejected() -> None:
@@ -92,6 +99,7 @@ def test_compile_decode_is_rejected() -> None:
 
     assert result.supported is False
     assert "compile_decode=True" in (result.reason or "")
+    assert result.support_level is SupportLevel.PARTIAL
 
 
 def test_legacy_quantized_flow_is_rejected() -> None:
@@ -128,3 +136,17 @@ def test_unsupported_head_dim_is_rejected() -> None:
 
     assert result.supported is False
     assert "head_dim divisible by 32" in (result.reason or "")
+    assert result.support_level is SupportLevel.PARTIAL
+
+
+def test_generation_adapter_selection_returns_llama_adapter_for_supported_model() -> None:
+    selection = select_generation_adapter(
+        _SupportedModel(),
+        cache=None,
+        compile_decode=False,
+        quantized_kv_start=0,
+    )
+
+    assert selection.adapter is not None
+    assert selection.capabilities.adapter_name == "llama"
+    assert selection.capabilities.supported is True

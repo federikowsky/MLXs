@@ -469,6 +469,8 @@ A deeper structural continuation of the Exact Runtime Optimization Program then 
 
 A final Runtime Architecture R&D program then tested whether a materially better exact runtime/data-plane substrate could replace the retained baseline outright. It explored deeper exact mixed-tier executor and resident-plan redesigns, including a streaming mixed-tier decode path and an incremental resident-plan refresh path. Both remained exact and were benchmarked seriously. The streaming decode prototype regressed and was rejected, while the resident-plan refresh path failed the decisive same-process HARD gate and was also rejected. As a result, the retained runtime baseline remained unchanged.
 
+A subsequent Core Cleanup + Multi-Model Architecture Program then reorganized that retained implementation around a cleaner generic/adapted split. The adaptive-KV core now remains explicit and model-agnostic, runtime and resident-state bindings are selected through an adapter-backed boundary, capability reporting is structured rather than implicit, and the retained Llama path has been migrated behind the first concrete adapter. This refactor did not broaden real support: the retained working path remains the verified Llama baseline only. Controlled validation and alternating-order benchmark checks kept correctness intact and found the cleanup effectively performance-neutral within noise, so this adapter-backed architecture is now the retained baseline.
+
 12.5 Regression correctness and token parity
 
 On the synthetic benchmark matrix used for V1 regression, reference_token_match remained true for adaptive_full versus non_adaptive in the final repeated rerun.
@@ -527,6 +529,7 @@ and frozen as:
 	•	adaptive_full aligned with non_adaptive greedy outputs when resident KV is all-FULL contiguous and the fused attention path matches the baseline,
 	•	adaptive_soft performant in the SOFT regime relative to adaptive_full, without a guarantee of greedy token parity under active compression,
 	•	adaptive_hard materially improved and good enough under stress within the approved scope, while not held to adaptive_full throughput or parity,
+	•	implemented on a retained adapter-backed runtime architecture with an explicit capability model and the current Llama path as the first concrete adapter,
 	•	benchmarked,
 	•	production-serious within scope,
 	•	acceptable in performance for the supported SOFT compression regime,
@@ -552,6 +555,7 @@ The project progressed through multiple serious engineering phases:
 	•	dedicated HARD stabilization and replay optimization,
 	•	exact runtime optimization with partial retention,
 	•	residual executor assessment,
+	•	core cleanup and adapter-backed architecture generalization,
 	•	repeated benchmarking,
 	•	and final freeze.
 
@@ -560,7 +564,7 @@ The key result is not merely that adaptive KV can be made to work, but that it c
 	•	production-serious,
 	•	and performant enough within a well-defined supported scope.
 
-That is the correct stopping point for V1. The HARD track, the later Exact Runtime Optimization Program, and the final Runtime Architecture R&D program are closed, with the existing retained runtime baseline left in place; any further improvement belongs to optional deeper executor/data-plane R&D only if product goals justify it.
+That is the correct stopping point for V1. The HARD track, the later Exact Runtime Optimization Program, the final Runtime Architecture R&D program, and the Core Cleanup + Multi-Model Architecture Program are closed. The retained baseline is now the cleaned-up adapter-backed runtime architecture already described above, still carrying only the verified Llama path; any further improvement belongs to optional deeper executor/data-plane R&D or to a new explicit multi-model support track only if product goals justify it.
 
 ⸻
 
@@ -592,4 +596,4 @@ Any expansion to:
 	•	batch/speculative,
 	•	prompt-cache interop,
 
-must be treated as a new explicit design/integration track.
+must be treated as a new explicit design/integration track. The retained capability/adapter architecture is now the intended foundation for that future work, but it does not by itself imply broader working support in V1.
