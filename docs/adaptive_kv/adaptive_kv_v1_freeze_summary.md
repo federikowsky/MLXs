@@ -3,7 +3,7 @@
 **Status:** Frozen V1 engineering handoff summary.  
 **Normative requirements** remain in `docs/specs.md`; this file is a **standalone snapshot** of scope, behavior, architecture, and validated outcomes (no dependency on checked-in benchmark artifacts).
 
-**Related docs (V1):** `docs/dev/adaptive_kv_token_parity_investigation_report.md` (C5 root cause + T4 classification + refreshed `parity_*.json`), `docs/dev/adaptive_kv_real_workload_evaluation_report.md` (table derived from `results/bench_adaptive/real_workloads/real_workloads_v1.json`), `docs/Adaptive KV for Multi-Turn LLM Inference.md` (paper-length freeze narrative).
+**Related docs (V1):** `docs/dev/adaptive_kv_token_parity_investigation_report.md` (C5 root cause + T4 classification + refreshed `parity_*.json`), `docs/adaptive_kv/adaptive_kv_real_workload_evaluation_report.md` (table derived from `results/bench_adaptive/real_workloads/real_workloads_v1.json`), `docs/adaptive_kv/Adaptive KV for Multi-Turn LLM Inference.md` (paper-length freeze narrative).
 
 ---
 
