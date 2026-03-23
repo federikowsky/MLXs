@@ -11,7 +11,11 @@ from mlxs.adaptive_kv.block_types import BlockRecord, BlockTier
 from mlxs.adaptive_kv.exceptions import AdaptiveKVError, AdaptiveKVUnsupportedError
 from mlxs.adaptive_kv.runtime import (
     AdapterCapabilities,
+    AdaptiveKVCapabilityProvider,
+    AdaptiveKVReplayBackend,
+    AdaptiveKVRuntimeSubstrate,
     CapabilityStatus,
+    ComposedAdaptiveKVRuntimeAdapter,
     ScratchReplayState,
 )
 from mlxs.adaptive_kv.storage import (
@@ -43,8 +47,8 @@ def _capabilities(
     )
 
 
-class LlamaAdaptiveKVAdapter:
-    """Concrete adapter for the retained full-attention llama baseline."""
+class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
+    """Support assessment for the retained full-attention llama baseline."""
 
     name = "llama"
 
@@ -162,12 +166,20 @@ class LlamaAdaptiveKVAdapter:
             num_layers=len(baseline),
         )
 
+
+class LlamaRuntimeSubstrate(AdaptiveKVRuntimeSubstrate):
+    """Runtime substrate that builds per-layer llama resident runtimes."""
+
     def make_layer_runtime(
         self,
         manager: AdaptiveKVManager,
         layer_index: int,
     ) -> LlamaAdaptiveLayerCache:
         return LlamaAdaptiveLayerCache(manager, layer_index=layer_index)
+
+
+class LlamaReplayBackend(AdaptiveKVReplayBackend):
+    """Replay / recovery substrate for the retained llama runtime."""
 
     def ensure_scratch_replay_prefix(
         self,
@@ -220,6 +232,19 @@ class LlamaAdaptiveKVAdapter:
         end_token: int,
     ) -> tuple[mx.array, mx.array]:
         return replay_layer.copy_token_range(start_token, end_token)
+
+
+class LlamaAdaptiveKVAdapter(ComposedAdaptiveKVRuntimeAdapter):
+    """Concrete platform adapter for the retained full-attention llama baseline."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            name="llama",
+            capability_provider=LlamaCapabilityProvider(),
+            runtime_substrate=LlamaRuntimeSubstrate(),
+            replay_backend=LlamaReplayBackend(),
+            layer_runtime_type=LlamaAdaptiveLayerCache,
+        )
 
 
 class LlamaAdaptiveLayerCache:

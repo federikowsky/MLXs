@@ -1,4 +1,4 @@
-"""Generic Adaptive KV runtime contracts and capability model."""
+"""Generic Adaptive KV runtime contracts, capabilities, and platform composition."""
 
 from __future__ import annotations
 
@@ -54,16 +54,6 @@ class AdapterCapabilities:
     @property
     def reason(self) -> str | None:
         return self.overall.reason
-
-
-@dataclass(frozen=True, slots=True)
-class AdapterSelection:
-    adapter: AdaptiveKVRuntimeAdapter | None
-    capabilities: AdapterCapabilities
-
-    @property
-    def num_layers(self) -> int:
-        return self.capabilities.num_layers
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,9 +125,7 @@ class AdaptiveKVLayerRuntime(Protocol):
 
 
 @runtime_checkable
-class AdaptiveKVRuntimeAdapter(Protocol):
-    name: str
-
+class AdaptiveKVCapabilityProvider(Protocol):
     def matches_model(self, model: Any) -> bool: ...
 
     def assess_generation_support(
@@ -150,8 +138,14 @@ class AdaptiveKVRuntimeAdapter(Protocol):
         input_embeddings_present: bool = False,
     ) -> AdapterCapabilities: ...
 
+
+@runtime_checkable
+class AdaptiveKVRuntimeSubstrate(Protocol):
     def make_layer_runtime(self, manager: Any, layer_index: int) -> AdaptiveKVLayerRuntime: ...
 
+
+@runtime_checkable
+class AdaptiveKVReplayBackend(Protocol):
     def ensure_scratch_replay_prefix(
         self,
         *,
@@ -171,3 +165,135 @@ class AdaptiveKVRuntimeAdapter(Protocol):
         start_token: int,
         end_token: int,
     ) -> tuple[mx.array, mx.array]: ...
+
+
+@runtime_checkable
+class AdaptiveKVRuntimeAdapter(Protocol):
+    name: str
+    capability_provider: AdaptiveKVCapabilityProvider
+    runtime_substrate: AdaptiveKVRuntimeSubstrate
+    replay_backend: AdaptiveKVReplayBackend
+    layer_runtime_type: type[Any] | None
+
+    def matches_model(self, model: Any) -> bool: ...
+
+    def assess_generation_support(
+        self,
+        model: Any,
+        *,
+        cache: list[Any] | None,
+        compile_decode: bool,
+        quantized_kv_start: int,
+        input_embeddings_present: bool = False,
+    ) -> AdapterCapabilities: ...
+
+
+class ComposedAdaptiveKVRuntimeAdapter:
+    """Concrete adapter assembled from independent capability/runtime components."""
+
+    __slots__ = (
+        "capability_provider",
+        "layer_runtime_type",
+        "name",
+        "replay_backend",
+        "runtime_substrate",
+    )
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        capability_provider: AdaptiveKVCapabilityProvider,
+        runtime_substrate: AdaptiveKVRuntimeSubstrate,
+        replay_backend: AdaptiveKVReplayBackend,
+        layer_runtime_type: type[Any] | None = None,
+    ) -> None:
+        self.name = name
+        self.capability_provider = capability_provider
+        self.runtime_substrate = runtime_substrate
+        self.replay_backend = replay_backend
+        self.layer_runtime_type = layer_runtime_type
+
+    def matches_model(self, model: Any) -> bool:
+        return self.capability_provider.matches_model(model)
+
+    def assess_generation_support(
+        self,
+        model: Any,
+        *,
+        cache: list[Any] | None,
+        compile_decode: bool,
+        quantized_kv_start: int,
+        input_embeddings_present: bool = False,
+    ) -> AdapterCapabilities:
+        return self.capability_provider.assess_generation_support(
+            model,
+            cache=cache,
+            compile_decode=compile_decode,
+            quantized_kv_start=quantized_kv_start,
+            input_embeddings_present=input_embeddings_present,
+        )
+
+    def make_layer_runtime(self, manager: Any, layer_index: int) -> AdaptiveKVLayerRuntime:
+        return self.runtime_substrate.make_layer_runtime(manager, layer_index)
+
+    def ensure_scratch_replay_prefix(
+        self,
+        *,
+        model: Any,
+        num_layers: int,
+        scratch_cache: list[Any] | None,
+        replayed_tokens: int,
+        materialized: bool,
+        source_tokens: list[int],
+        total_tokens: int,
+        prefill_step_size: int,
+    ) -> ScratchReplayState:
+        return self.replay_backend.ensure_scratch_replay_prefix(
+            model=model,
+            num_layers=num_layers,
+            scratch_cache=scratch_cache,
+            replayed_tokens=replayed_tokens,
+            materialized=materialized,
+            source_tokens=source_tokens,
+            total_tokens=total_tokens,
+            prefill_step_size=prefill_step_size,
+        )
+
+    def copy_replay_token_range(
+        self,
+        replay_layer: Any,
+        start_token: int,
+        end_token: int,
+    ) -> tuple[mx.array, mx.array]:
+        return self.replay_backend.copy_replay_token_range(
+            replay_layer,
+            start_token,
+            end_token,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AdapterSelection:
+    adapter: AdaptiveKVRuntimeAdapter | None
+    capabilities: AdapterCapabilities
+
+    @property
+    def platform(self) -> AdaptiveKVRuntimeAdapter | None:
+        return self.adapter
+
+    @property
+    def num_layers(self) -> int:
+        return self.capabilities.num_layers
+
+    @property
+    def runtime_substrate(self) -> AdaptiveKVRuntimeSubstrate | None:
+        if self.adapter is None:
+            return None
+        return self.adapter.runtime_substrate
+
+    @property
+    def replay_backend(self) -> AdaptiveKVReplayBackend | None:
+        if self.adapter is None:
+            return None
+        return self.adapter.replay_backend

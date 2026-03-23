@@ -24,6 +24,19 @@ class CompatibilityResult:
     capabilities: AdapterCapabilities | None = None
 
 
+def _unsupported_capabilities(*, adapter_name: str, reason: str) -> AdapterCapabilities:
+    unsupported = CapabilityStatus.unsupported(reason)
+    return AdapterCapabilities(
+        adapter_name=adapter_name,
+        overall=unsupported,
+        baseline_cache=unsupported,
+        resident_attention=unsupported,
+        compressed_tier=unsupported,
+        replay_recovery=unsupported,
+        num_layers=0,
+    )
+
+
 def select_generation_adapter(
     model: Any,
     *,
@@ -34,24 +47,9 @@ def select_generation_adapter(
 ) -> AdapterSelection:
     adapter = resolve_generation_adapter(model)
     if adapter is None:
-        capabilities = AdapterCapabilities(
+        capabilities = _unsupported_capabilities(
             adapter_name=getattr(model, "model_type", None) or "unknown",
-            overall=CapabilityStatus.unsupported(
-                "adaptive_kv_v1 supports model_type='llama' only"
-            ),
-            baseline_cache=CapabilityStatus.unsupported(
-                "adaptive_kv_v1 supports model_type='llama' only"
-            ),
-            resident_attention=CapabilityStatus.unsupported(
-                "adaptive_kv_v1 supports model_type='llama' only"
-            ),
-            compressed_tier=CapabilityStatus.unsupported(
-                "adaptive_kv_v1 supports model_type='llama' only"
-            ),
-            replay_recovery=CapabilityStatus.unsupported(
-                "adaptive_kv_v1 supports model_type='llama' only"
-            ),
-            num_layers=0,
+            reason="adaptive_kv_v1 supports model_type='llama' only",
         )
         return AdapterSelection(adapter=None, capabilities=capabilities)
     capabilities = adapter.assess_generation_support(

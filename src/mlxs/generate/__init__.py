@@ -139,6 +139,8 @@ def generate(
             num_layers=selection.num_layers,
             metrics=metrics_sink,
             runtime_adapter=selection.adapter,
+            runtime_substrate=selection.runtime_substrate,
+            replay_backend=selection.replay_backend,
         )
         if adaptive_usage_timing_acc is not None:
             adaptive_manager._adaptive_usage_timing_acc = adaptive_usage_timing_acc

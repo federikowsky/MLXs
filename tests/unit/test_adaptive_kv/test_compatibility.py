@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from mlxs.adaptive_kv.adapters import default_generation_adapter, generation_adapter_registry
 from mlxs.adaptive_kv.compatibility import (
     assess_generation_compatibility,
     select_generation_adapter,
@@ -150,3 +151,26 @@ def test_generation_adapter_selection_returns_llama_adapter_for_supported_model(
     assert selection.adapter is not None
     assert selection.capabilities.adapter_name == "llama"
     assert selection.capabilities.supported is True
+
+
+def test_generation_adapter_selection_exposes_runtime_components() -> None:
+    selection = select_generation_adapter(
+        _SupportedModel(),
+        cache=None,
+        compile_decode=False,
+        quantized_kv_start=0,
+    )
+
+    assert selection.adapter is not None
+    assert selection.platform is selection.adapter
+    assert selection.runtime_substrate is selection.adapter.runtime_substrate
+    assert selection.replay_backend is selection.adapter.replay_backend
+
+
+def test_generation_adapter_registry_exposes_retained_default_platform() -> None:
+    registry = generation_adapter_registry()
+
+    assert registry.default_generation_adapter().name == "llama"
+    assert default_generation_adapter().name == "llama"
+    assert registry.resolve_generation_adapter(_SupportedModel()) is not None
+    assert registry.resolve_generation_adapter(_WrongModelType()) is None

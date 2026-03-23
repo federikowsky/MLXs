@@ -469,7 +469,9 @@ A deeper structural continuation of the Exact Runtime Optimization Program then 
 
 A final Runtime Architecture R&D program then tested whether a materially better exact runtime/data-plane substrate could replace the retained baseline outright. It explored deeper exact mixed-tier executor and resident-plan redesigns, including a streaming mixed-tier decode path and an incremental resident-plan refresh path. Both remained exact and were benchmarked seriously. The streaming decode prototype regressed and was rejected, while the resident-plan refresh path failed the decisive same-process HARD gate and was also rejected. As a result, the retained runtime baseline remained unchanged.
 
-A subsequent Core Cleanup + Multi-Model Architecture Program then reorganized that retained implementation around a cleaner generic/adapted split. The adaptive-KV core now remains explicit and model-agnostic, runtime and resident-state bindings are selected through an adapter-backed boundary, capability reporting is structured rather than implicit, and the retained Llama path has been migrated behind the first concrete adapter. This refactor did not broaden real support: the retained working path remains the verified Llama baseline only. Controlled validation and alternating-order benchmark checks kept correctness intact and found the cleanup effectively performance-neutral within noise, so this adapter-backed architecture is now the retained baseline.
+A subsequent Core Cleanup + Multi-Model Architecture Program then reorganized that retained implementation around a cleaner generic/adapted split. The adaptive-KV core now remains explicit and model-agnostic, runtime and resident-state bindings are selected through an adapter-backed boundary, capability reporting is structured rather than implicit, and the retained Llama path has been migrated behind the first concrete adapter. This refactor did not broaden real support: the retained working path remains the verified Llama baseline only. Controlled validation and alternating-order benchmark checks kept correctness intact and found the cleanup effectively performance-neutral within noise, so this adapter-backed architecture became the retained baseline.
+
+A final Platform Architecture Refactor then completed that direction into a more explicit platform model. The generic core is now separated not only from model-family-specific execution, but also from the distinct roles of capability provider, runtime substrate, replay backend, and composed runtime adapter. The manager now orchestrates abstract runtime and replay components rather than depending on a Llama-specific architectural assumption, while the retained Llama path is fully migrated onto those platform contracts. Fresh same-machine regression checks preserved correctness and support honesty and did not show a material retained-path regression, so this platform architecture is now the retained baseline for future extension.
 
 12.5 Regression correctness and token parity
 
@@ -529,7 +531,7 @@ and frozen as:
 	•	adaptive_full aligned with non_adaptive greedy outputs when resident KV is all-FULL contiguous and the fused attention path matches the baseline,
 	•	adaptive_soft performant in the SOFT regime relative to adaptive_full, without a guarantee of greedy token parity under active compression,
 	•	adaptive_hard materially improved and good enough under stress within the approved scope, while not held to adaptive_full throughput or parity,
-	•	implemented on a retained adapter-backed runtime architecture with an explicit capability model and the current Llama path as the first concrete adapter,
+	•	implemented on a retained platform architecture that separates the generic core from capability provider, runtime substrate, replay backend, and composed runtime adapter roles, with the current Llama path as the first concrete migrated implementation,
 	•	benchmarked,
 	•	production-serious within scope,
 	•	acceptable in performance for the supported SOFT compression regime,
@@ -556,6 +558,7 @@ The project progressed through multiple serious engineering phases:
 	•	exact runtime optimization with partial retention,
 	•	residual executor assessment,
 	•	core cleanup and adapter-backed architecture generalization,
+	•	platform architecture refactor and contract hardening,
 	•	repeated benchmarking,
 	•	and final freeze.
 
@@ -564,7 +567,7 @@ The key result is not merely that adaptive KV can be made to work, but that it c
 	•	production-serious,
 	•	and performant enough within a well-defined supported scope.
 
-That is the correct stopping point for V1. The HARD track, the later Exact Runtime Optimization Program, the final Runtime Architecture R&D program, and the Core Cleanup + Multi-Model Architecture Program are closed. The retained baseline is now the cleaned-up adapter-backed runtime architecture already described above, still carrying only the verified Llama path; any further improvement belongs to optional deeper executor/data-plane R&D or to a new explicit multi-model support track only if product goals justify it.
+That is the correct stopping point for V1. The HARD track, the later Exact Runtime Optimization Program, the final Runtime Architecture R&D program, the Core Cleanup + Multi-Model Architecture Program, and the final Platform Architecture Refactor are closed. The retained baseline is now the platform architecture already described above, still carrying only the verified Llama path; any further improvement belongs to optional deeper executor/data-plane R&D or to a new explicit multi-model support track only if product goals justify it.
 
 ⸻
 
@@ -578,7 +581,7 @@ If greedy parity or tighter output distributions are required while COMPRESSED b
 
 16.2 HARD-pressure optimization
 
-The ordinary HARD hardening track, the later Exact Runtime Optimization Program, and the final Runtime Architecture R&D program are complete for V1. The existing retained runtime baseline stays in place, and the remaining limitation is still structural to the current exact mixed-tier segmented executor.
+The ordinary HARD hardening track, the later Exact Runtime Optimization Program, the final Runtime Architecture R&D program, and the later platform-architecture cleanup/refactor work are complete for V1. The existing retained baseline stays in place, and the remaining limitation is still structural to the current exact mixed-tier segmented executor.
 
 Any further work should therefore be treated as optional executor R&D, for example:
 	•	a deeper exact mixed-tier executor restructuring for the stable HARD decode shape,
@@ -596,4 +599,4 @@ Any expansion to:
 	•	batch/speculative,
 	•	prompt-cache interop,
 
-must be treated as a new explicit design/integration track. The retained capability/adapter architecture is now the intended foundation for that future work, but it does not by itself imply broader working support in V1.
+must be treated as a new explicit design/integration track. The retained platform architecture is now the intended foundation for that future work, but it does not by itself imply broader working support in V1.

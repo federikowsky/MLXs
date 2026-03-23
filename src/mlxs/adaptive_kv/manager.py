@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from mlxs.adaptive_kv.adapters.llama import LlamaAdaptiveKVAdapter, LlamaAdaptiveLayerCache
+from mlxs.adaptive_kv.adapters import default_generation_adapter
 from mlxs.adaptive_kv.block_registry import AdaptiveBlockRegistry
 from mlxs.adaptive_kv.block_types import (
     BlockRecord,
@@ -37,12 +37,23 @@ from mlxs.adaptive_kv.metrics import (
     emit_population,
 )
 from mlxs.adaptive_kv.recompute import AdaptiveRecomputeCoordinator
-from mlxs.adaptive_kv.runtime import AdaptiveKVLayerRuntime, AdaptiveKVRuntimeAdapter
+from mlxs.adaptive_kv.runtime import (
+    AdaptiveKVLayerRuntime,
+    AdaptiveKVReplayBackend,
+    AdaptiveKVRuntimeAdapter,
+    AdaptiveKVRuntimeSubstrate,
+)
 from mlxs.adaptive_kv.scoring import AdaptiveScoreEngine
 from mlxs.adaptive_kv.transitions import AdaptiveTransitionEngine
 from mlxs.adaptive_kv.usage import AdaptiveUsageCollector
 
-AdaptiveLayerCache = LlamaAdaptiveLayerCache
+_DEFAULT_LAYER_RUNTIME = default_generation_adapter().layer_runtime_type
+if _DEFAULT_LAYER_RUNTIME is None:
+    raise RuntimeError("Adaptive KV default adapter must expose a concrete layer runtime type")
+
+# Backward-compatible alias retained for tests and diagnostics that still refer to
+# the currently retained concrete layer runtime.
+AdaptiveLayerCache = _DEFAULT_LAYER_RUNTIME
 
 
 class AdaptiveKVManager:
@@ -55,11 +66,21 @@ class AdaptiveKVManager:
         num_layers: int,
         metrics: Any,
         runtime_adapter: AdaptiveKVRuntimeAdapter | None = None,
+        runtime_substrate: AdaptiveKVRuntimeSubstrate | None = None,
+        replay_backend: AdaptiveKVReplayBackend | None = None,
     ) -> None:
         self.config = config
         self.metrics = metrics
         self.runtime_adapter = (
-            runtime_adapter if runtime_adapter is not None else LlamaAdaptiveKVAdapter()
+            runtime_adapter if runtime_adapter is not None else default_generation_adapter()
+        )
+        self.runtime_substrate = (
+            runtime_substrate
+            if runtime_substrate is not None
+            else self.runtime_adapter.runtime_substrate
+        )
+        self.replay_backend = (
+            replay_backend if replay_backend is not None else self.runtime_adapter.replay_backend
         )
         self.registry = AdaptiveBlockRegistry(config.block_size_tokens)
         self.usage = AdaptiveUsageCollector()
@@ -72,7 +93,7 @@ class AdaptiveKVManager:
         self.source_tokens: list[int] = []
         self._num_layers = num_layers
         self._layer_caches: list[AdaptiveKVLayerRuntime] = [
-            self.runtime_adapter.make_layer_runtime(self, layer_index=i)
+            self.runtime_substrate.make_layer_runtime(self, layer_index=i)
             for i in range(num_layers)
         ]
         self._resident_version = 0
@@ -390,7 +411,7 @@ class AdaptiveKVManager:
             start_token = recovery_group[0].start_token
             end_token = recovery_group[-1].end_token
             for layer_cache, scratch_layer in zip(self._layer_caches, scratch, strict=True):
-                keys, values = self.runtime_adapter.copy_replay_token_range(
+                keys, values = self.replay_backend.copy_replay_token_range(
                     scratch_layer,
                     start_token,
                     end_token,
@@ -452,7 +473,7 @@ class AdaptiveKVManager:
     def _ensure_scratch_replay_prefix(self, total_tokens: int) -> list[Any]:
         previous_replayed_tokens = self._scratch_replayed_tokens
         replay_started = time.perf_counter()
-        replay_state = self.runtime_adapter.ensure_scratch_replay_prefix(
+        replay_state = self.replay_backend.ensure_scratch_replay_prefix(
             model=self._model,
             num_layers=self._num_layers,
             scratch_cache=self._scratch_replay_cache,

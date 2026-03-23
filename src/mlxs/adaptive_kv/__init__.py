@@ -13,17 +13,31 @@ from mlxs.adaptive_kv.exceptions import (
     AdaptiveKVUnsupportedError,
 )
 from mlxs.adaptive_kv.manager import AdaptiveKVManager
-from mlxs.adaptive_kv.runtime import AdapterCapabilities, CapabilityStatus, SupportLevel
+from mlxs.adaptive_kv.runtime import (
+    AdapterCapabilities,
+    AdaptiveKVCapabilityProvider,
+    AdaptiveKVReplayBackend,
+    AdaptiveKVRuntimeAdapter,
+    AdaptiveKVRuntimeSubstrate,
+    CapabilityStatus,
+    ComposedAdaptiveKVRuntimeAdapter,
+    SupportLevel,
+)
 
 __all__ = [
     "AdaptiveKVCompatibilityError",
     "AdaptiveKVConfig",
     "AdapterCapabilities",
     "AdaptiveKVError",
+    "AdaptiveKVCapabilityProvider",
     "AdaptiveKVManager",
+    "AdaptiveKVReplayBackend",
     "AdaptiveKVRecoveryNotImplementedError",
+    "AdaptiveKVRuntimeAdapter",
+    "AdaptiveKVRuntimeSubstrate",
     "AdaptiveKVUnsupportedError",
     "CapabilityStatus",
+    "ComposedAdaptiveKVRuntimeAdapter",
     "CompatibilityResult",
     "assess_generation_compatibility",
     "select_generation_adapter",
