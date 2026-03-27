@@ -88,6 +88,9 @@ class WindowedKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
         del return_array
         return create_causal_mask(n, offset=self._logical_offset, window_size=effective_window)
 
+    def _dequantize_compressed_attention(self) -> bool:
+        return True
+
 
 class WindowedKVRuntimeSubstrate(AdaptiveKVRuntimeSubstrate):
     """Runtime substrate for exact windowed-KV decoder families."""

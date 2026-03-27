@@ -222,7 +222,7 @@ class FullAttentionKVAdaptiveLayerCache:
             keys=full_keys,
             values=full_values,
             group_size=group_size,
-            bits=8,
+            bits=self._compressed_bits(),
         )
         self._remove_full_block(block_id)
         self._insert_compressed_run(block_id, run)
@@ -272,7 +272,7 @@ class FullAttentionKVAdaptiveLayerCache:
             keys=keys,
             values=values,
             group_size=group_size,
-            bits=8,
+            bits=self._compressed_bits(),
         )
         self._insert_compressed_run(block_id, run)
         self._manager.bump_resident_version()
@@ -316,7 +316,7 @@ class FullAttentionKVAdaptiveLayerCache:
             keys=keys,
             values=values,
             group_size=group_size,
-            bits=8,
+            bits=self._compressed_bits(),
         )
         self._insert_compressed_run_span(
             first_block_id=blocks[0].block_id,
@@ -438,6 +438,7 @@ class FullAttentionKVAdaptiveLayerCache:
                     q_values=run.q_values,
                     group_size=run.group_size,
                     bits=run.bits,
+                    dequantize_for_attention=self._dequantize_compressed_attention(),
                 )
             )
             emitted_compressed_runs.add(run_id)
@@ -846,6 +847,12 @@ class FullAttentionKVAdaptiveLayerCache:
             "adaptive_kv_v1 compressed tier requires head dimensions divisible by "
             "one of MLX quantization group sizes {32, 64, 128}"
         )
+
+    def _compressed_bits(self) -> int:
+        return 8
+
+    def _dequantize_compressed_attention(self) -> bool:
+        return False
 
 
 def make_full_kv_family_bindings() -> RuntimeFamilyBindings:

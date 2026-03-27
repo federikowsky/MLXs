@@ -26,6 +26,7 @@ class AdaptiveAttentionSegment:
     q_values: QuantizedState | None = None
     group_size: int | None = None
     bits: int | None = None
+    dequantize_for_attention: bool = False
 
 
 @dataclass(frozen=True, slots=True)

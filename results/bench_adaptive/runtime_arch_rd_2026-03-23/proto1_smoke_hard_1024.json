@@ -1,0 +1,1397 @@
+{
+  "schema_version": 1,
+  "preflight": {
+    "supported": true,
+    "reason": null,
+    "num_layers": 28,
+    "model_type": "llama",
+    "architecture": {
+      "num_hidden_layers": 28,
+      "num_attention_heads": 24,
+      "num_key_value_heads": 8,
+      "hidden_size": 3072,
+      "head_dim": 128,
+      "vocab_size": 128256
+    }
+  },
+  "environment": {
+    "python": "3.13.5",
+    "mlx": "0.31.1",
+    "platform": "darwin"
+  },
+  "git_revision": "83b88dbff34e5b07099eabf0db1dae8334920ad6",
+  "args": {
+    "model": "/Users/federicofilippi/.lmstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit",
+    "scenario": [
+      "hard_pressure_context"
+    ],
+    "baselines": [
+      "non_adaptive",
+      "adaptive_full",
+      "adaptive_hard"
+    ],
+    "repeat": 1,
+    "seed": 42,
+    "prompt_target_tokens": 1024,
+    "decode_tokens": 64,
+    "prefill_step_size": 2048,
+    "clear_cache_interval": 256,
+    "block_size_tokens": 64,
+    "update_window_steps": 16,
+    "budget_profile": "default",
+    "soft_budget_bytes": 30000000,
+    "hard_budget_bytes": 45000000
+  },
+  "notes": {
+    "recomputations_semantics": "adaptive_kv_recomputations_total counts recompute requests, not replayed tokens."
+  },
+  "runs": [
+    {
+      "scenario": "hard_pressure_context",
+      "baseline": "non_adaptive",
+      "repeat": 0,
+      "description": "Sized for eviction/recovery under hard budgets.",
+      "scenario_meta": {
+        "prompt_tokens": 1024
+      },
+      "prompt_tokens": 1024,
+      "generated_tokens": 64,
+      "total_tokens": 1088,
+      "elapsed_seconds": 3.968020375003107,
+      "tokens_per_second": 274.1921404572294,
+      "seconds_per_token": 0.0036470775505543264,
+      "token_ids": [
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578
+      ],
+      "reference_token_match": null,
+      "peak_rss_bytes_rusage": 753975296,
+      "kv_bytes_per_prompt_token_estimate": 114688
+    },
+    {
+      "scenario": "hard_pressure_context",
+      "baseline": "adaptive_full",
+      "repeat": 0,
+      "description": "Sized for eviction/recovery under hard budgets.",
+      "scenario_meta": {
+        "prompt_tokens": 1024
+      },
+      "prompt_tokens": 1024,
+      "generated_tokens": 64,
+      "total_tokens": 1088,
+      "elapsed_seconds": 3.7244461250083987,
+      "tokens_per_second": 292.12397319817495,
+      "seconds_per_token": 0.0034232041590150724,
+      "token_ids": [
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578
+      ],
+      "reference_token_match": true,
+      "peak_rss_bytes_rusage": 753975296,
+      "kv_bytes_per_prompt_token_estimate": 114688,
+      "adaptive_config": {
+        "enabled": true,
+        "block_size_tokens": 64,
+        "update_window_steps": 16,
+        "soft_budget_bytes": 1125899906842624,
+        "hard_budget_bytes": 1125899906842624,
+        "recent_tail_protect_blocks": 2,
+        "usage_alpha": 0.5,
+        "rho_hot": 0.6,
+        "rho_persist": 0.2,
+        "age_lambda": 0.1,
+        "w_hot": 0.4,
+        "w_persist": 0.3,
+        "w_struct": 0.2,
+        "w_age": 0.1,
+        "t_full_promote": 0.7,
+        "t_full_demote": 0.0,
+        "t_evict_candidate": 0.0,
+        "min_dwell_full": 1,
+        "min_dwell_compressed": 1,
+        "promote_cooldown": 1,
+        "demote_cooldown": 1,
+        "diagnostics_enabled": true,
+        "emit_metrics": true
+      },
+      "metrics": {
+        "counters": {
+          "adaptive_kv_score_updates_total": 51.0
+        },
+        "gauges": {
+          "adaptive_kv_blocks_total": 17.0,
+          "adaptive_kv_blocks_full": 17.0,
+          "adaptive_kv_blocks_compressed": 0.0,
+          "adaptive_kv_blocks_evicted": 0.0
+        },
+        "histograms": {
+          "adaptive_kv_policy_time_seconds": [
+            0.008277333006844856,
+            0.00796933300443925,
+            0.005804000000352971
+          ]
+        }
+      },
+      "adaptive_final_state": {
+        "decode_steps": 63,
+        "pressure_state": "normal",
+        "resident_bytes": 124665856,
+        "block_count": 17,
+        "attention_path": {
+          "n_attention_segments": 1,
+          "n_full_attention_segments": 1,
+          "n_compressed_attention_segments": 0,
+          "logical_blocks_in_compressed_runs": 0,
+          "logical_blocks_in_full_segments": 17,
+          "compressed_attention_token_span": 0,
+          "max_compressed_segment_tokens": 0,
+          "compressed_segment_token_counts": []
+        },
+        "tier_counts": {
+          "full": 17
+        },
+        "blocks": [
+          {
+            "block_id": 0,
+            "token_span": [
+              0,
+              64
+            ],
+            "source_span": [
+              0,
+              64
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "hard",
+            "score_components": {
+              "hotness": 0.5569839959427543,
+              "persistence": 0.2636145716704241,
+              "structural_prior": 1.0,
+              "age_penalty": 0.0,
+              "composite": 0.501877969878229,
+              "last_usage": 0.650873125738411
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 1,
+            "token_span": [
+              64,
+              128
+            ],
+            "source_span": [
+              64,
+              128
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.39919988503745596,
+              "persistence": 0.18775330765716775,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.2560059463121327,
+              "last_usage": 0.4704999720682377
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 2,
+            "token_span": [
+              128,
+              192
+            ],
+            "source_span": [
+              128,
+              192
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.38348742516119866,
+              "persistence": 0.1816382403160513,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.24788644215929487,
+              "last_usage": 0.44715580511671427
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 3,
+            "token_span": [
+              192,
+              256
+            ],
+            "source_span": [
+              192,
+              256
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.4818813996526592,
+              "persistence": 0.22853717915839838,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.30131371360858317,
+              "last_usage": 0.5617510703830152
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 4,
+            "token_span": [
+              256,
+              320
+            ],
+            "source_span": [
+              256,
+              320
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.3941179108505774,
+              "persistence": 0.1854574181449193,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.25328438978370676,
+              "last_usage": 0.4629991880189724
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 5,
+            "token_span": [
+              320,
+              384
+            ],
+            "source_span": [
+              320,
+              384
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.4068670930001959,
+              "persistence": 0.19275040783564823,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.26057195955077284,
+              "last_usage": 0.47525544218698723
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 6,
+            "token_span": [
+              384,
+              448
+            ],
+            "source_span": [
+              384,
+              448
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.4854339675894527,
+              "persistence": 0.22864012501631892,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.3027656245406768,
+              "last_usage": 0.5702594891248629
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 7,
+            "token_span": [
+              448,
+              512
+            ],
+            "source_span": [
+              448,
+              512
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.4094616971900362,
+              "persistence": 0.1945455684034823,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.2621483493970592,
+              "last_usage": 0.4766684369192685
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 8,
+            "token_span": [
+              512,
+              576
+            ],
+            "source_span": [
+              512,
+              576
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.41221665206480834,
+              "persistence": 0.19457635314645244,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.26325956676985907,
+              "last_usage": 0.48288593244112094
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 9,
+            "token_span": [
+              576,
+              640
+            ],
+            "source_span": [
+              576,
+              640
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.49330167241772915,
+              "persistence": 0.2330245332279638,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.30722802893548085,
+              "last_usage": 0.5770205878482424
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 10,
+            "token_span": [
+              640,
+              704
+            ],
+            "source_span": [
+              640,
+              704
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.4196402466965964,
+              "persistence": 0.19867947241204764,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.26745994040225285,
+              "last_usage": 0.4892606903865425
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 11,
+            "token_span": [
+              704,
+              768
+            ],
+            "source_span": [
+              704,
+              768
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.43648063635463646,
+              "persistence": 0.20622048505787846,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.2764584000592182,
+              "last_usage": 0.5119733556070734
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 12,
+            "token_span": [
+              768,
+              832
+            ],
+            "source_span": [
+              768,
+              832
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.5273712887431292,
+              "persistence": 0.24954246012633957,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.3258112535351536,
+              "last_usage": 0.6165782417971115
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 13,
+            "token_span": [
+              832,
+              896
+            ],
+            "source_span": [
+              832,
+              896
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.4793409615268871,
+              "persistence": 0.22775803239962883,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.30006379433064345,
+              "last_usage": 0.5584632568972218
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 14,
+            "token_span": [
+              896,
+              960
+            ],
+            "source_span": [
+              896,
+              960
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.5270249209604745,
+              "persistence": 0.2511591215473117,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.32615770484838336,
+              "last_usage": 0.6114751166681534
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 15,
+            "token_span": [
+              960,
+              1024
+            ],
+            "source_span": [
+              960,
+              1024
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.7370745428888095,
+              "persistence": 0.3536915142962699,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.44093727144440475,
+              "last_usage": 0.8484575714813491
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 16,
+            "token_span": [
+              1024,
+              1087
+            ],
+            "source_span": [
+              1024,
+              1087
+            ],
+            "segment_id": 1,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.5524204683700832,
+              "persistence": 0.23884699932346948,
+              "structural_prior": 0.0,
+              "age_penalty": 0.0,
+              "composite": 0.2926222871450741,
+              "last_usage": 0.71490611431519
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          }
+        ],
+        "ghost_count": 0,
+        "ghost_block_ids": []
+      },
+      "final_resident_bytes": 124665856,
+      "policy_time_seconds_stats": {
+        "count": 3,
+        "sum": 0.022050666011637077,
+        "mean": 0.007350222003879026,
+        "p50": 0.00796933300443925,
+        "p95": 0.008277333006844856,
+        "max": 0.008277333006844856
+      }
+    },
+    {
+      "scenario": "hard_pressure_context",
+      "baseline": "adaptive_hard",
+      "repeat": 0,
+      "description": "Sized for eviction/recovery under hard budgets.",
+      "scenario_meta": {
+        "prompt_tokens": 1024
+      },
+      "prompt_tokens": 1024,
+      "generated_tokens": 64,
+      "total_tokens": 1088,
+      "elapsed_seconds": 5.5901127090037335,
+      "tokens_per_second": 194.62934946689165,
+      "seconds_per_token": 0.005137971239893137,
+      "token_ids": [
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578,
+        4062,
+        14198,
+        39935,
+        35308,
+        927,
+        279,
+        16053,
+        5679,
+        13,
+        220,
+        578
+      ],
+      "reference_token_match": true,
+      "peak_rss_bytes_rusage": 753975296,
+      "kv_bytes_per_prompt_token_estimate": 114688,
+      "adaptive_config": {
+        "enabled": true,
+        "block_size_tokens": 64,
+        "update_window_steps": 16,
+        "soft_budget_bytes": 30000000,
+        "hard_budget_bytes": 45000000,
+        "recent_tail_protect_blocks": 0,
+        "usage_alpha": 0.5,
+        "rho_hot": 0.6,
+        "rho_persist": 0.2,
+        "age_lambda": 0.1,
+        "w_hot": 0.4,
+        "w_persist": 0.3,
+        "w_struct": 0.2,
+        "w_age": 0.1,
+        "t_full_promote": 0.95,
+        "t_full_demote": 0.9,
+        "t_evict_candidate": 0.99,
+        "min_dwell_full": 1,
+        "min_dwell_compressed": 1,
+        "promote_cooldown": 1,
+        "demote_cooldown": 1,
+        "diagnostics_enabled": true,
+        "emit_metrics": true
+      },
+      "metrics": {
+        "counters": {
+          "adaptive_kv_score_updates_total": 51.0,
+          "adaptive_kv_pressure_hard_count": 3.0,
+          "adaptive_kv_demotions_total": 15.0,
+          "adaptive_kv_evictions_total": 6.0,
+          "adaptive_kv_recomputations_total": 1.0,
+          "adaptive_kv_replay_forward_seconds_total": 0.0008290830010082573,
+          "adaptive_kv_replay_forward_events_total": 1.0,
+          "adaptive_kv_recovery_materialization_seconds_total": 0.003983791990322061,
+          "adaptive_kv_recovery_materialization_events_total": 1.0,
+          "adaptive_kv_post_recovery_decode_seconds_total": 2.772979338056757,
+          "adaptive_kv_post_recovery_decode_forwards_total": 47.0
+        },
+        "gauges": {
+          "adaptive_kv_blocks_total": 17.0,
+          "adaptive_kv_blocks_full": 2.0,
+          "adaptive_kv_blocks_compressed": 15.0,
+          "adaptive_kv_blocks_evicted": 0.0
+        },
+        "histograms": {
+          "adaptive_kv_policy_time_seconds": [
+            0.027592250000452623,
+            0.005605583006399684,
+            0.004259249995811842
+          ]
+        }
+      },
+      "adaptive_final_state": {
+        "decode_steps": 63,
+        "pressure_state": "hard",
+        "resident_bytes": 71335936,
+        "block_count": 17,
+        "attention_path": {
+          "n_attention_segments": 3,
+          "n_full_attention_segments": 2,
+          "n_compressed_attention_segments": 1,
+          "logical_blocks_in_compressed_runs": 15,
+          "logical_blocks_in_full_segments": 2,
+          "compressed_attention_token_span": 960,
+          "max_compressed_segment_tokens": 960,
+          "compressed_segment_token_counts": [
+            960
+          ]
+        },
+        "tier_counts": {
+          "full": 2,
+          "compressed": 15
+        },
+        "blocks": [
+          {
+            "block_id": 0,
+            "token_span": [
+              0,
+              64
+            ],
+            "source_span": [
+              0,
+              64
+            ],
+            "segment_id": 0,
+            "tier": "full",
+            "pin_state": "hard",
+            "score_components": {
+              "hotness": 0.5585128703996002,
+              "persistence": 0.26290106634542887,
+              "structural_prior": 1.0,
+              "age_penalty": 0.0,
+              "composite": 0.5022754680634687,
+              "last_usage": 0.659536900552874
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          },
+          {
+            "block_id": 1,
+            "token_span": [
+              64,
+              128
+            ],
+            "source_span": [
+              64,
+              128
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.3972682485882443,
+              "persistence": 0.18597782004168611,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.2547006454478036,
+              "last_usage": 0.47293862198160685
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "evicted",
+              "to_tier": "compressed",
+              "reason": "recovered_replay"
+            },
+            "ghost_present": true
+          },
+          {
+            "block_id": 2,
+            "token_span": [
+              128,
+              192
+            ],
+            "source_span": [
+              128,
+              192
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.3857439896302191,
+              "persistence": 0.18122563175650802,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.24866528537904006,
+              "last_usage": 0.456740729477832
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "evicted",
+              "to_tier": "compressed",
+              "reason": "recovered_replay"
+            },
+            "ghost_present": true
+          },
+          {
+            "block_id": 3,
+            "token_span": [
+              192,
+              256
+            ],
+            "source_span": [
+              192,
+              256
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.483816045329448,
+              "persistence": 0.22790596047634504,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.3018982062746828,
+              "last_usage": 0.5713559827159114
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "full",
+              "to_tier": "compressed",
+              "reason": "score_demote"
+            },
+            "ghost_present": false
+          },
+          {
+            "block_id": 4,
+            "token_span": [
+              256,
+              320
+            ],
+            "source_span": [
+              256,
+              320
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.39201796185078536,
+              "persistence": 0.18324112432654593,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.2517795220382779,
+              "last_usage": 0.46708082711153254
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "evicted",
+              "to_tier": "compressed",
+              "reason": "recovered_replay"
+            },
+            "ghost_present": true
+          },
+          {
+            "block_id": 5,
+            "token_span": [
+              320,
+              384
+            ],
+            "source_span": [
+              320,
+              384
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.4078041068186271,
+              "persistence": 0.19209205761195286,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.2607492600110367,
+              "last_usage": 0.48167057270023483
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "evicted",
+              "to_tier": "compressed",
+              "reason": "recovered_replay"
+            },
+            "ghost_present": true
+          },
+          {
+            "block_id": 6,
+            "token_span": [
+              384,
+              448
+            ],
+            "source_span": [
+              384,
+              448
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.4824738741921917,
+              "persistence": 0.22593740632168227,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.3007707715733814,
+              "last_usage": 0.5739061046071758
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "full",
+              "to_tier": "compressed",
+              "reason": "score_demote"
+            },
+            "ghost_present": false
+          },
+          {
+            "block_id": 7,
+            "token_span": [
+              448,
+              512
+            ],
+            "source_span": [
+              448,
+              512
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.41271487810668234,
+              "persistence": 0.1947594395481312,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.2635137831071123,
+              "last_usage": 0.4864430175848445
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "full",
+              "to_tier": "compressed",
+              "reason": "score_demote"
+            },
+            "ghost_present": false
+          },
+          {
+            "block_id": 8,
+            "token_span": [
+              512,
+              576
+            ],
+            "source_span": [
+              512,
+              576
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.4108715128356207,
+              "persistence": 0.19271741065920517,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.26216382833200985,
+              "last_usage": 0.48769684744673186
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "evicted",
+              "to_tier": "compressed",
+              "reason": "recovered_replay"
+            },
+            "ghost_present": true
+          },
+          {
+            "block_id": 9,
+            "token_span": [
+              576,
+              640
+            ],
+            "source_span": [
+              576,
+              640
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.493674409981491,
+              "persistence": 0.23155566127558014,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.3069364623752705,
+              "last_usage": 0.5856074061560335
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "full",
+              "to_tier": "compressed",
+              "reason": "score_demote"
+            },
+            "ghost_present": false
+          },
+          {
+            "block_id": 10,
+            "token_span": [
+              640,
+              704
+            ],
+            "source_span": [
+              640,
+              704
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.4227830650395253,
+              "persistence": 0.19856062969446625,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.26868141492415,
+              "last_usage": 0.5003309651175458
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "evicted",
+              "to_tier": "compressed",
+              "reason": "recovered_replay"
+            },
+            "ghost_present": true
+          },
+          {
+            "block_id": 11,
+            "token_span": [
+              704,
+              768
+            ],
+            "source_span": [
+              704,
+              768
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.43857935236971135,
+              "persistence": 0.20626974598048858,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.2773126647420311,
+              "last_usage": 0.5187227710442723
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "full",
+              "to_tier": "compressed",
+              "reason": "score_demote"
+            },
+            "ghost_present": false
+          },
+          {
+            "block_id": 12,
+            "token_span": [
+              768,
+              832
+            ],
+            "source_span": [
+              768,
+              832
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.5325005475388223,
+              "persistence": 0.2500821071639836,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.328024851164724,
+              "last_usage": 0.6309775359278681
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "full",
+              "to_tier": "compressed",
+              "reason": "score_demote"
+            },
+            "ghost_present": false
+          },
+          {
+            "block_id": 13,
+            "token_span": [
+              832,
+              896
+            ],
+            "source_span": [
+              832,
+              896
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.48728561692374195,
+              "persistence": 0.22999984926951222,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.3039142015503504,
+              "last_usage": 0.5737363572039877
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "full",
+              "to_tier": "compressed",
+              "reason": "score_demote"
+            },
+            "ghost_present": false
+          },
+          {
+            "block_id": 14,
+            "token_span": [
+              896,
+              960
+            ],
+            "source_span": [
+              896,
+              960
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.5362891215044217,
+              "persistence": 0.2535188750757449,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.3305713111244921,
+              "last_usage": 0.6305570175058113
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "full",
+              "to_tier": "compressed",
+              "reason": "score_demote"
+            },
+            "ghost_present": false
+          },
+          {
+            "block_id": 15,
+            "token_span": [
+              960,
+              1024
+            ],
+            "source_span": [
+              960,
+              1024
+            ],
+            "segment_id": 0,
+            "tier": "compressed",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.753,
+              "persistence": 0.3590000000000001,
+              "structural_prior": 0.2,
+              "age_penalty": 0.0,
+              "composite": 0.4489000000000001,
+              "last_usage": 0.875
+            },
+            "age_windows": 0,
+            "last_transition": {
+              "step": 16,
+              "from_tier": "full",
+              "to_tier": "compressed",
+              "reason": "score_demote"
+            },
+            "ghost_present": false
+          },
+          {
+            "block_id": 16,
+            "token_span": [
+              1024,
+              1087
+            ],
+            "source_span": [
+              1024,
+              1087
+            ],
+            "segment_id": 1,
+            "tier": "full",
+            "pin_state": "normal",
+            "score_components": {
+              "hotness": 0.46944764883139056,
+              "persistence": 0.20762874513329255,
+              "structural_prior": 0.0,
+              "age_penalty": 0.0,
+              "composite": 0.250067683072544,
+              "last_usage": 0.5944213201370994
+            },
+            "age_windows": 0,
+            "last_transition": null,
+            "ghost_present": false
+          }
+        ],
+        "ghost_count": 6,
+        "ghost_block_ids": [
+          1,
+          2,
+          4,
+          5,
+          8,
+          10
+        ]
+      },
+      "final_resident_bytes": 71335936,
+      "policy_time_seconds_stats": {
+        "count": 3,
+        "sum": 0.03745708300266415,
+        "mean": 0.012485694334221384,
+        "p50": 0.005605583006399684,
+        "p95": 0.027592250000452623,
+        "max": 0.027592250000452623
+      }
+    }
+  ]
+}

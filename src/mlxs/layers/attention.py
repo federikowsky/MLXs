@@ -149,6 +149,23 @@ def _quantized_segment_output(
     )
 
 
+def _dequantized_segment_tensors(
+    q_state: tuple[mx.array, mx.array, mx.array],
+    *,
+    group_size: int,
+    bits: int,
+    dtype: mx.Dtype,
+) -> mx.array:
+    return mx.dequantize(
+        q_state[0],
+        q_state[1],
+        q_state[2],
+        group_size=group_size,
+        bits=bits,
+        dtype=dtype,
+    )
+
+
 def _segment_scores(
     queries: mx.array,
     segment: Any,
@@ -171,6 +188,17 @@ def _segment_scores(
         or segment.bits is None
     ):
         raise ValueError("Adaptive COMPRESSED segment is missing quantized resident tensors")
+    if segment.dequantize_for_attention:
+        return _full_segment_scores(
+            queries,
+            _dequantized_segment_tensors(
+                segment.q_keys,
+                group_size=segment.group_size,
+                bits=segment.bits,
+                dtype=queries.dtype,
+            ),
+            scale=scale,
+        )
     return _quantized_segment_scores(
         queries,
         segment.q_keys,
@@ -200,6 +228,16 @@ def _segment_output(
         or segment.bits is None
     ):
         raise ValueError("Adaptive COMPRESSED segment is missing quantized resident tensors")
+    if segment.dequantize_for_attention:
+        return _full_segment_output(
+            weights,
+            _dequantized_segment_tensors(
+                segment.q_values,
+                group_size=segment.group_size,
+                bits=segment.bits,
+                dtype=weights.dtype,
+            ),
+        )
     return _quantized_segment_output(
         weights,
         segment.q_values,
@@ -425,6 +463,25 @@ def adaptive_scaled_dot_product_attention(
             or segment.bits is None
         ):
             raise ValueError("Adaptive COMPRESSED segment is missing quantized resident tensors")
+        if segment.dequantize_for_attention:
+            return mx.fast.scaled_dot_product_attention(
+                queries,
+                _dequantized_segment_tensors(
+                    segment.q_keys,
+                    group_size=segment.group_size,
+                    bits=segment.bits,
+                    dtype=queries.dtype,
+                ),
+                _dequantized_segment_tensors(
+                    segment.q_values,
+                    group_size=segment.group_size,
+                    bits=segment.bits,
+                    dtype=queries.dtype,
+                ),
+                scale=scale,
+                mask=mask,
+                sinks=None,
+            )
         return quantized_scaled_dot_product_attention(
             queries,
             segment.q_keys,

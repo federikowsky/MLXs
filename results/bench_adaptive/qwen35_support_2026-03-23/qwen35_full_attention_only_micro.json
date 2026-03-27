@@ -1,0 +1,88 @@
+{
+  "model_type": "qwen3_5",
+  "support_subset": "full_attention_only_text",
+  "prompt_512": {
+    "non_adaptive": {
+      "baseline": "non_adaptive",
+      "tokens_per_second": 1109.1357713344817,
+      "generated_tokens": 32,
+      "reference_token_match": null,
+      "evictions": 0,
+      "recompute_requests": 0,
+      "final_pressure_state": null,
+      "final_resident_bytes": null
+    },
+    "adaptive_full": {
+      "baseline": "adaptive_full",
+      "tokens_per_second": 504.86557886321845,
+      "generated_tokens": 32,
+      "reference_token_match": true,
+      "evictions": 0,
+      "recompute_requests": 0,
+      "final_pressure_state": "normal",
+      "final_resident_bytes": 556032
+    },
+    "adaptive_soft": {
+      "baseline": "adaptive_soft",
+      "tokens_per_second": 432.6726417758003,
+      "generated_tokens": 32,
+      "reference_token_match": true,
+      "evictions": 0,
+      "recompute_requests": 0,
+      "final_pressure_state": "soft",
+      "final_resident_bytes": 420864
+    },
+    "adaptive_hard": {
+      "baseline": "adaptive_hard",
+      "tokens_per_second": 457.92378073174996,
+      "generated_tokens": 32,
+      "reference_token_match": true,
+      "evictions": 1,
+      "recompute_requests": 1,
+      "final_pressure_state": "normal",
+      "final_resident_bytes": 240640
+    }
+  },
+  "prompt_1024": {
+    "non_adaptive": {
+      "baseline": "non_adaptive",
+      "tokens_per_second": 873.3167535425823,
+      "generated_tokens": 32,
+      "reference_token_match": null,
+      "evictions": 0,
+      "recompute_requests": 0,
+      "final_pressure_state": null,
+      "final_resident_bytes": null
+    },
+    "adaptive_full": {
+      "baseline": "adaptive_full",
+      "tokens_per_second": 430.8340265536574,
+      "generated_tokens": 32,
+      "reference_token_match": true,
+      "evictions": 0,
+      "recompute_requests": 0,
+      "final_pressure_state": "normal",
+      "final_resident_bytes": 1080320
+    },
+    "adaptive_soft": {
+      "baseline": "adaptive_soft",
+      "tokens_per_second": 346.50175347303974,
+      "generated_tokens": 32,
+      "reference_token_match": true,
+      "evictions": 0,
+      "recompute_requests": 0,
+      "final_pressure_state": "normal",
+      "final_resident_bytes": 719872
+    },
+    "adaptive_hard": {
+      "baseline": "adaptive_hard",
+      "tokens_per_second": 395.4838609685323,
+      "generated_tokens": 32,
+      "reference_token_match": true,
+      "evictions": 1,
+      "recompute_requests": 1,
+      "final_pressure_state": "normal",
+      "final_resident_bytes": 404480
+    }
+  }
+}

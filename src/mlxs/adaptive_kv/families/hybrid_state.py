@@ -161,6 +161,14 @@ class HybridStateArraysLayerCache:
         self._logical_offset += n
 
 
+class HybridStateKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
+    """KV-bearing hybrid-state layers keep compressed resident storage but dequantize
+    compressed segments during attention execution to preserve token fidelity."""
+
+    def _dequantize_compressed_attention(self) -> bool:
+        return True
+
+
 class HybridStateAdaptiveLayerCache:
     """Lazy per-layer delegate: recurrent layers pass through, KV layers stay adaptive."""
 
@@ -191,7 +199,7 @@ class HybridStateAdaptiveLayerCache:
                 layer_index=self._layer_index,
             )
         else:
-            self._delegate = FullAttentionKVAdaptiveLayerCache(
+            self._delegate = HybridStateKVAdaptiveLayerCache(
                 self._manager,
                 layer_index=self._layer_index,
             )

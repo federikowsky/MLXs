@@ -26,3 +26,16 @@ def test_rotating_cache_handles_decode_after_long_prefill() -> None:
     assert cache.offset == 7
     assert sorted(int(token) for token in keys[0, 0, :, 0].tolist()) == [4, 5, 6, 7]
     assert sorted(int(token) for token in values[0, 0, :, 0].tolist()) == [104, 105, 106, 107]
+
+
+def test_rotating_cache_returns_full_first_prefill_attention_view() -> None:
+    cache = RotatingKVCache(max_size=4, keep=0)
+
+    keys, values = _kv_from_tokens([1, 2, 3, 4, 5, 6])
+    out_k, out_v = cache.update_and_fetch(keys, values)
+
+    assert out_k.shape == (1, 1, 6, 2)
+    assert out_v.shape == (1, 1, 6, 2)
+    assert cache.offset == 6
+    assert out_k[0, 0, :, 0].tolist() == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert out_v[0, 0, :, 0].tolist() == [101.0, 102.0, 103.0, 104.0, 105.0, 106.0]

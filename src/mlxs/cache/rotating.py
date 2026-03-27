@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import mlx.core as mx
 
-from mlxs.cache.attention_mask import _mask_from_length
+from mlxs.cache.attention_mask import _mask_from_length, create_causal_mask
 
 
 class RotatingKVCache:
@@ -92,6 +92,8 @@ class RotatingKVCache:
             self._values = self._temporal_order(self._values)
             self._idx = self._keys.shape[2]
 
+            # Keep up to max_size - 1 past tokens so each token in the current
+            # chunk sees the exact sliding-window context available at runtime.
             trim_size = self._idx - self.max_size + 1
             self._keys = self._trim_and_cat(trim_size, self._keys, keys)
             self._values = self._trim_and_cat(trim_size, self._values, values)
@@ -158,6 +160,7 @@ class RotatingKVCache:
     def trim(self, n: int) -> int:
         n = min(self._offset, n)
         self._offset -= n
+        self._idx -= n
         return n
 
     @property
@@ -174,6 +177,8 @@ class RotatingKVCache:
     @state.setter
     def state(self, v: tuple[mx.array, mx.array]) -> None:
         self._keys, self._values = v
+        self._offset = self._keys.shape[2]
+        self._idx = self._keys.shape[2]
 
     @property
     def state_size_bytes(self) -> int:
@@ -197,6 +202,22 @@ class RotatingKVCache:
         return_array: bool = False,
         window_size: int | None = None,
     ) -> mx.array | str | None:
-        return _mask_from_length(
-            n, offset=self._offset, return_array=return_array, window_size=window_size
-        )
+        if n > 1:
+            if window_size is None:
+                return _mask_from_length(n, offset=self._offset, return_array=return_array)
+            offset = min(self.max_size - 1, self._offset)
+            if offset + n > window_size or return_array:
+                return create_causal_mask(n, offset=offset, window_size=window_size)
+            return "causal"
+        if window_size is None:
+            return None
+        # Decode usually needs no explicit mask, except when the runtime keeps
+        # a larger rotating buffer than the active sliding window.
+        if self._offset >= window_size and self.max_size > window_size:
+            idx = self._idx
+            if idx >= self.max_size:
+                idx = 0
+            mask_size = self._offset + 1 if self._offset < self.max_size else self.max_size
+            mask = mx.arange(mask_size) >= (mask_size - window_size)
+            return mx.roll(mask, shift=idx + 1)
+        return None
