@@ -1,0 +1,1421 @@
+{
+  "generated_at": "2026-03-29T00:44:45",
+  "rows": [
+    {
+      "name": "llama_long_soft_96_normal",
+      "tok_s": 111.227810197149,
+      "elapsed_s": 0.8630934999964666,
+      "pressure_state": "normal",
+      "control_cadence": {
+        "mode": "dormant",
+        "mode_reason": "calm_dormant",
+        "base_interval_steps": 4,
+        "effective_interval_steps": 16,
+        "last_control_step": 88,
+        "calm_control_windows": 7,
+        "force_active_until_step": 0,
+        "control_windows_total": 7,
+        "control_skipped_decode_steps_total": 88,
+        "usage_sample_steps_total": 7,
+        "mutations_in_current_control_window": 0,
+        "restore_transitions_in_current_control_window": 0,
+        "degrade_transitions_in_current_control_window": 0,
+        "evictions_in_current_control_window": 0,
+        "recoveries_in_current_control_window": 0,
+        "transition_counts_total": {
+          "restore": 0,
+          "degrade": 137,
+          "evict": 0,
+          "recover": 0
+        },
+        "wake_reason_counts_total": {}
+      },
+      "attention_path": {
+        "n_execution_slabs": 0,
+        "n_execution_packs": 3,
+        "pack_token_counts": [
+          512,
+          512,
+          95
+        ],
+        "n_visible_slices": 3,
+        "slab_token_counts": [],
+        "visible_spans": [
+          [
+            0,
+            512
+          ],
+          [
+            512,
+            1024
+          ],
+          [
+            1024,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 0,
+        "observer_flushes_total": 7
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 2091924930,
+        "traced_total_ms": 2091.9249,
+        "stats": {
+          "attention.concat_packs_ns": {
+            "total_ns": 233913,
+            "total_ms": 0.2339,
+            "calls": 184,
+            "avg_ns": 1271.266304347826,
+            "avg_ms": 0.001271,
+            "share_of_traced_ns": 0.00011181710999543373
+          },
+          "attention.concat_usage_path_ns": {
+            "total_ns": 14515163,
+            "total_ms": 14.5152,
+            "calls": 28,
+            "avg_ns": 518398.6785714286,
+            "avg_ms": 0.518399,
+            "share_of_traced_ns": 0.006938663425173675
+          },
+          "attention.dormant_segmented_fast_path_ns": {
+            "total_ns": 362437054,
+            "total_ms": 362.4371,
+            "calls": 328,
+            "avg_ns": 1104991.018292683,
+            "avg_ms": 1.104991,
+            "share_of_traced_ns": 0.17325528693804515
+          },
+          "attention.dormant_segmented_output_pass_ns": {
+            "total_ns": 145085743,
+            "total_ms": 145.0857,
+            "calls": 328,
+            "avg_ns": 442334.5823170732,
+            "avg_ms": 0.442335,
+            "share_of_traced_ns": 0.06935513837965496
+          },
+          "attention.dormant_segmented_score_pass_ns": {
+            "total_ns": 215848467,
+            "total_ms": 215.8485,
+            "calls": 328,
+            "avg_ns": 658074.5945121951,
+            "avg_ms": 0.658075,
+            "share_of_traced_ns": 0.10318174610596567
+          },
+          "attention.fast_path_ns": {
+            "total_ns": 584244293,
+            "total_ms": 584.2443,
+            "calls": 612,
+            "avg_ns": 954647.5375816993,
+            "avg_ms": 0.954648,
+            "share_of_traced_ns": 0.2792854966358664
+          },
+          "attention.total_ns": {
+            "total_ns": 598759456,
+            "total_ms": 598.7595,
+            "calls": 640,
+            "avg_ns": 935561.65,
+            "avg_ms": 0.935562,
+            "share_of_traced_ns": 0.28622416006104007
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 22133068,
+            "total_ms": 22.1331,
+            "calls": 640,
+            "avg_ns": 34582.91875,
+            "avg_ms": 0.034583,
+            "share_of_traced_ns": 0.010580240085383944
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 35493789,
+            "total_ms": 35.4938,
+            "calls": 640,
+            "avg_ns": 55459.0453125,
+            "avg_ms": 0.055459,
+            "share_of_traced_ns": 0.01696704718749157
+          },
+          "manager.control_skipped_decode_steps_total": {
+            "count": 88
+          },
+          "manager.control_windows_total": {
+            "count": 7
+          },
+          "manager.usage_sample_steps_total": {
+            "count": 7
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 42410209,
+            "total_ms": 42.4102,
+            "calls": 7,
+            "avg_ns": 6058601.285714285,
+            "avg_ms": 6.058601,
+            "share_of_traced_ns": 0.020273293936986545
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 131416,
+            "total_ms": 0.1314,
+            "calls": 7,
+            "avg_ns": 18773.714285714286,
+            "avg_ms": 0.018774,
+            "share_of_traced_ns": 6.282060991548105e-05
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 43042834,
+            "total_ms": 43.0428,
+            "calls": 7,
+            "avg_ns": 6148976.285714285,
+            "avg_ms": 6.148976,
+            "share_of_traced_ns": 0.02057570679651492
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 8487211,
+            "total_ms": 8.4872,
+            "calls": 28,
+            "avg_ns": 303114.6785714286,
+            "avg_ms": 0.303115,
+            "share_of_traced_ns": 0.00405712981297087
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 640
+          },
+          "view.compose_state_ns": {
+            "total_ns": 8513131,
+            "total_ms": 8.5131,
+            "calls": 640,
+            "avg_ns": 13301.7671875,
+            "avg_ms": 0.013302,
+            "share_of_traced_ns": 0.004069520314957
+          },
+          "view.ensure_execution_packs_ns": {
+            "total_ns": 123871,
+            "total_ms": 0.1239,
+            "calls": 641,
+            "avg_ns": 193.2464898595944,
+            "avg_ms": 0.000193,
+            "share_of_traced_ns": 5.92138839322499e-05
+          },
+          "view.query_key_ns": {
+            "total_ns": 125860,
+            "total_ms": 0.1259,
+            "calls": 641,
+            "avg_ns": 196.34945397815912,
+            "avg_ms": 0.000196,
+            "share_of_traced_ns": 6.016468286938002e-05
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 10269044,
+            "total_ms": 10.269,
+            "calls": 641,
+            "avg_ns": 16020.349453978159,
+            "avg_ms": 0.01602,
+            "share_of_traced_ns": 0.0049088969937367685
+          },
+          "view.visible_start_ns": {
+            "total_ns": 70408,
+            "total_ms": 0.0704,
+            "calls": 641,
+            "avg_ns": 109.8408736349454,
+            "avg_ms": 0.00011,
+            "share_of_traced_ns": 3.365703949997862e-05
+          }
+        }
+      }
+    },
+    {
+      "name": "ministral3_long_soft_96_normal",
+      "tok_s": 128.6793770119834,
+      "elapsed_s": 0.7460402919969056,
+      "pressure_state": "normal",
+      "control_cadence": {
+        "mode": "dormant",
+        "mode_reason": "calm_dormant",
+        "base_interval_steps": 4,
+        "effective_interval_steps": 16,
+        "last_control_step": 88,
+        "calm_control_windows": 7,
+        "force_active_until_step": 0,
+        "control_windows_total": 7,
+        "control_skipped_decode_steps_total": 88,
+        "usage_sample_steps_total": 7,
+        "mutations_in_current_control_window": 0,
+        "restore_transitions_in_current_control_window": 0,
+        "degrade_transitions_in_current_control_window": 0,
+        "evictions_in_current_control_window": 0,
+        "recoveries_in_current_control_window": 0,
+        "transition_counts_total": {
+          "restore": 0,
+          "degrade": 137,
+          "evict": 0,
+          "recover": 0
+        },
+        "wake_reason_counts_total": {}
+      },
+      "attention_path": {
+        "n_execution_slabs": 0,
+        "n_execution_packs": 3,
+        "pack_token_counts": [
+          512,
+          512,
+          95
+        ],
+        "n_visible_slices": 3,
+        "slab_token_counts": [],
+        "visible_spans": [
+          [
+            0,
+            512
+          ],
+          [
+            512,
+            1024
+          ],
+          [
+            1024,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 0,
+        "observer_flushes_total": 7
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 1651139761,
+        "traced_total_ms": 1651.1398,
+        "stats": {
+          "attention.concat_packs_ns": {
+            "total_ns": 210580,
+            "total_ms": 0.2106,
+            "calls": 122,
+            "avg_ns": 1726.0655737704917,
+            "avg_ms": 0.001726,
+            "share_of_traced_ns": 0.000127536145015649
+          },
+          "attention.concat_usage_path_ns": {
+            "total_ns": 16195289,
+            "total_ms": 16.1953,
+            "calls": 28,
+            "avg_ns": 578403.1785714285,
+            "avg_ms": 0.578403,
+            "share_of_traced_ns": 0.009808551270179242
+          },
+          "attention.dormant_segmented_fast_path_ns": {
+            "total_ns": 255915460,
+            "total_ms": 255.9155,
+            "calls": 268,
+            "avg_ns": 954908.432835821,
+            "avg_ms": 0.954908,
+            "share_of_traced_ns": 0.1549932150171266
+          },
+          "attention.dormant_segmented_output_pass_ns": {
+            "total_ns": 104500119,
+            "total_ms": 104.5001,
+            "calls": 268,
+            "avg_ns": 389925.8171641791,
+            "avg_ms": 0.389926,
+            "share_of_traced_ns": 0.0632896872017123
+          },
+          "attention.dormant_segmented_score_pass_ns": {
+            "total_ns": 150642413,
+            "total_ms": 150.6424,
+            "calls": 268,
+            "avg_ns": 562098.5559701492,
+            "avg_ms": 0.562099,
+            "share_of_traced_ns": 0.0912354099623672
+          },
+          "attention.fast_path_ns": {
+            "total_ns": 489666864,
+            "total_ms": 489.6669,
+            "calls": 612,
+            "avg_ns": 800109.2549019608,
+            "avg_ms": 0.800109,
+            "share_of_traced_ns": 0.29656294128816635
+          },
+          "attention.total_ns": {
+            "total_ns": 505862153,
+            "total_ms": 505.8622,
+            "calls": 640,
+            "avg_ns": 790409.6140625,
+            "avg_ms": 0.79041,
+            "share_of_traced_ns": 0.30637149255834556
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 22022918,
+            "total_ms": 22.0229,
+            "calls": 640,
+            "avg_ns": 34410.809375,
+            "avg_ms": 0.034411,
+            "share_of_traced_ns": 0.013338009610199195
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 36319286,
+            "total_ms": 36.3193,
+            "calls": 640,
+            "avg_ns": 56748.884375,
+            "avg_ms": 0.056749,
+            "share_of_traced_ns": 0.021996494093270157
+          },
+          "family.window_query_key_ns": {
+            "total_ns": 648367,
+            "total_ms": 0.6484,
+            "calls": 641,
+            "avg_ns": 1011.4929797191887,
+            "avg_ms": 0.001011,
+            "share_of_traced_ns": 0.0003926784487385378
+          },
+          "family.window_visible_start_ns": {
+            "total_ns": 375758,
+            "total_ms": 0.3758,
+            "calls": 641,
+            "avg_ns": 586.2059282371295,
+            "avg_ms": 0.000586,
+            "share_of_traced_ns": 0.000227574920594502
+          },
+          "manager.control_skipped_decode_steps_total": {
+            "count": 88
+          },
+          "manager.control_windows_total": {
+            "count": 7
+          },
+          "manager.usage_sample_steps_total": {
+            "count": 7
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 19988083,
+            "total_ms": 19.9881,
+            "calls": 7,
+            "avg_ns": 2855440.4285714286,
+            "avg_ms": 2.85544,
+            "share_of_traced_ns": 0.012105627562317542
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 82582,
+            "total_ms": 0.0826,
+            "calls": 7,
+            "avg_ns": 11797.42857142857,
+            "avg_ms": 0.011797,
+            "share_of_traced_ns": 5.0015148293676155e-05
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 20435166,
+            "total_ms": 20.4352,
+            "calls": 7,
+            "avg_ns": 2919309.4285714286,
+            "avg_ms": 2.919309,
+            "share_of_traced_ns": 0.0123763999163969
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 5222706,
+            "total_ms": 5.2227,
+            "calls": 28,
+            "avg_ns": 186525.2142857143,
+            "avg_ms": 0.186525,
+            "share_of_traced_ns": 0.003163091413192611
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 640
+          },
+          "view.compose_state_ns": {
+            "total_ns": 9084698,
+            "total_ms": 9.0847,
+            "calls": 640,
+            "avg_ns": 14194.840625,
+            "avg_ms": 0.014195,
+            "share_of_traced_ns": 0.005502076937749911
+          },
+          "view.ensure_execution_packs_ns": {
+            "total_ns": 107585,
+            "total_ms": 0.1076,
+            "calls": 641,
+            "avg_ns": 167.8393135725429,
+            "avg_ms": 0.000168,
+            "share_of_traced_ns": 6.515802147169054e-05
+          },
+          "view.query_key_ns": {
+            "total_ns": 1021123,
+            "total_ms": 1.0211,
+            "calls": 641,
+            "avg_ns": 1593.015600624025,
+            "avg_ms": 0.001593,
+            "share_of_traced_ns": 0.000618435231298388
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 12171840,
+            "total_ms": 12.1718,
+            "calls": 641,
+            "avg_ns": 18988.82995319813,
+            "avg_ms": 0.018989,
+            "share_of_traced_ns": 0.0073717805648555275
+          },
+          "view.visible_start_ns": {
+            "total_ns": 666771,
+            "total_ms": 0.6668,
+            "calls": 641,
+            "avg_ns": 1040.204368174727,
+            "avg_ms": 0.00104,
+            "share_of_traced_ns": 0.00040382468870846846
+          }
+        }
+      }
+    },
+    {
+      "name": "qwen35_long_soft_96_normal",
+      "tok_s": 111.26490522309993,
+      "elapsed_s": 0.8628057500027353,
+      "pressure_state": "normal",
+      "control_cadence": {
+        "mode": "dormant",
+        "mode_reason": "calm_dormant",
+        "base_interval_steps": 4,
+        "effective_interval_steps": 16,
+        "last_control_step": 88,
+        "calm_control_windows": 7,
+        "force_active_until_step": 0,
+        "control_windows_total": 7,
+        "control_skipped_decode_steps_total": 88,
+        "usage_sample_steps_total": 7,
+        "mutations_in_current_control_window": 0,
+        "restore_transitions_in_current_control_window": 0,
+        "degrade_transitions_in_current_control_window": 0,
+        "evictions_in_current_control_window": 0,
+        "recoveries_in_current_control_window": 0,
+        "transition_counts_total": {
+          "restore": 0,
+          "degrade": 137,
+          "evict": 0,
+          "recover": 0
+        },
+        "wake_reason_counts_total": {}
+      },
+      "attention_path": {
+        "n_execution_slabs": 0,
+        "n_execution_packs": 3,
+        "pack_token_counts": [
+          512,
+          512,
+          95
+        ],
+        "n_visible_slices": 3,
+        "slab_token_counts": [],
+        "visible_spans": [
+          [
+            0,
+            512
+          ],
+          [
+            512,
+            1024
+          ],
+          [
+            1024,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 0,
+        "observer_flushes_total": 7
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 1658869023,
+        "traced_total_ms": 1658.869,
+        "stats": {
+          "attention.concat_packs_ns": {
+            "total_ns": 151578,
+            "total_ms": 0.1516,
+            "calls": 92,
+            "avg_ns": 1647.5869565217392,
+            "avg_ms": 0.001648,
+            "share_of_traced_ns": 9.13743025509495e-05
+          },
+          "attention.concat_usage_path_ns": {
+            "total_ns": 12848583,
+            "total_ms": 12.8486,
+            "calls": 14,
+            "avg_ns": 917755.9285714285,
+            "avg_ms": 0.917756,
+            "share_of_traced_ns": 0.00774538726195745
+          },
+          "attention.dormant_segmented_fast_path_ns": {
+            "total_ns": 215532377,
+            "total_ms": 215.5324,
+            "calls": 164,
+            "avg_ns": 1314221.8109756098,
+            "avg_ms": 1.314222,
+            "share_of_traced_ns": 0.12992730228346666
+          },
+          "attention.dormant_segmented_output_pass_ns": {
+            "total_ns": 74275958,
+            "total_ms": 74.276,
+            "calls": 164,
+            "avg_ns": 452902.18292682926,
+            "avg_ms": 0.452902,
+            "share_of_traced_ns": 0.04477505877207522
+          },
+          "attention.dormant_segmented_score_pass_ns": {
+            "total_ns": 140263587,
+            "total_ms": 140.2636,
+            "calls": 164,
+            "avg_ns": 855265.7743902439,
+            "avg_ms": 0.855266,
+            "share_of_traced_ns": 0.08455374418068207
+          },
+          "attention.fast_path_ns": {
+            "total_ns": 559951284,
+            "total_ms": 559.9513,
+            "calls": 306,
+            "avg_ns": 1829906.156862745,
+            "avg_ms": 1.829906,
+            "share_of_traced_ns": 0.3375500272995332
+          },
+          "attention.total_ns": {
+            "total_ns": 572799867,
+            "total_ms": 572.7999,
+            "calls": 320,
+            "avg_ns": 1789999.584375,
+            "avg_ms": 1.79,
+            "share_of_traced_ns": 0.34529541456149065
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 12713635,
+            "total_ms": 12.7136,
+            "calls": 320,
+            "avg_ns": 39730.109375,
+            "avg_ms": 0.03973,
+            "share_of_traced_ns": 0.007664037861776385
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 20255205,
+            "total_ms": 20.2552,
+            "calls": 320,
+            "avg_ns": 63297.515625,
+            "avg_ms": 0.063298,
+            "share_of_traced_ns": 0.012210249705771978
+          },
+          "family.hybrid_delegate_resolve_ns": {
+            "total_ns": 803036,
+            "total_ms": 0.803,
+            "calls": 7446,
+            "avg_ns": 107.84797206553854,
+            "avg_ms": 0.000108,
+            "share_of_traced_ns": 0.0004840864401384388
+          },
+          "manager.control_skipped_decode_steps_total": {
+            "count": 88
+          },
+          "manager.control_windows_total": {
+            "count": 7
+          },
+          "manager.usage_sample_steps_total": {
+            "count": 7
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 17042584,
+            "total_ms": 17.0426,
+            "calls": 7,
+            "avg_ns": 2434654.8571428573,
+            "avg_ms": 2.434655,
+            "share_of_traced_ns": 0.010273616399912726
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 68083,
+            "total_ms": 0.0681,
+            "calls": 7,
+            "avg_ns": 9726.142857142857,
+            "avg_ms": 0.009726,
+            "share_of_traced_ns": 4.104181768182912e-05
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 17405543,
+            "total_ms": 17.4055,
+            "calls": 7,
+            "avg_ns": 2486506.1428571427,
+            "avg_ms": 2.486506,
+            "share_of_traced_ns": 0.010492415470223655
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 3848831,
+            "total_ms": 3.8488,
+            "calls": 14,
+            "avg_ns": 274916.5,
+            "avg_ms": 0.274917,
+            "share_of_traced_ns": 0.0023201536387963523
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 320
+          },
+          "view.compose_state_ns": {
+            "total_ns": 4610664,
+            "total_ms": 4.6107,
+            "calls": 320,
+            "avg_ns": 14408.325,
+            "avg_ms": 0.014408,
+            "share_of_traced_ns": 0.0027794020721791488
+          },
+          "view.ensure_execution_packs_ns": {
+            "total_ns": 84041,
+            "total_ms": 0.084,
+            "calls": 321,
+            "avg_ns": 261.809968847352,
+            "avg_ms": 0.000262,
+            "share_of_traced_ns": 5.066162477855854e-05
+          },
+          "view.query_key_ns": {
+            "total_ns": 87792,
+            "total_ms": 0.0878,
+            "calls": 321,
+            "avg_ns": 273.49532710280374,
+            "avg_ms": 0.000273,
+            "share_of_traced_ns": 5.292280389999181e-05
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 5999652,
+            "total_ms": 5.9997,
+            "calls": 321,
+            "avg_ns": 18690.504672897197,
+            "avg_ms": 0.018691,
+            "share_of_traced_ns": 0.0036167123002573544
+          },
+          "view.visible_start_ns": {
+            "total_ns": 126723,
+            "total_ms": 0.1267,
+            "calls": 321,
+            "avg_ns": 394.77570093457945,
+            "avg_ms": 0.000395,
+            "share_of_traced_ns": 7.639120282734943e-05
+          }
+        }
+      }
+    },
+    {
+      "name": "llama_long_hard",
+      "tok_s": 59.431350327962505,
+      "elapsed_s": 1.6153090830048313,
+      "pressure_state": "hard",
+      "control_cadence": {
+        "mode": "stressed",
+        "mode_reason": "pressure_hard",
+        "base_interval_steps": 4,
+        "effective_interval_steps": 4,
+        "last_control_step": 92,
+        "calm_control_windows": 0,
+        "force_active_until_step": 103,
+        "control_windows_total": 23,
+        "control_skipped_decode_steps_total": 72,
+        "usage_sample_steps_total": 95,
+        "mutations_in_current_control_window": 0,
+        "restore_transitions_in_current_control_window": 0,
+        "degrade_transitions_in_current_control_window": 0,
+        "evictions_in_current_control_window": 0,
+        "recoveries_in_current_control_window": 0,
+        "transition_counts_total": {
+          "restore": 0,
+          "degrade": 138,
+          "evict": 127,
+          "recover": 1
+        },
+        "wake_reason_counts_total": {
+          "pressure": 95,
+          "post_window_pressure": 23,
+          "post_window_eviction": 1,
+          "post_window_profile_transition": 12,
+          "recompute": 5,
+          "recovery": 5,
+          "post_window_recovery": 1,
+          "post_window_recompute": 1
+        }
+      },
+      "attention_path": {
+        "n_execution_slabs": 10,
+        "n_execution_packs": 3,
+        "pack_token_counts": [
+          392,
+          512,
+          215
+        ],
+        "n_visible_slices": 3,
+        "slab_token_counts": [
+          8,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          120,
+          5
+        ],
+        "visible_spans": [
+          [
+            0,
+            392
+          ],
+          [
+            392,
+            904
+          ],
+          [
+            904,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 1,
+        "observer_flushes_total": 23
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 2307101133,
+        "traced_total_ms": 2307.1011,
+        "stats": {
+          "attention.concat_packs_ns": {
+            "total_ns": 811913,
+            "total_ms": 0.8119,
+            "calls": 512,
+            "avg_ns": 1585.767578125,
+            "avg_ms": 0.001586,
+            "share_of_traced_ns": 0.00035191911979352315
+          },
+          "attention.concat_usage_path_ns": {
+            "total_ns": 257864084,
+            "total_ms": 257.8641,
+            "calls": 380,
+            "avg_ns": 678589.6947368421,
+            "avg_ms": 0.67859,
+            "share_of_traced_ns": 0.11176973575696302
+          },
+          "attention.fast_path_ns": {
+            "total_ns": 187461919,
+            "total_ms": 187.4619,
+            "calls": 260,
+            "avg_ns": 721007.3807692308,
+            "avg_ms": 0.721007,
+            "share_of_traced_ns": 0.08125431361400141
+          },
+          "attention.total_ns": {
+            "total_ns": 445326003,
+            "total_ms": 445.326,
+            "calls": 640,
+            "avg_ns": 695821.8796875,
+            "avg_ms": 0.695822,
+            "share_of_traced_ns": 0.19302404937096443
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 23304393,
+            "total_ms": 23.3044,
+            "calls": 640,
+            "avg_ns": 36413.1140625,
+            "avg_ms": 0.036413,
+            "share_of_traced_ns": 0.010101157971214086
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 51506948,
+            "total_ms": 51.5069,
+            "calls": 640,
+            "avg_ns": 80479.60625,
+            "avg_ms": 0.08048,
+            "share_of_traced_ns": 0.02232539669079171
+          },
+          "fabric.block_slice_mapping_ns": {
+            "total_ns": 49666,
+            "total_ms": 0.0497,
+            "calls": 40,
+            "avg_ns": 1241.65,
+            "avg_ms": 0.001242,
+            "share_of_traced_ns": 2.1527448142430434e-05
+          },
+          "fabric.query_total_ns": {
+            "total_ns": 1071042,
+            "total_ms": 1.071,
+            "calls": 4,
+            "avg_ns": 267760.5,
+            "avg_ms": 0.267761,
+            "share_of_traced_ns": 0.0004642371262707884
+          },
+          "fabric.slice_ref_count": {
+            "count": 40
+          },
+          "fabric.tensor_view_setup_ns": {
+            "total_ns": 413457,
+            "total_ms": 0.4135,
+            "calls": 40,
+            "avg_ns": 10336.425,
+            "avg_ms": 0.010336,
+            "share_of_traced_ns": 0.00017921060940331133
+          },
+          "fabric.visible_piece_count": {
+            "count": 516
+          },
+          "fabric.visible_slice_derivation_ns": {
+            "total_ns": 460042,
+            "total_ms": 0.46,
+            "calls": 4,
+            "avg_ns": 115010.5,
+            "avg_ms": 0.115011,
+            "share_of_traced_ns": 0.000199402615437925
+          },
+          "manager.control_skipped_decode_steps_total": {
+            "count": 72
+          },
+          "manager.control_windows_total": {
+            "count": 23
+          },
+          "manager.usage_sample_steps_total": {
+            "count": 95
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 577959293,
+            "total_ms": 577.9593,
+            "calls": 23,
+            "avg_ns": 25128664.913043477,
+            "avg_ms": 25.128665,
+            "share_of_traced_ns": 0.2505132023616409
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 561458,
+            "total_ms": 0.5615,
+            "calls": 23,
+            "avg_ns": 24411.217391304348,
+            "avg_ms": 0.024411,
+            "share_of_traced_ns": 0.0002433608097924678
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 580114042,
+            "total_ms": 580.114,
+            "calls": 23,
+            "avg_ns": 25222349.652173914,
+            "avg_ms": 25.22235,
+            "share_of_traced_ns": 0.25144716618714436
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 128755377,
+            "total_ms": 128.7554,
+            "calls": 380,
+            "avg_ns": 338829.93947368424,
+            "avg_ms": 0.33883,
+            "share_of_traced_ns": 0.055808293428634886
+          },
+          "view.backend_query_ns": {
+            "total_ns": 1120457,
+            "total_ms": 1.1205,
+            "calls": 4,
+            "avg_ns": 280114.25,
+            "avg_ms": 0.280114,
+            "share_of_traced_ns": 0.0004856557798760355
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 640
+          },
+          "view.compose_state_ns": {
+            "total_ns": 22625967,
+            "total_ms": 22.626,
+            "calls": 640,
+            "avg_ns": 35353.0734375,
+            "avg_ms": 0.035353,
+            "share_of_traced_ns": 0.009807098040205419
+          },
+          "view.ensure_execution_packs_ns": {
+            "total_ns": 1474904,
+            "total_ms": 1.4749,
+            "calls": 641,
+            "avg_ns": 2300.942277691108,
+            "avg_ms": 0.002301,
+            "share_of_traced_ns": 0.0006392888369319699
+          },
+          "view.ordered_handles_ns": {
+            "total_ns": 57166,
+            "total_ms": 0.0572,
+            "calls": 4,
+            "avg_ns": 14291.5,
+            "avg_ms": 0.014292,
+            "share_of_traced_ns": 2.477828092679455e-05
+          },
+          "view.query_key_ns": {
+            "total_ns": 127904,
+            "total_ms": 0.1279,
+            "calls": 641,
+            "avg_ns": 199.53822152886116,
+            "avg_ms": 0.0002,
+            "share_of_traced_ns": 5.543926886017441e-05
+          },
+          "view.rebuild_execution_packs_ns": {
+            "total_ns": 133209,
+            "total_ms": 0.1332,
+            "calls": 4,
+            "avg_ns": 33302.25,
+            "avg_ms": 0.033302,
+            "share_of_traced_ns": 5.7738691249647964e-05
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 25787618,
+            "total_ms": 25.7876,
+            "calls": 641,
+            "avg_ns": 40230.29329173167,
+            "avg_ms": 0.04023,
+            "share_of_traced_ns": 0.011177497870007765
+          },
+          "view.visible_start_ns": {
+            "total_ns": 114271,
+            "total_ms": 0.1143,
+            "calls": 641,
+            "avg_ns": 178.26989079563182,
+            "avg_ms": 0.000178,
+            "share_of_traced_ns": 4.953012174694294e-05
+          }
+        }
+      }
+    },
+    {
+      "name": "ministral3_long_soft_96",
+      "tok_s": 89.80338326501064,
+      "elapsed_s": 1.0690020410111174,
+      "pressure_state": "soft",
+      "control_cadence": {
+        "mode": "active",
+        "mode_reason": "pressure_soft",
+        "base_interval_steps": 4,
+        "effective_interval_steps": 4,
+        "last_control_step": 92,
+        "calm_control_windows": 0,
+        "force_active_until_step": 103,
+        "control_windows_total": 23,
+        "control_skipped_decode_steps_total": 72,
+        "usage_sample_steps_total": 95,
+        "mutations_in_current_control_window": 0,
+        "restore_transitions_in_current_control_window": 0,
+        "degrade_transitions_in_current_control_window": 0,
+        "evictions_in_current_control_window": 0,
+        "recoveries_in_current_control_window": 0,
+        "transition_counts_total": {
+          "restore": 0,
+          "degrade": 129,
+          "evict": 0,
+          "recover": 0
+        },
+        "wake_reason_counts_total": {
+          "pressure": 95,
+          "post_window_pressure": 23,
+          "post_window_profile_transition": 3
+        }
+      },
+      "attention_path": {
+        "n_execution_slabs": 0,
+        "n_execution_packs": 3,
+        "pack_token_counts": [
+          512,
+          512,
+          95
+        ],
+        "n_visible_slices": 3,
+        "slab_token_counts": [],
+        "visible_spans": [
+          [
+            0,
+            512
+          ],
+          [
+            512,
+            1024
+          ],
+          [
+            1024,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 1,
+        "execution_view_topology_rebuilds_total": 0,
+        "observer_flushes_total": 23
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 1666513573,
+        "traced_total_ms": 1666.5136,
+        "stats": {
+          "attention.concat_packs_ns": {
+            "total_ns": 685253,
+            "total_ms": 0.6853,
+            "calls": 390,
+            "avg_ns": 1757.0589743589744,
+            "avg_ms": 0.001757,
+            "share_of_traced_ns": 0.00041118957031140846
+          },
+          "attention.concat_usage_path_ns": {
+            "total_ns": 224443341,
+            "total_ms": 224.4433,
+            "calls": 380,
+            "avg_ns": 590640.3710526315,
+            "avg_ms": 0.59064,
+            "share_of_traced_ns": 0.1346783756438088
+          },
+          "attention.fast_path_ns": {
+            "total_ns": 189682988,
+            "total_ms": 189.683,
+            "calls": 260,
+            "avg_ns": 729549.9538461538,
+            "avg_ms": 0.72955,
+            "share_of_traced_ns": 0.11382024789545474
+          },
+          "attention.total_ns": {
+            "total_ns": 414126329,
+            "total_ms": 414.1263,
+            "calls": 640,
+            "avg_ns": 647072.3890625,
+            "avg_ms": 0.647072,
+            "share_of_traced_ns": 0.24849862353926355
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 23587493,
+            "total_ms": 23.5875,
+            "calls": 640,
+            "avg_ns": 36855.4578125,
+            "avg_ms": 0.036855,
+            "share_of_traced_ns": 0.014153795913908227
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 40497618,
+            "total_ms": 40.4976,
+            "calls": 640,
+            "avg_ns": 63277.528125,
+            "avg_ms": 0.063278,
+            "share_of_traced_ns": 0.02430080297941864
+          },
+          "family.window_query_key_ns": {
+            "total_ns": 729755,
+            "total_ms": 0.7298,
+            "calls": 641,
+            "avg_ns": 1138.4633385335414,
+            "avg_ms": 0.001138,
+            "share_of_traced_ns": 0.0004378932232074896
+          },
+          "family.window_visible_start_ns": {
+            "total_ns": 374166,
+            "total_ms": 0.3742,
+            "calls": 641,
+            "avg_ns": 583.7223088923557,
+            "avg_ms": 0.000584,
+            "share_of_traced_ns": 0.00022452022357456072
+          },
+          "manager.control_skipped_decode_steps_total": {
+            "count": 72
+          },
+          "manager.control_windows_total": {
+            "count": 23
+          },
+          "manager.usage_sample_steps_total": {
+            "count": 95
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 329879458,
+            "total_ms": 329.8795,
+            "calls": 23,
+            "avg_ns": 14342585.130434783,
+            "avg_ms": 14.342585,
+            "share_of_traced_ns": 0.19794585735426232
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 331918,
+            "total_ms": 0.3319,
+            "calls": 23,
+            "avg_ns": 14431.217391304348,
+            "avg_ms": 0.014431,
+            "share_of_traced_ns": 0.00019916909491621645
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 331426875,
+            "total_ms": 331.4269,
+            "calls": 23,
+            "avg_ns": 14409864.130434783,
+            "avg_ms": 14.409864,
+            "share_of_traced_ns": 0.19887439284600414
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 83245873,
+            "total_ms": 83.2459,
+            "calls": 380,
+            "avg_ns": 219068.08684210526,
+            "avg_ms": 0.219068,
+            "share_of_traced_ns": 0.049952112211209695
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 640
+          },
+          "view.compose_state_ns": {
+            "total_ns": 11050677,
+            "total_ms": 11.0507,
+            "calls": 640,
+            "avg_ns": 17266.6828125,
+            "avg_ms": 0.017267,
+            "share_of_traced_ns": 0.006631015299867588
+          },
+          "view.ensure_execution_packs_ns": {
+            "total_ns": 130126,
+            "total_ms": 0.1301,
+            "calls": 641,
+            "avg_ns": 203.0046801872075,
+            "avg_ms": 0.000203,
+            "share_of_traced_ns": 7.808277238675692e-05
+          },
+          "view.query_key_ns": {
+            "total_ns": 1184229,
+            "total_ms": 1.1842,
+            "calls": 641,
+            "avg_ns": 1847.471138845554,
+            "avg_ms": 0.001847,
+            "share_of_traced_ns": 0.0007106026732612756
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 14447983,
+            "total_ms": 14.448,
+            "calls": 641,
+            "avg_ns": 22539.75507020281,
+            "avg_ms": 0.02254,
+            "share_of_traced_ns": 0.008669586155239793
+          },
+          "view.visible_start_ns": {
+            "total_ns": 689491,
+            "total_ms": 0.6895,
+            "calls": 641,
+            "avg_ns": 1075.6489859594383,
+            "avg_ms": 0.001076,
+            "share_of_traced_ns": 0.0004137326039048108
+          }
+        }
+      }
+    },
+    {
+      "name": "qwen35_long_soft_96",
+      "tok_s": 94.69948795349983,
+      "elapsed_s": 1.0137330420111539,
+      "pressure_state": "soft",
+      "control_cadence": {
+        "mode": "active",
+        "mode_reason": "pressure_soft",
+        "base_interval_steps": 4,
+        "effective_interval_steps": 4,
+        "last_control_step": 92,
+        "calm_control_windows": 0,
+        "force_active_until_step": 103,
+        "control_windows_total": 23,
+        "control_skipped_decode_steps_total": 72,
+        "usage_sample_steps_total": 95,
+        "mutations_in_current_control_window": 0,
+        "restore_transitions_in_current_control_window": 0,
+        "degrade_transitions_in_current_control_window": 0,
+        "evictions_in_current_control_window": 0,
+        "recoveries_in_current_control_window": 0,
+        "transition_counts_total": {
+          "restore": 0,
+          "degrade": 136,
+          "evict": 0,
+          "recover": 0
+        },
+        "wake_reason_counts_total": {
+          "pressure": 95,
+          "post_window_pressure": 23,
+          "post_window_profile_transition": 10
+        }
+      },
+      "attention_path": {
+        "n_execution_slabs": 0,
+        "n_execution_packs": 3,
+        "pack_token_counts": [
+          512,
+          512,
+          95
+        ],
+        "n_visible_slices": 3,
+        "slab_token_counts": [],
+        "visible_spans": [
+          [
+            0,
+            512
+          ],
+          [
+            512,
+            1024
+          ],
+          [
+            1024,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 0,
+        "observer_flushes_total": 23
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 1505296492,
+        "traced_total_ms": 1505.2965,
+        "stats": {
+          "attention.concat_packs_ns": {
+            "total_ns": 427327,
+            "total_ms": 0.4273,
+            "calls": 256,
+            "avg_ns": 1669.24609375,
+            "avg_ms": 0.001669,
+            "share_of_traced_ns": 0.00028388227985055316
+          },
+          "attention.concat_usage_path_ns": {
+            "total_ns": 152866537,
+            "total_ms": 152.8665,
+            "calls": 190,
+            "avg_ns": 804560.7210526316,
+            "avg_ms": 0.804561,
+            "share_of_traced_ns": 0.10155244353017465
+          },
+          "attention.fast_path_ns": {
+            "total_ns": 253909702,
+            "total_ms": 253.9097,
+            "calls": 130,
+            "avg_ns": 1953151.553846154,
+            "avg_ms": 1.953152,
+            "share_of_traced_ns": 0.16867753518952597
+          },
+          "attention.total_ns": {
+            "total_ns": 406776239,
+            "total_ms": 406.7762,
+            "calls": 320,
+            "avg_ns": 1271175.746875,
+            "avg_ms": 1.271176,
+            "share_of_traced_ns": 0.2702299787197006
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 11682749,
+            "total_ms": 11.6827,
+            "calls": 320,
+            "avg_ns": 36508.590625,
+            "avg_ms": 0.036509,
+            "share_of_traced_ns": 0.0077610949484628175
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 19214088,
+            "total_ms": 19.2141,
+            "calls": 320,
+            "avg_ns": 60044.025,
+            "avg_ms": 0.060044,
+            "share_of_traced_ns": 0.012764321249743535
+          },
+          "family.hybrid_delegate_resolve_ns": {
+            "total_ns": 671174,
+            "total_ms": 0.6712,
+            "calls": 7450,
+            "avg_ns": 90.09046979865772,
+            "avg_ms": 9e-05,
+            "share_of_traced_ns": 0.0004458749512584395
+          },
+          "manager.control_skipped_decode_steps_total": {
+            "count": 72
+          },
+          "manager.control_windows_total": {
+            "count": 23
+          },
+          "manager.usage_sample_steps_total": {
+            "count": 95
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 291905167,
+            "total_ms": 291.9052,
+            "calls": 23,
+            "avg_ns": 12691529.0,
+            "avg_ms": 12.691529,
+            "share_of_traced_ns": 0.19391871870515195
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 355126,
+            "total_ms": 0.3551,
+            "calls": 23,
+            "avg_ns": 15440.260869565218,
+            "avg_ms": 0.01544,
+            "share_of_traced_ns": 0.00023591764272842003
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 293534172,
+            "total_ms": 293.5342,
+            "calls": 23,
+            "avg_ns": 12762355.304347826,
+            "avg_ms": 12.762355,
+            "share_of_traced_ns": 0.19500090085907143
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 62778542,
+            "total_ms": 62.7785,
+            "calls": 190,
+            "avg_ns": 330413.3789473684,
+            "avg_ms": 0.330413,
+            "share_of_traced_ns": 0.04170510084467798
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 320
+          },
+          "view.compose_state_ns": {
+            "total_ns": 4935379,
+            "total_ms": 4.9354,
+            "calls": 320,
+            "avg_ns": 15423.059375,
+            "avg_ms": 0.015423,
+            "share_of_traced_ns": 0.003278675680325707
+          },
+          "view.ensure_execution_packs_ns": {
+            "total_ns": 81455,
+            "total_ms": 0.0815,
+            "calls": 321,
+            "avg_ns": 253.75389408099687,
+            "avg_ms": 0.000254,
+            "share_of_traced_ns": 5.411226322050048e-05
+          },
+          "view.query_key_ns": {
+            "total_ns": 80623,
+            "total_ms": 0.0806,
+            "calls": 321,
+            "avg_ns": 251.1619937694704,
+            "avg_ms": 0.000251,
+            "share_of_traced_ns": 5.355954818766694e-05
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 6039582,
+            "total_ms": 6.0396,
+            "calls": 321,
+            "avg_ns": 18814.89719626168,
+            "avg_ms": 0.018815,
+            "share_of_traced_ns": 0.004012220869508277
+          },
+          "view.visible_start_ns": {
+            "total_ns": 38630,
+            "total_ms": 0.0386,
+            "calls": 321,
+            "avg_ns": 120.34267912772586,
+            "avg_ms": 0.00012,
+            "share_of_traced_ns": 2.566271841149019e-05
+          }
+        }
+      }
+    }
+  ]
+}
