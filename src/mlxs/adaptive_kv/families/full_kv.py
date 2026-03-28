@@ -170,13 +170,9 @@ class FullAttentionKVAdaptiveLayerCache:
         self._resident_view_query_key: Any = None
         self._resident_view_visible_start = 0
         self._execution_view_topology_rebuilds_total = 0
-        self._execution_view_local_repairs_total = 0
-        self._execution_view_repaired_suffix_tokens_total = 0
         self._dtype: Any = None
         self._cold_batch_depth = 0
         self._cold_topology_dirty = False
-        self._append_only_topology_pending = False
-        self._append_only_repair_logical_start: int | None = None
 
     @property
     def offset(self) -> int:
@@ -220,7 +216,6 @@ class FullAttentionKVAdaptiveLayerCache:
         append_started_ns = time.perf_counter_ns()
         tail_epoch_changed = False
         append_only_topology_changed = False
-        repair_logical_start: int | None = None
         for block_id, local_start, local_end in self._manager.registry.token_slices(start, end):
             block = self._manager.registry.get(block_id)
             if block.profile is ResidentProfile.EVICTED:
@@ -236,19 +231,12 @@ class FullAttentionKVAdaptiveLayerCache:
                 tail_epoch_changed = True
             else:
                 append_only_topology_changed = True
-                repair_logical_start = (
-                    block.start_token
-                    if repair_logical_start is None
-                    else min(repair_logical_start, block.start_token)
-                )
         self.record_perf_ns(
             "cache.update_and_fetch_append_ns",
             time.perf_counter_ns() - append_started_ns,
         )
         if append_only_topology_changed:
             self._topology_epoch += 1
-            self._append_only_topology_pending = True
-            self._append_only_repair_logical_start = repair_logical_start
         if tail_epoch_changed:
             self._tail_epoch += 1
         self._logical_offset = end
@@ -396,8 +384,6 @@ class FullAttentionKVAdaptiveLayerCache:
         self._resident_view_tail_epoch = self._tail_epoch
         self._resident_view_query_key = query_key
         self._resident_view_visible_start = visible_start
-        self._append_only_topology_pending = False
-        self._append_only_repair_logical_start = None
         self.record_perf_ns(
             "view.resident_state_total_ns",
             time.perf_counter_ns() - total_started_ns,
@@ -446,10 +432,6 @@ class FullAttentionKVAdaptiveLayerCache:
             slab_token_counts=tuple(slab_token_counts.values()),
             fabric_compactions_total=self._backend.compactions_total,
             execution_view_topology_rebuilds_total=self._execution_view_topology_rebuilds_total,
-            execution_view_local_repairs_total=self._execution_view_local_repairs_total,
-            execution_view_repaired_suffix_tokens_total=(
-                self._execution_view_repaired_suffix_tokens_total
-            ),
         )
 
     def make_mask(
@@ -474,12 +456,8 @@ class FullAttentionKVAdaptiveLayerCache:
         self._resident_view_query_key = None
         self._resident_view_visible_start = 0
         self._execution_view_topology_rebuilds_total = 0
-        self._execution_view_local_repairs_total = 0
-        self._execution_view_repaired_suffix_tokens_total = 0
         self._cold_batch_depth = 0
         self._cold_topology_dirty = False
-        self._append_only_topology_pending = False
-        self._append_only_repair_logical_start = None
 
     def trim(self, n: int) -> int:
         if n <= 0:
@@ -514,8 +492,6 @@ class FullAttentionKVAdaptiveLayerCache:
         if self._cold_batch_depth == 0 and self._cold_topology_dirty:
             self._topology_epoch += 1
             self._cold_topology_dirty = False
-            self._append_only_topology_pending = False
-            self._append_only_repair_logical_start = None
 
     def should_sample_usage(self) -> bool:
         return True
@@ -628,12 +604,8 @@ class FullAttentionKVAdaptiveLayerCache:
     def _mark_topology_change(self) -> None:
         if self._cold_batch_depth > 0:
             self._cold_topology_dirty = True
-            self._append_only_topology_pending = False
-            self._append_only_repair_logical_start = None
             return
         self._topology_epoch += 1
-        self._append_only_topology_pending = False
-        self._append_only_repair_logical_start = None
 
     def record_perf_ns(self, name: str, elapsed_ns: int) -> None:
         self._manager.record_perf_ns(name, elapsed_ns)
