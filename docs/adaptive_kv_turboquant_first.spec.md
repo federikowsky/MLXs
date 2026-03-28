@@ -44,11 +44,12 @@ The redesign intentionally changes the following:
 
 The final retained implementation adds:
 
-- persistent exact execution slabs as the resident execution substrate,
-- slice-based resident execution views over those slabs,
-- exact slab-native streaming attention,
+- persistent exact execution slabs as the resident memory substrate,
+- persistent execution packs and execution-pack views as the retained serving substrate above those slabs,
+- exact pack-native streaming attention,
 - cold-batch / deferred-compaction mutation handling,
-- executor and usage-sync improvements that closed the remaining representative short/long gaps.
+- delayed observer flushes at policy boundaries,
+- executor and usage-sync improvements that materially strengthened the serving path while preserving exactness.
 
 
 ## 2. Design Goals
@@ -155,7 +156,7 @@ This separation is mandatory:
 
 Resident profile does not imply one fixed attention path. Execution correctness is defined relative to the appropriate family baseline, not relative to a backend-native shortcut.
 
-In the retained implementation, both resident profiles are execution-ready through persistent exact slabs and slice-based resident views. The execution-mode contract remains at the runtime boundary, but the hot resident path is not a lossy quantize/dequantize loop.
+In the retained implementation, both resident profiles are execution-ready through persistent execution packs built over the exact slab substrate. The execution-mode contract remains at the runtime boundary, but the retained hot resident path is not a lossy quantize/dequantize loop.
 
 
 ## 5. Core Architecture
@@ -253,9 +254,9 @@ Storage representation and execution mode are separate decisions at the contract
 The retained implementation realizes that separation through:
 
 - exact resident storage in persistent execution slabs,
-- ordered execution-visible slice references,
-- one-slice exact fast paths where available,
-- exact slab-native streaming attention for multi-slice resident views.
+- persistent execution packs and ordered execution-pack views above those slabs,
+- one-pack exact fast paths where available,
+- exact pack-native streaming attention for multi-pack resident views.
 
 The backend therefore exposes execution views separately from logical block ownership and replay provenance, even though the retained hot path is exact and execution-native.
 
@@ -277,13 +278,13 @@ The retained backend keeps the resident-profile architecture and backend-owned c
 The final retained backend consists of:
 
 - `ResidentBlockHandle` objects that carry block metadata plus slab fragments,
-- persistent exact execution slabs with profile-specific slab policy,
-- slice-based resident execution views over those slabs,
-- Family B window-visible slice queries,
+- persistent exact execution slabs with profile-specific slab policy as the memory substrate,
+- persistent execution packs and execution-pack views as the retained serving substrate above those slabs,
+- Family B window-visible execution-pack clipping over the retained resident logical span,
 - Family C strict KV-versus-recurrent separation,
-- exact slab-native streaming attention,
+- exact pack-native streaming attention,
 - cold-batch / deferred-compaction mutation handling,
-- executor and usage-sync improvements retained on top of the slab/slice substrate.
+- executor and usage-sync improvements retained on top of the slab/execution-pack substrate.
 
 
 ## 7. Execution Semantics
@@ -694,12 +695,12 @@ The completed branch retains the following implementation position.
 
 - Tier-oriented runtime vocabulary was replaced with resident-profile vocabulary.
 - `ResidentBackend`, `ResidentProfileDescriptor`, and `ResidentBlockHandle` are the resident-backend boundary.
-- Resident execution is backed by persistent exact execution slabs and slice-based resident views.
-- Family A uses the full resident visible history through the slab/slice substrate.
-- Family B uses explicit resident logical span, effective visible span, and window-visible slice queries.
+- Resident execution is backed by persistent exact execution slabs plus persistent execution packs and execution-pack views above them.
+- Family A uses the full resident visible history through the execution-pack serving substrate.
+- Family B uses explicit resident logical span, effective visible span, and window-visible execution-pack clipping.
 - Family C keeps KV-bearing layers inside resident-profile planning and recurrent/state-array layers outside it.
 - Replay and recovery remain explicit and exact.
-- Metrics and diagnostics are resident-profile-aware and expose slab/slice execution-path state.
+- Metrics and diagnostics are resident-profile-aware and expose both memory-substrate and execution-pack serving-path state.
 - No operational `FULL` resident tier or hidden dense runtime fallback remains.
 
 ### 14.1 Frozen baseline invariants
@@ -714,15 +715,15 @@ Control-plane invariants:
 
 Data-plane invariants:
 
-- resident hot-path storage is the persistent exact slab/slice execution substrate,
-- resident execution views are ordered slice-based views over those slabs,
+- slabs remain the memory truth for residency, replay provenance, and cold mutation bookkeeping,
+- execution packs remain the retained serving truth above the slab substrate,
 - transient grouped-segment assembly is not the retained hot path,
 - no retained lossy resident compression path is allowed to claim support without renewed oracle closure.
 
 Hot-path invariants:
 
-- one-slice exact fast paths are allowed where validated,
-- multi-slice resident execution remains exact relative to the family baseline,
+- one-pack exact fast paths are allowed where validated,
+- multi-pack resident execution remains exact relative to the family baseline,
 - no hidden dense fallback may silently replace the retained resident execution path.
 
 Cold-path invariants:
@@ -768,8 +769,9 @@ The branch is complete and retained because all of the following are now true.
 - Replay and recovery remain explicit and exact.
 - Fidelity is closed.
 - The long path improved materially over earlier retained baselines.
-- The remaining short Family C gap was closed on warm representative sweeps.
-- The branch now clears the intended “excellent” bar and is considered archivable.
+- The execution-pack serving path above the slab memory substrate is the current retained serving baseline.
+- Product-level evaluation supports Adaptive KV primarily as an operational serving architecture rather than a guaranteed conversational-quality improver.
+- A narrow Family C short-hard hybrid sampled-serving caveat remains.
 
 ### 15.1 Support and capability freeze
 
@@ -802,6 +804,37 @@ Explicitly unsupported surfaces remain:
 - missing or malformed `model.make_cache()`
 - unregistered adapters or families
 - batch/speculative surfaces and complex cache-family compositions outside the registered support envelope
+
+### 15.2 Product-level E2E position
+
+The longer-form product-grade E2E revalidation for the current retained execution-pack baseline used the strongest realistic chat-capable checkpoint that was practically available in the environment:
+
+- `unsloth/Llama-3.2-1B-Instruct` on Family A.
+
+Family C was omitted from the main product-grade matrix because the supported `qwen3_5` checkpoints available in the environment did not behave like credible product-chat baselines. Family B was omitted because no practical chat-capable Ministral-family checkpoint was staged locally for a serious long-form product comparison.
+
+The long-form E2E regimes were meaningfully separated by projected baseline full-KV footprint relative to the configured Adaptive hard budget:
+
+- comfortable mean ratio: `0.58x`
+- borderline mean ratio: `1.94x`
+- stressed mean ratio: `4.71x`
+
+Observed product-level conclusion:
+
+- Adaptive KV remained slower than normal baseline inference in all three regimes,
+- no clear user-visible conversational quality win was established on the evaluated checkpoint,
+- the primary retained value remained operational: explicit pressure management, evictions, recomputes, replay-backed continuation, and bounded serving behavior under tighter envelopes.
+
+Operationally, the long-form run recorded:
+
+- comfortable: `0` evictions / `0` recomputes,
+- borderline: `174` evictions / `21` recomputes,
+- stressed: `580` evictions / `24` recomputes.
+
+Operational caveats retained:
+
+- end-of-turn `resident_bytes` can overshoot the nominal hard budget in longer borderline and stressed runs, so the retained system should be described as pressure-managed rather than as a strict hard-cap proof from final snapshots,
+- the narrow Family C short-hard hybrid sampled-serving caveat remains part of the retained support and performance story.
 
 ## 16. Historical Risks and Rejected Paths
 
@@ -837,7 +870,7 @@ Historical risk:
 
 Final retained handling:
 - that fallback was benchmarked, rejected, and not retained.
-- the closure was confirmed on the retained baseline through warm representative sweeps.
+- the current retained execution-pack baseline keeps a narrow short-hard hybrid caveat rather than relying on that fallback.
 
 ### 16.5 Family B / Family C semantic boundaries
 
@@ -861,10 +894,10 @@ This document is the canonical source of truth for the completed TurboQuant-firs
 Future work, if any, should build from this retained baseline:
 
 - resident profiles `TQ_SAFE / TQ_AGGR / EVICTED`,
-- persistent exact execution slabs,
-- slice-based resident execution views,
-- exact slab-native streaming attention,
+- persistent exact execution slabs as the memory substrate,
+- persistent execution packs and execution-pack views as the retained serving substrate,
+- exact pack-native streaming attention,
 - explicit replay/recovery,
 - Family A / B / C runtime-family separation.
 
-Old `FULL / COMPRESSED / EVICTED` operational assumptions are superseded and should not be reopened.
+Old `FULL / COMPRESSED / EVICTED` operational assumptions are superseded and should not be reopened. Product-level claims for this retained baseline must stay honest: its strongest evidence is as an exact, pressure-managed serving architecture, not as a universal guarantee of visibly better conversational quality under stress.
