@@ -109,6 +109,38 @@ def test_backend_compaction_preserves_remaining_block_mappings() -> None:
     assert backend.compactions_total == 1
 
 
+def test_backend_defers_compaction_until_cold_batch_end() -> None:
+    backend = TurboQuantResidentBackend(
+        safe_bits=8,
+        aggr_bits=4,
+        safe_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+        aggr_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+    )
+    handles = []
+    offset = 0
+    for block_id in range(3):
+        keys, values = _state(80)
+        handle = backend.create_handle(
+            block_id=block_id,
+            profile=ResidentProfile.TQ_SAFE,
+            logical_span=(offset, offset + 80),
+            keys=keys,
+            values=values,
+        )
+        handles.append(handle)
+        offset += 80
+
+    backend.begin_cold_mutation_batch()
+    backend.evict_handle(handles[1])
+    assert backend.compactions_total == 0
+    assert handles[2].fragments[0].local_start == 160
+
+    backend.end_cold_mutation_batch()
+
+    assert backend.compactions_total == 1
+    assert handles[2].fragments[0].local_start == 80
+
+
 def test_backend_allocates_dedicated_oversize_slab_for_large_block() -> None:
     backend = TurboQuantResidentBackend(
         safe_bits=8,

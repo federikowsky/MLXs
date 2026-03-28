@@ -78,6 +78,16 @@ class WindowedKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
             return 0
         return max(0, history_tokens - max(0, window_size - 1))
 
+    def _resident_view_query_key_for(self, *, query_tokens: int) -> Any:
+        del query_tokens
+        return self._configured_window_size()
+
+    def _resident_visible_start_for_query(self, *, query_tokens: int) -> int:
+        window_size = self._configured_window_size()
+        if window_size is None:
+            return 0
+        return max(0, self._logical_offset - query_tokens - max(0, window_size - 1))
+
     def make_mask(
         self,
         n: int,
@@ -94,20 +104,16 @@ class WindowedKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
         visible_offset = min(self._logical_offset, max(0, effective_window - 1))
         return create_causal_mask(n, offset=visible_offset, window_size=effective_window)
 
-    def resident_state_for_execution(self, *, query_tokens: int = 1) -> ResidentStateView:
+    def _query_resident_state(
+        self,
+        ordered: tuple[Any, ...],
+        *,
+        query_tokens: int,
+    ) -> ResidentStateView:
         window_size = self._configured_window_size()
         if window_size is None:
-            return super().resident_state_for_execution(query_tokens=query_tokens)
-        if (
-            self._resident_state is not None
-            and self._resident_view_topology_epoch == self._topology_epoch
-            and self._resident_view_tail_epoch == self._tail_epoch
-        ):
-            return self._resident_state
-        ordered = tuple(self._ordered_handles(self._logical_offset))
-        if self._resident_view_topology_epoch != self._topology_epoch:
-            self._execution_view_topology_rebuilds_total += 1
-        self._resident_state = self._backend.query_window_view(
+            return super()._query_resident_state(ordered, query_tokens=query_tokens)
+        return self._backend.query_window_view(
             ordered,
             logical_offset=self._logical_offset,
             query_tokens=query_tokens,
@@ -116,9 +122,6 @@ class WindowedKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
             tail_epoch=self._tail_epoch,
             execution_view_topology_rebuilds_total=self._execution_view_topology_rebuilds_total,
         )
-        self._resident_view_topology_epoch = self._topology_epoch
-        self._resident_view_tail_epoch = self._tail_epoch
-        return self._resident_state
 
 
 class WindowedKVRuntimeSubstrate(FullAttentionKVRuntimeSubstrate):

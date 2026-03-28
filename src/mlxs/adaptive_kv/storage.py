@@ -39,8 +39,9 @@ class ResidentStateView:
     slab_token_counts: tuple[int, ...]
     fabric_compactions_total: int
     execution_view_topology_rebuilds_total: int
+    execution_view_local_repairs_total: int = 0
+    execution_view_repaired_suffix_tokens_total: int = 0
 
     @property
     def has_visible_slices(self) -> bool:
         return bool(self.slices)
-

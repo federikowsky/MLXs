@@ -139,6 +139,12 @@ class HybridStateArraysLayerCache:
         del block_id
         return 0
 
+    def begin_cold_mutation_batch(self) -> None:
+        return None
+
+    def end_cold_mutation_batch(self) -> None:
+        return None
+
     def prepare(self, lengths: list[int] | None = None, **kwargs: Any) -> None:
         self._cache.prepare(lengths=lengths, **kwargs)
 
@@ -289,6 +295,16 @@ class HybridStateAdaptiveLayerCache:
 
     def block_live_bytes(self, block_id: int) -> int:
         return self._resolve_delegate().block_live_bytes(block_id)
+
+    def begin_cold_mutation_batch(self) -> None:
+        begin = getattr(self._resolve_delegate(), "begin_cold_mutation_batch", None)
+        if begin is not None:
+            begin()
+
+    def end_cold_mutation_batch(self) -> None:
+        end = getattr(self._resolve_delegate(), "end_cold_mutation_batch", None)
+        if end is not None:
+            end()
 
     def prepare(self, lengths: list[int] | None = None, **kwargs: Any) -> None:
         delegate = self._resolve_delegate()

@@ -89,6 +89,21 @@ def _recover_block_in_hard_episode(manager: AdaptiveKVManager, block_id: int) ->
     manager.ensure_required_resident()
 
 
+def test_cold_mutation_batch_coalesces_topology_epoch_bumps() -> None:
+    manager = _make_manager(prompt_tokens=[1, 2, 3, 4, 5, 6])
+    cache = manager.caches()[0]
+    start_epoch = cache._topology_epoch
+
+    cache.begin_cold_mutation_batch()
+    try:
+        cache.degrade_block(0)
+        cache.degrade_block(1)
+    finally:
+        cache.end_cold_mutation_batch()
+
+    assert cache._topology_epoch == start_epoch + 1
+
+
 def test_replay_recovery_restores_evicted_block_as_tq_aggr() -> None:
     manager = _make_manager(prompt_tokens=[1, 2, 3, 4])
     block = manager.registry.get(1)

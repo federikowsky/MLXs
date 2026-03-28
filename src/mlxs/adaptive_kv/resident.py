@@ -176,6 +176,8 @@ class ResidentExecutionFabric:
         self._handles: dict[int, ResidentBlockHandle] = {}
         self._next_slab_id = 0
         self._compactions_total = 0
+        self._cold_batch_depth = 0
+        self._dirty_slab_ids: set[int] = set()
 
     @property
     def compactions_total(self) -> int:
@@ -192,6 +194,22 @@ class ResidentExecutionFabric:
         self._handles = {}
         self._next_slab_id = 0
         self._compactions_total = 0
+        self._cold_batch_depth = 0
+        self._dirty_slab_ids = set()
+
+    def begin_cold_mutation_batch(self) -> None:
+        self._cold_batch_depth += 1
+
+    def end_cold_mutation_batch(self) -> None:
+        if self._cold_batch_depth <= 0:
+            raise RuntimeError("Cold mutation batch underflow in resident execution fabric")
+        self._cold_batch_depth -= 1
+        if self._cold_batch_depth != 0:
+            return
+        dirty_slab_ids = sorted(self._dirty_slab_ids)
+        self._dirty_slab_ids = set()
+        for slab_id in dirty_slab_ids:
+            self.compact_slab_if_needed(slab_id)
 
     def allocate_block(
         self,
@@ -400,9 +418,12 @@ class ResidentExecutionFabric:
         return self._query_view(
             ordered_handles,
             visible_start=0,
+            resident_cursor_start=0,
             topology_epoch=topology_epoch,
             tail_epoch=tail_epoch,
             execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
+            execution_view_local_repairs_total=0,
+            execution_view_repaired_suffix_tokens_total=0,
         )
 
     def query_window_view(
@@ -420,9 +441,35 @@ class ResidentExecutionFabric:
         return self._query_view(
             ordered_handles,
             visible_start=visible_start,
+            resident_cursor_start=0,
             topology_epoch=topology_epoch,
             tail_epoch=tail_epoch,
             execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
+            execution_view_local_repairs_total=0,
+            execution_view_repaired_suffix_tokens_total=0,
+        )
+
+    def query_view_from_visible_start(
+        self,
+        ordered_handles: tuple[ResidentBlockHandle, ...],
+        *,
+        visible_start: int,
+        resident_cursor_start: int,
+        topology_epoch: int,
+        tail_epoch: int,
+        execution_view_topology_rebuilds_total: int,
+        execution_view_local_repairs_total: int,
+        execution_view_repaired_suffix_tokens_total: int,
+    ) -> Any:
+        return self._query_view(
+            ordered_handles,
+            visible_start=visible_start,
+            resident_cursor_start=resident_cursor_start,
+            topology_epoch=topology_epoch,
+            tail_epoch=tail_epoch,
+            execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
+            execution_view_local_repairs_total=execution_view_local_repairs_total,
+            execution_view_repaired_suffix_tokens_total=execution_view_repaired_suffix_tokens_total,
         )
 
     def slabs_for_handles(
@@ -442,21 +489,23 @@ class ResidentExecutionFabric:
         ordered_handles: tuple[ResidentBlockHandle, ...],
         *,
         visible_start: int,
+        resident_cursor_start: int,
         topology_epoch: int,
         tail_epoch: int,
         execution_view_topology_rebuilds_total: int,
+        execution_view_local_repairs_total: int,
+        execution_view_repaired_suffix_tokens_total: int,
     ) -> Any:
         from mlxs.adaptive_kv.storage import ExecutionSliceRef, ResidentStateView
 
         pieces = self._visible_pieces(ordered_handles, visible_start=visible_start)
         slices: list[ExecutionSliceRef] = []
-        resident_cursor = 0
+        resident_cursor = resident_cursor_start
         slab_token_counts: dict[int, int] = {}
 
         idx = 0
         while idx < len(pieces):
             first = pieces[idx]
-            slab = self._slabs[first.slab_id]
             group = [first]
             idx += 1
             while idx < len(pieces):
@@ -472,44 +521,12 @@ class ResidentExecutionFabric:
                     continue
                 break
 
-            local_start = group[0].local_start
-            local_end = group[-1].local_end
-            token_count = local_end - local_start
-            block_slices: list[tuple[int, int, int]] = []
-            current_block_cursor = 0
-            for piece in group:
-                piece_start = piece.local_start - local_start
-                piece_end = piece.local_end - local_start
-                if (
-                    block_slices
-                    and block_slices[-1][0] == piece.block_id
-                    and block_slices[-1][2] == piece_start
-                ):
-                    block_id, old_start, _ = block_slices[-1]
-                    block_slices[-1] = (block_id, old_start, piece_end)
-                else:
-                    current_block_cursor = piece_start
-                    block_slices.append((piece.block_id, current_block_cursor, piece_end))
-
-            slice_ref = ExecutionSliceRef(
-                slab_id=slab.slab_id,
-                profile=slab.profile,
-                token_count=token_count,
-                logical_span=(group[0].logical_start, group[-1].logical_end),
-                visible_span=(
-                    group[0].visible_logical_start,
-                    group[-1].visible_logical_end,
-                ),
-                resident_slice=(resident_cursor, resident_cursor + token_count),
-                block_slices=tuple(block_slices),
-                local_slice=(local_start, local_end),
-                keys_view=slab.keys[..., local_start:local_end, :],
-                values_view=slab.values[..., local_start:local_end, :],
-                execution_mode=self._handles[group[0].block_id].execution_mode,
-            )
+            slice_ref = self._make_slice_ref(group, resident_cursor=resident_cursor)
             slices.append(slice_ref)
-            resident_cursor += token_count
-            slab_token_counts[slab.slab_id] = slab_token_counts.get(slab.slab_id, 0) + token_count
+            resident_cursor += slice_ref.token_count
+            slab_token_counts[slice_ref.slab_id] = (
+                slab_token_counts.get(slice_ref.slab_id, 0) + slice_ref.token_count
+            )
 
         return ResidentStateView(
             total_tokens=resident_cursor,
@@ -520,6 +537,8 @@ class ResidentExecutionFabric:
             slab_token_counts=tuple(slab_token_counts.values()),
             fabric_compactions_total=self._compactions_total,
             execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
+            execution_view_local_repairs_total=execution_view_local_repairs_total,
+            execution_view_repaired_suffix_tokens_total=execution_view_repaired_suffix_tokens_total,
         )
 
     def _visible_pieces(
@@ -554,6 +573,46 @@ class ResidentExecutionFabric:
                     raise RuntimeError("Resident fragment slab lookup mismatch")
         return pieces
 
+    def _make_slice_ref(
+        self,
+        group: list[_VisiblePiece],
+        *,
+        resident_cursor: int,
+    ) -> Any:
+        from mlxs.adaptive_kv.storage import ExecutionSliceRef
+
+        slab = self._slabs[group[0].slab_id]
+        local_start = group[0].local_start
+        local_end = group[-1].local_end
+        token_count = local_end - local_start
+        block_slices: list[tuple[int, int, int]] = []
+        for piece in group:
+            piece_start = piece.local_start - local_start
+            piece_end = piece.local_end - local_start
+            if (
+                block_slices
+                and block_slices[-1][0] == piece.block_id
+                and block_slices[-1][2] == piece_start
+            ):
+                block_id, old_start, _ = block_slices[-1]
+                block_slices[-1] = (block_id, old_start, piece_end)
+            else:
+                block_slices.append((piece.block_id, piece_start, piece_end))
+
+        return ExecutionSliceRef(
+            slab_id=slab.slab_id,
+            profile=slab.profile,
+            token_count=token_count,
+            logical_span=(group[0].logical_start, group[-1].logical_end),
+            visible_span=(group[0].visible_logical_start, group[-1].visible_logical_end),
+            resident_slice=(resident_cursor, resident_cursor + token_count),
+            block_slices=tuple(block_slices),
+            local_slice=(local_start, local_end),
+            keys_view=slab.keys[..., local_start:local_end, :],
+            values_view=slab.values[..., local_start:local_end, :],
+            execution_mode=self._handles[group[0].block_id].execution_mode,
+        )
+
     def _remove_handle_fragments(self, handle: ResidentBlockHandle) -> None:
         for fragment in handle.fragments:
             slab = self._slabs.get(fragment.slab_id)
@@ -571,12 +630,16 @@ class ResidentExecutionFabric:
             slab.tombstoned_ranges.append((fragment.local_start, fragment.local_end))
             if not slab.block_ranges:
                 self._slabs.pop(slab.slab_id, None)
+                self._dirty_slab_ids.discard(slab.slab_id)
                 continue
             slab.logical_span = (
                 slab.block_ranges[0].logical_start,
                 slab.block_ranges[-1].logical_end,
             )
-            self.compact_slab_if_needed(slab.slab_id)
+            if self._cold_batch_depth > 0:
+                self._dirty_slab_ids.add(slab.slab_id)
+            else:
+                self.compact_slab_if_needed(slab.slab_id)
         handle.fragments = ()
         handle.live_bytes = 0
 
@@ -655,10 +718,6 @@ class ResidentExecutionFabric:
                 keys=keys,
                 values=values,
             ):
-                continue
-            self.compact_slab_if_needed(slab.slab_id)
-            slab = self._slabs.get(slab.slab_id)
-            if slab is None:
                 continue
             if slab.live_tokens + keys.shape[2] > max(slab.capacity_tokens, capacity):
                 continue
@@ -878,6 +937,12 @@ class TurboQuantResidentBackend:
     def compactions_total(self) -> int:
         return self.fabric.compactions_total
 
+    def begin_cold_mutation_batch(self) -> None:
+        self.fabric.begin_cold_mutation_batch()
+
+    def end_cold_mutation_batch(self) -> None:
+        self.fabric.end_cold_mutation_batch()
+
     def reset(self) -> None:
         self.fabric.reset()
 
@@ -1020,6 +1085,29 @@ class TurboQuantResidentBackend:
             topology_epoch=topology_epoch,
             tail_epoch=tail_epoch,
             execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
+        )
+
+    def query_view_from_visible_start(
+        self,
+        ordered_handles: tuple[ResidentBlockHandle, ...],
+        *,
+        visible_start: int,
+        resident_cursor_start: int,
+        topology_epoch: int,
+        tail_epoch: int,
+        execution_view_topology_rebuilds_total: int,
+        execution_view_local_repairs_total: int,
+        execution_view_repaired_suffix_tokens_total: int,
+    ) -> Any:
+        return self.fabric.query_view_from_visible_start(
+            ordered_handles,
+            visible_start=visible_start,
+            resident_cursor_start=resident_cursor_start,
+            topology_epoch=topology_epoch,
+            tail_epoch=tail_epoch,
+            execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
+            execution_view_local_repairs_total=execution_view_local_repairs_total,
+            execution_view_repaired_suffix_tokens_total=execution_view_repaired_suffix_tokens_total,
         )
 
 

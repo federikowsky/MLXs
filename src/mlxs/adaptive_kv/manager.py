@@ -167,8 +167,12 @@ class AdaptiveKVManager:
         pressure = self._compute_pressure_state()
         self._update_hard_episode_state(pressure)
         protected = self._protected_block_ids()
-        self._apply_transitions(pressure=pressure, protected=protected)
-        self._evict_if_needed(pressure=pressure, protected=protected)
+        self._begin_cold_mutation_batch()
+        try:
+            self._apply_transitions(pressure=pressure, protected=protected)
+            self._evict_if_needed(pressure=pressure, protected=protected)
+        finally:
+            self._end_cold_mutation_batch()
         self._emit_population()
         self.metrics.histogram(POLICY_TIME_SECONDS, time.perf_counter() - started)
 
@@ -206,6 +210,10 @@ class AdaptiveKVManager:
             "visible_spans": [slice_ref.visible_span for slice_ref in rs.slices],
             "fabric_compactions_total": rs.fabric_compactions_total,
             "execution_view_topology_rebuilds_total": rs.execution_view_topology_rebuilds_total,
+            "execution_view_local_repairs_total": rs.execution_view_local_repairs_total,
+            "execution_view_repaired_suffix_tokens_total": (
+                rs.execution_view_repaired_suffix_tokens_total
+            ),
         }
 
     def debug_snapshot(self) -> dict[str, Any]:
@@ -407,25 +415,29 @@ class AdaptiveKVManager:
         scratch = self._ensure_scratch_replay_prefix(replay_tokens)
         recovered_any = False
         materialize_started = time.perf_counter()
-        for recovery_group in self._recovery_groups(request.block_ids):
-            for layer_cache, scratch_layer in zip(self._layer_caches, scratch, strict=True):
-                layer_cache.recover_blocks_from_scratch(
-                    recovery_group,
-                    scratch_layer,
-                    self.replay_backend,
-                    recovery_profile=ResidentProfile.TQ_AGGR,
-                )
-            for block in recovery_group:
-                updated = self._mark_transition(
-                    block,
-                    to_profile=ResidentProfile.TQ_AGGR,
-                    reason="recovered_replay",
-                )
-                self.registry.update(updated)
-                self.ghost_store.mark_reactivated(block.block_id)
-                recovered_any = True
-                if self._hard_episode_active:
-                    self._hard_episode_stabilized_blocks.add(block.block_id)
+        self._begin_cold_mutation_batch()
+        try:
+            for recovery_group in self._recovery_groups(request.block_ids):
+                for layer_cache, scratch_layer in zip(self._layer_caches, scratch, strict=True):
+                    layer_cache.recover_blocks_from_scratch(
+                        recovery_group,
+                        scratch_layer,
+                        self.replay_backend,
+                        recovery_profile=ResidentProfile.TQ_AGGR,
+                    )
+                for block in recovery_group:
+                    updated = self._mark_transition(
+                        block,
+                        to_profile=ResidentProfile.TQ_AGGR,
+                        reason="recovered_replay",
+                    )
+                    self.registry.update(updated)
+                    self.ghost_store.mark_reactivated(block.block_id)
+                    recovered_any = True
+                    if self._hard_episode_active:
+                        self._hard_episode_stabilized_blocks.add(block.block_id)
+        finally:
+            self._end_cold_mutation_batch()
         if recovered_any:
             self.metrics.counter(
                 RECOVERY_MATERIALIZATION_TIME_SECONDS_TOTAL,
@@ -457,6 +469,18 @@ class AdaptiveKVManager:
         if current:
             groups.append(current)
         return tuple(tuple(group) for group in groups)
+
+    def _begin_cold_mutation_batch(self) -> None:
+        for cache in self._layer_caches:
+            begin = getattr(cache, "begin_cold_mutation_batch", None)
+            if begin is not None:
+                begin()
+
+    def _end_cold_mutation_batch(self) -> None:
+        for cache in reversed(self._layer_caches):
+            end = getattr(cache, "end_cold_mutation_batch", None)
+            if end is not None:
+                end()
 
     def _ensure_scratch_replay_prefix(self, total_tokens: int) -> list[Any]:
         previous_replayed_tokens = self._scratch_replayed_tokens

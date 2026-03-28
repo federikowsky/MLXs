@@ -165,8 +165,16 @@ class FullAttentionKVAdaptiveLayerCache:
         self._tail_epoch = 0
         self._resident_view_topology_epoch = -1
         self._resident_view_tail_epoch = -1
+        self._resident_view_query_key: Any = None
+        self._resident_view_visible_start = 0
         self._execution_view_topology_rebuilds_total = 0
+        self._execution_view_local_repairs_total = 0
+        self._execution_view_repaired_suffix_tokens_total = 0
         self._dtype: Any = None
+        self._cold_batch_depth = 0
+        self._cold_topology_dirty = False
+        self._append_only_topology_pending = False
+        self._append_only_repair_logical_start: int | None = None
 
     @property
     def offset(self) -> int:
@@ -206,6 +214,9 @@ class FullAttentionKVAdaptiveLayerCache:
         if self._dtype is None:
             self._dtype = keys.dtype
         self._manager.ensure_block_coverage(end)
+        tail_epoch_changed = False
+        append_only_topology_changed = False
+        repair_logical_start: int | None = None
         for block_id, local_start, local_end in self._manager.registry.token_slices(start, end):
             block = self._manager.registry.get(block_id)
             if block.profile is ResidentProfile.EVICTED:
@@ -218,9 +229,20 @@ class FullAttentionKVAdaptiveLayerCache:
                 values[..., local_start:local_end, :],
             )
             if tail_only:
-                self._tail_epoch += 1
+                tail_epoch_changed = True
             else:
-                self._topology_epoch += 1
+                append_only_topology_changed = True
+                repair_logical_start = (
+                    block.start_token
+                    if repair_logical_start is None
+                    else min(repair_logical_start, block.start_token)
+                )
+        if append_only_topology_changed:
+            self._topology_epoch += 1
+            self._append_only_topology_pending = True
+            self._append_only_repair_logical_start = repair_logical_start
+        if tail_epoch_changed:
+            self._tail_epoch += 1
         self._logical_offset = end
         self._manager.bump_resident_version()
         resident_state = self.resident_state_for_execution(query_tokens=keys.shape[2])
@@ -234,12 +256,16 @@ class FullAttentionKVAdaptiveLayerCache:
             for block in self._manager.registry.snapshot()
             if block.resident and not (block.end_token <= start or block.start_token >= end)
         ]
-        for block_id in removals:
-            handle = self._handles.pop(block_id, None)
-            if handle is not None:
-                self._backend.evict_handle(handle)
+        self.begin_cold_mutation_batch()
+        try:
+            for block_id in removals:
+                handle = self._handles.pop(block_id, None)
+                if handle is not None:
+                    self._backend.evict_handle(handle)
+        finally:
+            self.end_cold_mutation_batch()
         if removals:
-            self._topology_epoch += 1
+            self._mark_topology_change()
             self._manager.bump_resident_version()
 
     def degrade_block(self, block_id: int) -> None:
@@ -251,7 +277,7 @@ class FullAttentionKVAdaptiveLayerCache:
             profile=ResidentProfile.TQ_AGGR,
             dtype=self._effective_dtype(),
         )
-        self._topology_epoch += 1
+        self._mark_topology_change()
         self._manager.bump_resident_version()
 
     def restore_block(self, block_id: int) -> None:
@@ -263,14 +289,14 @@ class FullAttentionKVAdaptiveLayerCache:
             profile=ResidentProfile.TQ_SAFE,
             dtype=self._effective_dtype(),
         )
-        self._topology_epoch += 1
+        self._mark_topology_change()
         self._manager.bump_resident_version()
 
     def evict_block(self, block_id: int) -> None:
         handle = self._handles.pop(block_id, None)
         if handle is not None:
             self._backend.evict_handle(handle)
-            self._topology_epoch += 1
+            self._mark_topology_change()
         self._manager.bump_resident_version()
 
     def recover_blocks_from_scratch(
@@ -282,43 +308,101 @@ class FullAttentionKVAdaptiveLayerCache:
         recovery_profile: ResidentProfile,
     ) -> None:
         dtype = self._effective_dtype()
-        for block in blocks:
-            keys, values = replay_backend.copy_replay_token_range(
-                replay_layer,
-                block.source_start,
-                block.source_end,
-            )
-            self._handles[block.block_id] = self._backend.create_handle(
-                block_id=block.block_id,
-                profile=recovery_profile,
-                logical_span=(block.start_token, block.end_token),
-                keys=keys.astype(dtype),
-                values=values.astype(dtype),
-            )
-            self._topology_epoch += 1
+        recovered_any = False
+        self.begin_cold_mutation_batch()
+        try:
+            for block in blocks:
+                keys, values = replay_backend.copy_replay_token_range(
+                    replay_layer,
+                    block.source_start,
+                    block.source_end,
+                )
+                self._handles[block.block_id] = self._backend.create_handle(
+                    block_id=block.block_id,
+                    profile=recovery_profile,
+                    logical_span=(block.start_token, block.end_token),
+                    keys=keys.astype(dtype),
+                    values=values.astype(dtype),
+                )
+                recovered_any = True
+        finally:
+            self.end_cold_mutation_batch()
+        if recovered_any:
+            self._mark_topology_change()
         self._manager.bump_resident_version()
 
     def resident_state_for_execution(self, *, query_tokens: int = 1) -> ResidentStateView:
-        del query_tokens
+        query_key = self._resident_view_query_key_for(query_tokens=query_tokens)
+        visible_start = self._resident_visible_start_for_query(query_tokens=query_tokens)
         if (
             self._resident_state is not None
             and self._resident_view_topology_epoch == self._topology_epoch
             and self._resident_view_tail_epoch == self._tail_epoch
+            and self._resident_view_query_key == query_key
+            and self._resident_view_visible_start == visible_start
         ):
             return self._resident_state
 
         ordered = tuple(self._ordered_handles(self._logical_offset))
         if self._resident_view_topology_epoch != self._topology_epoch:
             self._execution_view_topology_rebuilds_total += 1
-        self._resident_state = self._backend.query_full_view(
+        queried = self._query_resident_state(ordered, query_tokens=query_tokens)
+        self._resident_state = self._compose_resident_state(queried.slices)
+        self._resident_view_topology_epoch = self._topology_epoch
+        self._resident_view_tail_epoch = self._tail_epoch
+        self._resident_view_query_key = query_key
+        self._resident_view_visible_start = visible_start
+        self._append_only_topology_pending = False
+        self._append_only_repair_logical_start = None
+        return self._resident_state
+
+    def _resident_view_query_key_for(self, *, query_tokens: int) -> Any:
+        del query_tokens
+        return "full"
+
+    def _resident_visible_start_for_query(self, *, query_tokens: int) -> int:
+        del query_tokens
+        return 0
+
+    def _query_resident_state(
+        self,
+        ordered: tuple[ResidentBlockHandle, ...],
+        *,
+        query_tokens: int,
+    ) -> ResidentStateView:
+        del query_tokens
+        return self._backend.query_full_view(
             ordered,
             topology_epoch=self._topology_epoch,
             tail_epoch=self._tail_epoch,
             execution_view_topology_rebuilds_total=self._execution_view_topology_rebuilds_total,
         )
-        self._resident_view_topology_epoch = self._topology_epoch
-        self._resident_view_tail_epoch = self._tail_epoch
-        return self._resident_state
+
+    def _compose_resident_state(
+        self,
+        slices: tuple[Any, ...],
+    ) -> ResidentStateView:
+        slab_token_counts: dict[int, int] = {}
+        total_tokens = 0
+        for slice_ref in slices:
+            total_tokens += slice_ref.token_count
+            slab_token_counts[slice_ref.slab_id] = (
+                slab_token_counts.get(slice_ref.slab_id, 0) + slice_ref.token_count
+            )
+        return ResidentStateView(
+            total_tokens=total_tokens,
+            slices=slices,
+            topology_epoch=self._topology_epoch,
+            tail_epoch=self._tail_epoch,
+            n_execution_slabs=len(slab_token_counts),
+            slab_token_counts=tuple(slab_token_counts.values()),
+            fabric_compactions_total=self._backend.compactions_total,
+            execution_view_topology_rebuilds_total=self._execution_view_topology_rebuilds_total,
+            execution_view_local_repairs_total=self._execution_view_local_repairs_total,
+            execution_view_repaired_suffix_tokens_total=(
+                self._execution_view_repaired_suffix_tokens_total
+            ),
+        )
 
     def make_mask(
         self,
@@ -339,24 +423,51 @@ class FullAttentionKVAdaptiveLayerCache:
         self._tail_epoch = 0
         self._resident_view_topology_epoch = -1
         self._resident_view_tail_epoch = -1
+        self._resident_view_query_key = None
+        self._resident_view_visible_start = 0
         self._execution_view_topology_rebuilds_total = 0
+        self._execution_view_local_repairs_total = 0
+        self._execution_view_repaired_suffix_tokens_total = 0
+        self._cold_batch_depth = 0
+        self._cold_topology_dirty = False
+        self._append_only_topology_pending = False
+        self._append_only_repair_logical_start = None
 
     def trim(self, n: int) -> int:
         if n <= 0:
             return 0
         new_offset = max(0, self._logical_offset - n)
         retained: dict[int, ResidentBlockHandle] = {}
-        for block_id, handle in self._handles.items():
-            if handle.logical_span[0] < new_offset:
-                retained[block_id] = handle
-            else:
-                self._backend.evict_handle(handle)
+        self.begin_cold_mutation_batch()
+        try:
+            for block_id, handle in self._handles.items():
+                if handle.logical_span[0] < new_offset:
+                    retained[block_id] = handle
+                else:
+                    self._backend.evict_handle(handle)
+        finally:
+            self.end_cold_mutation_batch()
         self._handles = retained
         trimmed = self._logical_offset - new_offset
         self._logical_offset = new_offset
-        self._topology_epoch += 1
+        self._mark_topology_change()
         self._manager.bump_resident_version()
         return trimmed
+
+    def begin_cold_mutation_batch(self) -> None:
+        self._cold_batch_depth += 1
+        self._backend.begin_cold_mutation_batch()
+
+    def end_cold_mutation_batch(self) -> None:
+        if self._cold_batch_depth <= 0:
+            raise RuntimeError("Cold mutation batch underflow in full_kv layer cache")
+        self._cold_batch_depth -= 1
+        self._backend.end_cold_mutation_batch()
+        if self._cold_batch_depth == 0 and self._cold_topology_dirty:
+            self._topology_epoch += 1
+            self._cold_topology_dirty = False
+            self._append_only_topology_pending = False
+            self._append_only_repair_logical_start = None
 
     def should_sample_usage(self) -> bool:
         return True
@@ -456,6 +567,16 @@ class FullAttentionKVAdaptiveLayerCache:
         if not ordered:
             return None, None
         return self._backend.debug_materialize(tuple(ordered))
+
+    def _mark_topology_change(self) -> None:
+        if self._cold_batch_depth > 0:
+            self._cold_topology_dirty = True
+            self._append_only_topology_pending = False
+            self._append_only_repair_logical_start = None
+            return
+        self._topology_epoch += 1
+        self._append_only_topology_pending = False
+        self._append_only_repair_logical_start = None
 
 
 def make_full_kv_family_bindings() -> RuntimeFamilyBindings:
