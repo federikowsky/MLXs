@@ -746,7 +746,7 @@ class FullAttentionKVAdaptiveLayerCache:
             self._cold_execution_dirty = False
 
     def should_sample_usage(self) -> bool:
-        return True
+        return self._manager.should_sample_usage()
 
     def required_history_start(self, history_tokens: int) -> int:
         del history_tokens

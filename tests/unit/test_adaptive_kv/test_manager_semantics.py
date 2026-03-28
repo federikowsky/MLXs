@@ -546,3 +546,52 @@ def test_sampled_all_safe_forward_records_usage() -> None:
     assert out.shape == (1, 1, 1, queries.shape[-1])
     assert usage
     assert manager.registry.block_for_token(cache.offset - 1).block_id in usage
+
+
+def test_calm_control_cadence_enters_dormant_mode() -> None:
+    config = AdaptiveKVConfig(
+        enabled=True,
+        block_size_tokens=2,
+        update_window_steps=2,
+    )
+    manager = AdaptiveKVManager(config, num_layers=1, metrics=InMemoryMetrics())
+    manager.bind_generation_context(model=_ReplayModel(), prefill_step_size=16)
+    manager.initialize_prompt([1, 2, 3, 4])
+    keys, values = _kv_from_tokens([1, 2, 3, 4])
+    manager.caches()[0].update_and_fetch(keys, values)
+
+    sampled_steps: list[bool] = []
+    for token_id in [5, 6, 7, 8]:
+        manager.before_decode_forward(token_id)
+        sampled_steps.append(manager.should_sample_usage())
+        manager.after_decode_forward()
+
+    assert sampled_steps == [False, True, False, True]
+    snap = manager.debug_snapshot()["control_cadence"]
+    assert snap["mode"] == "dormant"
+    assert snap["effective_interval_steps"] == 8
+
+    manager.before_decode_forward(9)
+    assert manager.should_sample_usage() is False
+
+
+def test_attention_path_stats_do_not_depend_on_current_sampling_step() -> None:
+    config = AdaptiveKVConfig(
+        enabled=True,
+        block_size_tokens=2,
+        update_window_steps=4,
+    )
+    manager = AdaptiveKVManager(config, num_layers=1, metrics=InMemoryMetrics())
+    manager.bind_generation_context(model=_ReplayModel(), prefill_step_size=16)
+    manager.initialize_prompt([1, 2, 3, 4])
+    keys, values = _kv_from_tokens([1, 2, 3, 4])
+    cache = manager.caches()[0]
+    cache.update_and_fetch(keys, values)
+
+    manager.before_decode_forward(5)
+    assert cache.should_sample_usage() is False
+
+    stats = manager.attention_path_stats()
+
+    assert stats["n_execution_packs"] >= 1
+    assert stats["n_visible_slices"] >= 1
