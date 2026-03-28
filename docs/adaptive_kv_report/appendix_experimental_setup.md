@@ -1,5 +1,9 @@
 # Appendix A. Experimental Setup
 
+> Archival note
+>
+> This appendix documents the earlier Adaptive KV V1 / `FULL`-`COMPRESSED`-`EVICTED` report baseline. It is retained as historical source material and should not be read as the canonical architecture description for the completed TurboQuant-first branch.
+
 ## A.1 Retained Scope Evaluated
 
 All reported results are within the retained Adaptive KV V1 scope:
@@ -10,7 +14,7 @@ All reported results are within the retained Adaptive KV V1 scope:
 | Principal evaluation model | `model_type == "llama"` (tables in this report) |
 | Principal evaluation baseline | Full-attention Llama with homogeneous `list[KVCache]` |
 | Additional retained implementations | Standard `ministral3` on Family B and standard text-only `qwen3_5` on Family C when compatibility passes (not substituting for the Llama tables here) |
-| Adaptive tiers | `FULL`, `COMPRESSED`, `EVICTED` |
+| Historical adaptive tiers in this report package | `FULL`, `COMPRESSED`, `EVICTED` |
 | Recovery model | Real replay-backed recovery from authoritative source tokens |
 | Observer semantics | Observer-only; no query/key/value/logit modification |
 | Excluded features | `compile_decode`, legacy `quantized_kv_start`, external cache reuse, unsupported families |

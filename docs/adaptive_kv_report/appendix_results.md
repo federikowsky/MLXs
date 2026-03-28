@@ -1,5 +1,9 @@
 # Appendix B. Results Tables
 
+> Archival note
+>
+> This appendix documents the earlier Adaptive KV V1 / `FULL`-`COMPRESSED`-`EVICTED` report baseline. It is retained as historical source material and should not be read as the canonical architecture description for the completed TurboQuant-first branch.
+
 ## B.1 Final Repeated Synthetic Rerun: SOFT Regime
 
 Median throughput over three repeats for the final SOFT rerun:

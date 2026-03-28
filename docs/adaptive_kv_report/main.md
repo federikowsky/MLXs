@@ -1,5 +1,11 @@
 # Adaptive KV for MLXs: Exact Adaptive KV-Cache Management for Single-Request Text Decoder Inference
 
+> Archival note
+>
+> This report package is retained as historical source material for the earlier Adaptive KV V1 / `FULL`-`COMPRESSED`-`EVICTED` evaluation baseline. It is not the canonical architecture source of truth for the completed TurboQuant-first branch.
+>
+> For the final retained branch architecture, validation stance, and archival position, use [../adaptive_kv_turboquant_first.spec.md](../adaptive_kv_turboquant_first.spec.md) and [../dev/repo_mapping_kv_cache.md](../dev/repo_mapping_kv_cache.md).
+
 ## Abstract
 
 Transformer decoding with append-only KV retention has the simplest semantics but the worst possible memory growth profile: every past token is treated as equally valuable until the context window is exhausted. Fixed sliding windows bound memory, but they do so by imposing a rigid recency prior that can discard semantically important history. Adaptive KV in MLXs addresses this problem by treating KV residency as a memory-management problem rather than an attention-rewrite problem.

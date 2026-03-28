@@ -2,9 +2,9 @@
 
 ## 1. Scope and Intent
 
-This document is the canonical source of truth for the **TurboQuant-first** Adaptive KV redesign branch in MLXs.
+This document is the canonical source of truth for the **completed TurboQuant-first** Adaptive KV branch in MLXs.
 
-It specifies a branch-only architecture that intentionally breaks from the current retained production baseline. The branch redesign replaces the current operational tier model:
+It records the final retained architecture, validation stance, and archival position for the branch that replaced the earlier operational tier model:
 
 - `FULL`
 - `COMPRESSED`
@@ -16,7 +16,7 @@ with a resident-profile model:
 - `TQ_AGGR`
 - `EVICTED`
 
-The design is intended for direct implementation inside the existing MLXs Adaptive KV package and generation flows. It is grounded in the current repository structure:
+The retained implementation is grounded in the current repository structure:
 
 - generic semantic core under `src/mlxs/adaptive_kv/`,
 - explicit runtime-family layer under `src/mlxs/adaptive_kv/families/`,
@@ -24,7 +24,7 @@ The design is intended for direct implementation inside the existing MLXs Adapti
 - generation orchestration under `src/mlxs/generate/`,
 - family-aware support gating through runtime capabilities and adapter selection.
 
-This specification **does not** define a compatibility-preserving migration from the current retained baseline. It defines the replacement architecture for this branch.
+This specification does not define a compatibility-preserving migration from the older `FULL / COMPRESSED / EVICTED` baseline. It defines the replacement architecture that was implemented and retained for this branch.
 
 The redesign preserves the following principles:
 
@@ -42,6 +42,14 @@ The redesign intentionally changes the following:
 - no requirement to preserve current compressed-run storage assumptions,
 - no requirement to keep current metrics, config naming, or internal handle layout if they encode obsolete tier concepts.
 
+The final retained implementation adds:
+
+- persistent exact execution slabs as the resident execution substrate,
+- slice-based resident execution views over those slabs,
+- exact slab-native streaming attention,
+- cold-batch / deferred-compaction mutation handling,
+- executor and usage-sync improvements that closed the remaining representative short/long gaps.
+
 
 ## 2. Design Goals
 
@@ -49,7 +57,9 @@ The branch implementation defined by this specification must satisfy all of the 
 
 ### 2.1 TurboQuant-first resident design
 
-TurboQuant is the primary resident representation backend for this branch. Resident KV state is not managed as "full tensors plus an optional compressed tier." Instead, resident KV state is managed as a set of **profiled TurboQuant-backed resident representations**.
+TurboQuant remains the primary resident backend contract and naming surface for this branch. In the retained implementation, however, TurboQuant-first means **resident-profile planning plus a backend-owned execution substrate**, not a retained lossy resident-compression path.
+
+Resident KV state is managed as profiled resident execution slabs and slice views. The earlier lossy resident backend direction was rejected because it could not satisfy oracle fidelity honestly.
 
 ### 2.2 No `FULL` operational resident tier
 
@@ -116,14 +126,14 @@ Each logical block is always in exactly one of three residency outcomes:
 ### 4.2 Meaning of the profiles
 
 `TQ_SAFE`
-- TurboQuant-backed resident representation intended for ordinary steady-state operation.
-- Higher-fidelity and/or lower-risk than `TQ_AGGR`.
-- Preferred profile under moderate memory pressure where the block remains resident.
+- Exact resident profile intended for ordinary steady-state operation.
+- Backed in the retained implementation by larger persistent execution slabs and the more conservative resident policy.
+- Preferred profile for important or recently active resident blocks.
 
 `TQ_AGGR`
-- TurboQuant-backed resident representation intended for more aggressive memory reduction.
-- Lower-memory and/or higher-risk than `TQ_SAFE`.
-- Used when the planner decides that a block should remain resident but no longer warrants the safer profile.
+- Exact resident profile intended for more aggressive resident-memory management.
+- Backed in the retained implementation by smaller persistent execution slabs and the more aggressive resident policy.
+- Used when a block should remain resident but no longer warrants `TQ_SAFE`.
 
 `EVICTED`
 - No resident representation is kept.
@@ -141,9 +151,11 @@ This separation is mandatory:
 - the attention path does not redefine policy semantics,
 - recovery is explicit and family-correct.
 
-### 4.4 Storage profile is not execution mode
+### 4.4 Resident profile is not one fixed execution path
 
-Resident profile does not imply one fixed attention path. A profile may be stored in one format and executed through another materialization strategy. Execution correctness is defined relative to the appropriate family baseline, not relative to a backend-native shortcut.
+Resident profile does not imply one fixed attention path. Execution correctness is defined relative to the appropriate family baseline, not relative to a backend-native shortcut.
+
+In the retained implementation, both resident profiles are execution-ready through persistent exact slabs and slice-based resident views. The execution-mode contract remains at the runtime boundary, but the hot resident path is not a lossy quantize/dequantize loop.
 
 
 ## 5. Core Architecture
@@ -236,15 +248,16 @@ Each profile descriptor must state:
 
 ### 6.4 Storage profile versus execution mode
 
-Storage representation and execution mode are separate decisions.
+Storage representation and execution mode are separate decisions at the contract level.
 
-Examples of acceptable relationships:
+The retained implementation realizes that separation through:
 
-- a `TQ_SAFE` block may remain quantized in storage but materialize to dense tensors for execution;
-- a `TQ_AGGR` block may execute via direct compressed attention if validated;
-- the same profile may use different execution modes in different families.
+- exact resident storage in persistent execution slabs,
+- ordered execution-visible slice references,
+- one-slice exact fast paths where available,
+- exact slab-native streaming attention for multi-slice resident views.
 
-The backend must therefore expose **execution materialization** separately from storage state.
+The backend therefore exposes execution views separately from logical block ownership and replay provenance, even though the retained hot path is exact and execution-native.
 
 ### 6.5 TurboQuant as the primary backend
 
@@ -253,11 +266,24 @@ TurboQuant is the required resident backend for this branch.
 For this branch, TurboQuant is defined as:
 
 - a new MLX-aligned resident backend architecture,
-- compatible with the repo's existing quantize/dequantize precedent,
-- but not identical to the retained `COMPRESSED` tier implementation,
-- and not merely a rename of current `AdaptiveCompressedRunStore`.
+- not identical to the earlier `COMPRESSED` tier implementation,
+- not merely a rename of `AdaptiveCompressedRunStore`,
+- and, in the retained branch, concretely implemented as a persistent exact execution fabric.
 
-The first implementation may ship only the TurboQuant backend, but the branch architecture must preserve backend-pluggable contracts so that resident policy remains representation-agnostic.
+The retained backend keeps the resident-profile architecture and backend-owned contracts, but the branch’s final excellence bar was achieved through the exact slab/slice execution-substrate direction rather than through a retained lossy TurboQuant resident compression path.
+
+### 6.6 Final retained backend shape
+
+The final retained backend consists of:
+
+- `ResidentBlockHandle` objects that carry block metadata plus slab fragments,
+- persistent exact execution slabs with profile-specific slab policy,
+- slice-based resident execution views over those slabs,
+- Family B window-visible slice queries,
+- Family C strict KV-versus-recurrent separation,
+- exact slab-native streaming attention,
+- cold-batch / deferred-compaction mutation handling,
+- executor and usage-sync improvements retained on top of the slab/slice substrate.
 
 
 ## 7. Execution Semantics
@@ -613,134 +639,98 @@ Abstractions must correspond to real responsibility boundaries:
 Avoid framework-like generality that adds runtime overhead without implementation value.
 
 
-## 14. Implementation Plan
+## 14. Final Retained Implementation
 
-The later coding run should implement this branch in the following tranches.
+The completed branch retains the following implementation position.
 
-### Tranche 1 — Core vocabulary and contract replacement
+- Tier-oriented runtime vocabulary was replaced with resident-profile vocabulary.
+- `ResidentBackend`, `ResidentProfileDescriptor`, and `ResidentBlockHandle` are the resident-backend boundary.
+- Resident execution is backed by persistent exact execution slabs and slice-based resident views.
+- Family A uses the full resident visible history through the slab/slice substrate.
+- Family B uses explicit resident logical span, effective visible span, and window-visible slice queries.
+- Family C keeps KV-bearing layers inside resident-profile planning and recurrent/state-array layers outside it.
+- Replay and recovery remain explicit and exact.
+- Metrics and diagnostics are resident-profile-aware and expose slab/slice execution-path state.
+- No operational `FULL` resident tier or hidden dense runtime fallback remains.
 
-- Replace tier-oriented core vocabulary with resident-profile vocabulary.
-- Refactor runtime contracts, config, metrics, diagnostics, and block metadata away from `FULL / COMPRESSED / EVICTED`.
-- Preserve generic semantic-core responsibility boundaries.
+## 15. Final Closure Status
 
-### Tranche 2 — Resident backend and handle layer
-
-- Introduce `ResidentBackend`, `ResidentProfileDescriptor`, and `ResidentBlockHandle`.
-- Replace direct compressed-run assumptions with backend-owned resident handles.
-- Keep internal coalescing implementation-defined.
-
-### Tranche 3 — Family A TurboQuant-first substrate
-
-- Implement TurboQuant-backed Family A resident representation.
-- Remove any operational FULL resident path.
-- Establish Family A oracle validation as the first hard gate.
-
-### Tranche 4 — Execution-mode layer
-
-- Introduce explicit execution-mode selection per family/profile combination.
-- Support dequantize-on-read and family-specific execution materialization as first-class paths.
-- Treat direct compressed attention as optional and validation-gated.
-
-### Tranche 5 — Family B implementation
-
-- Implement resident logical span and effective visible span semantics.
-- Implement window-local replay semantics.
-- Implement window-aware execution materialization.
-- Validate each supported Family B profile combination against Family B oracle baselines.
-
-### Tranche 6 — Family C implementation
-
-- Implement strict KV-versus-recurrent planning separation.
-- Keep non-KV recurrent/state layers outside resident-profile planning.
-- Implement family-correct replay and runtime reconstruction for both KV-bearing and recurrent layers.
-- Validate each supported Family C profile combination against Family C oracle baselines.
-
-### Tranche 7 — Metrics, capabilities, and diagnostics
-
-- Rework metrics and diagnostics around resident profiles.
-- Add family/profile-aware capability reporting.
-- Encode oracle-validation obligations into support status.
-
-### Tranche 8 — Cleanup and removal of obsolete assumptions
-
-- Remove obsolete FULL/COMPRESSED runtime assumptions.
-- Remove code paths that rely on dense resident fallback.
-- Remove old tier semantics from branch runtime logic.
-
-
-## 15. Acceptance Criteria
-
-The branch implementation is complete only when **all** of the following are true.
+The branch is complete and retained because all of the following are now true.
 
 - No operational `FULL` resident tier remains in runtime design.
 - `TQ_SAFE`, `TQ_AGGR`, and `EVICTED` are the only operational resident outcomes.
-- The semantic core remains representation-agnostic and family-agnostic.
-- Family A support is oracle-validated against the appropriate dense family baseline.
-- Any supported Family B profile combination is oracle-validated against Family B baseline semantics.
-- Any supported Family C profile combination is oracle-validated against Family C baseline semantics.
-- If oracle closure is not achieved for a family/profile combination, support is reduced honestly.
-- Family B semantics are implemented with explicit resident logical span, effective visible span, window-local replay semantics, and window-aware execution materialization.
-- Family C recurrent/state-array layers remain outside resident-profile planning, degradation, and profile transitions.
-- Family C replay and runtime reconstruction remain exact for both KV-bearing and recurrent/state layers.
+- The semantic core remains representation-agnostic and family-aware.
+- Family A, Family B, and Family C support are oracle-validated within the retained support envelope.
+- Family B semantics are implemented with explicit resident logical span, effective visible span, window-local replay semantics, and window-visible slice execution.
+- Family C recurrent/state-array layers remain outside resident-profile planning, degradation, and transitions.
 - Replay and recovery remain explicit and exact.
-- Policy remains external to attention semantics.
-- Capability reporting is both family-aware and profile-aware.
-- Metrics and diagnostics reflect resident profiles rather than obsolete tier names.
+- Fidelity is closed.
+- The long path improved materially over earlier retained baselines.
+- The remaining short Family C gap was closed on warm representative sweeps.
+- The branch now clears the intended “excellent” bar and is considered archivable.
 
+## 16. Historical Risks and Rejected Paths
 
-## 16. Risks and Failure Modes
+### 16.1 Lossy resident TurboQuant path
 
-### 16.1 TurboQuant fidelity risk
+Historical risk:
+- a resident-profile combination could be operationally stable but fail oracle validation due to lossy resident representation fidelity.
 
-Risk:
-- a family/profile combination may be operationally stable but fail oracle validation due to resident representation fidelity.
+Final retained handling:
+- the lossy resident backend direction was rejected.
+- the retained backend is the exact slab/slice execution substrate.
 
-Required handling:
-- reduce support honestly or restrict the profile/execution-mode combination.
+### 16.2 Transient grouped-segment execution path
 
-### 16.2 Family B visibility mismatch
+Historical risk:
+- repeated grouped-segment assembly created avoidable hot-path cost and excessive visible fragmentation.
 
-Risk:
-- incorrect visible-span handling could silently turn Family B into a masked Family A approximation.
+Final retained handling:
+- transient grouped segments were rejected in favor of persistent slabs and slice-based resident views.
 
-Required handling:
-- explicit Family B execution materialization contracts and Family B oracle validation.
+### 16.3 View-query / composition-only optimizations
 
-### 16.3 Family C planning boundary violation
+Historical risk:
+- several local view-repair and composition-only optimizations looked plausible but did not move the real serving bottleneck.
 
-Risk:
-- recurrent/state-array layers might accidentally be pulled into profile planning semantics.
+Final retained handling:
+- benchmark-negative view-query/composition optimizations were rejected rather than retained as complexity.
 
-Required handling:
-- hard contract separation and dedicated Family C validation.
+### 16.4 Family C grouped-query segmented fallback
 
-### 16.4 Replay reconstruction mismatch
+Historical risk:
+- the remaining short Family C gap suggested a grouped-query-specific fallback might still be needed.
 
-Risk:
-- resident blocks may be replayed correctly while family-specific runtime state is not fully reconstructed.
+Final retained handling:
+- that fallback was benchmarked, rejected, and not retained.
+- the closure was confirmed on the retained baseline through warm representative sweeps.
 
-Required handling:
-- family-aware replay backends and per-family recovery oracles.
+### 16.5 Family B / Family C semantic boundaries
 
-### 16.5 Transition thrash
+Historical risk:
+- Family B could collapse into masked Family A semantics, or Family C recurrent/state-array layers could leak into resident-profile planning.
 
-Risk:
-- poor hysteresis or transition cost modeling may cause resident-profile oscillation.
+Final retained handling:
+- both boundaries remain explicit, validated, and retained.
 
-Required handling:
-- dwell rules, cooldowns, replay-aware stabilization, and explicit transition planning.
+### 16.6 Truthfulness requirement
 
-### 16.6 Abstraction overhead
-
-Risk:
-- over-general resident-handle/backend abstraction could create hot-path overhead without value.
-
-Required handling:
-- keep contracts narrow, keep coalescing implementation-defined, and optimize by responsibility boundary rather than by framework expansion.
+Final archival caveat:
+- the branch achieved excellence through the retained slab/slice execution-substrate direction, not through a retained lossy TurboQuant resident compression path.
+- future work must not overclaim compression benefits that are not actually retained.
 
 
 ## 17. Final Recommendation
 
-This document is intended to become the canonical source of truth for the TurboQuant-first Adaptive KV redesign branch in MLXs.
+This document is the canonical source of truth for the completed TurboQuant-first Adaptive KV branch in MLXs.
 
-Later implementation prompts should treat this specification as decision-complete. Where current retained documents, code paths, or metrics encode `FULL / COMPRESSED / EVICTED` operational semantics, this branch specification supersedes them.
+Future work, if any, should build from this retained baseline:
+
+- resident profiles `TQ_SAFE / TQ_AGGR / EVICTED`,
+- persistent exact execution slabs,
+- slice-based resident execution views,
+- exact slab-native streaming attention,
+- explicit replay/recovery,
+- Family A / B / C runtime-family separation.
+
+Old `FULL / COMPRESSED / EVICTED` operational assumptions are superseded and should not be reopened.

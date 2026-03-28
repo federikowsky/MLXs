@@ -1,5 +1,9 @@
 # Appendix C. Correctness and Semantic Envelope
 
+> Archival note
+>
+> This appendix documents the earlier Adaptive KV V1 / `FULL`-`COMPRESSED`-`EVICTED` report baseline. It is retained as historical source material and should not be read as the canonical architecture description for the completed TurboQuant-first branch.
+
 ## C.1 Exactness Claims by Regime
 
 | Regime | What is exact | What is not promised |

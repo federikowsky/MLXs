@@ -2,6 +2,10 @@
 
 This directory contains a standalone technical report package for Adaptive KV in MLXs.
 
+Archival note:
+
+This package is retained as **historical source material** for the earlier Adaptive KV V1 / `FULL`-`COMPRESSED`-`EVICTED` report baseline and related investigations. It is **not** the canonical architecture source of truth for the completed TurboQuant-first branch.
+
 Reading order:
 
 1. [main.md](./main.md)  
@@ -13,4 +17,9 @@ Reading order:
 4. [appendix_correctness.md](./appendix_correctness.md)  
    Correctness envelope, parity evidence, and the distinction between exact semantic guarantees and compression-fidelity limitations.
 
-This package was written from repository source material, including the retained Adaptive KV design document, freeze summaries, real-workload evaluation, synthetic benchmark artifacts, parity investigations, and the retained benchmark harness. It reflects the retained runtime-families baseline: a generic semantic core, an explicit runtime-family layer, and **three** retained exact concrete substrates—Family A `full_kv`, Family B `windowed_kv`, and Family C `hybrid_state`—with model adapters binding standard `ministral3` (B) and standard text-only `qwen3_5` (C) where the capability gate allows. The principal synthetic and real-workload tables remain Llama-centric; multimodal paths, `compile_decode`, legacy `quantized_kv_start`, and external cache reuse stay unsupported. The older development documents remain useful as source records, but this package is the cleaner standalone reader-facing form.
+For the final retained TurboQuant-first branch architecture, validation stance, and archival position, use:
+
+1. [../adaptive_kv_turboquant_first.spec.md](../adaptive_kv_turboquant_first.spec.md)
+2. [../dev/repo_mapping_kv_cache.md](../dev/repo_mapping_kv_cache.md)
+
+This package remains useful as historical reader-facing background, but it should not be read as the final branch specification.
