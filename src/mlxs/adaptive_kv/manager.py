@@ -125,6 +125,18 @@ class AdaptiveKVManager:
         self._control_skipped_decode_steps_total = 0
         self._usage_sample_steps_total = 0
         self._mutations_in_current_control_window = 0
+        self._restore_transitions_in_current_control_window = 0
+        self._degrade_transitions_in_current_control_window = 0
+        self._evictions_in_current_control_window = 0
+        self._recoveries_in_current_control_window = 0
+        self._wake_reason_counts_total: dict[str, int] = {}
+        self._last_mode_reason = "bootstrap"
+        self._transition_counts_total = {
+            "restore": 0,
+            "degrade": 0,
+            "evict": 0,
+            "recover": 0,
+        }
         self._model: Any = None
         self._prefill_step_size = 2048
         self._pending_recompute_requests = 0
@@ -165,6 +177,18 @@ class AdaptiveKVManager:
         self._control_skipped_decode_steps_total = 0
         self._usage_sample_steps_total = 0
         self._mutations_in_current_control_window = 0
+        self._restore_transitions_in_current_control_window = 0
+        self._degrade_transitions_in_current_control_window = 0
+        self._evictions_in_current_control_window = 0
+        self._recoveries_in_current_control_window = 0
+        self._wake_reason_counts_total = {}
+        self._last_mode_reason = "bootstrap"
+        self._transition_counts_total = {
+            "restore": 0,
+            "degrade": 0,
+            "evict": 0,
+            "recover": 0,
+        }
 
     def bump_resident_version(self) -> None:
         self._resident_version += 1
@@ -216,16 +240,25 @@ class AdaptiveKVManager:
         resident_bytes = self.resident_bytes()
         live_pressure = self._classify_pressure_state(resident_bytes, emit_metrics=False)
         previous_pressure = self._pressure_state
-        if (
-            live_pressure is not PressureState.NORMAL
-            or self._mutations_in_current_control_window > 0
+        if live_pressure is not PressureState.NORMAL:
+            self._wake_active_control(reason="pressure")
+        if self._evictions_in_current_control_window > 0:
+            self._wake_active_control(reason="eviction")
+        if self._recoveries_in_current_control_window > 0:
+            self._wake_active_control(reason="recovery")
+        if self._profile_transitions_hold_active(resident_bytes, live_pressure) and (
+            self._restore_transitions_in_current_control_window > 0
+            or self._degrade_transitions_in_current_control_window > 0
         ):
-            self._wake_active_control()
-        mode = self._control_mode_for(
+            self._wake_active_control(reason="profile_transition")
+        if self._pending_recompute_requests > 0:
+            self._wake_active_control(reason="recompute")
+        mode, mode_reason = self._control_mode_for(
             resident_bytes,
             step=self.decode_steps,
             pressure=live_pressure,
         )
+        self._last_mode_reason = mode_reason
         interval_steps = self._control_interval_steps(mode)
         control_due = self.decode_steps - self._last_control_step >= interval_steps
         if live_pressure is not previous_pressure and live_pressure is not PressureState.NORMAL:
@@ -320,6 +353,7 @@ class AdaptiveKVManager:
             "resident_bytes": self.resident_bytes(),
             "control_cadence": {
                 "mode": self._control_cadence_mode.value,
+                "mode_reason": self._last_mode_reason,
                 "base_interval_steps": self.config.update_window_steps,
                 "effective_interval_steps": self._control_interval_steps(
                     self._control_cadence_mode
@@ -331,6 +365,16 @@ class AdaptiveKVManager:
                 "control_skipped_decode_steps_total": self._control_skipped_decode_steps_total,
                 "usage_sample_steps_total": self._usage_sample_steps_total,
                 "mutations_in_current_control_window": self._mutations_in_current_control_window,
+                "restore_transitions_in_current_control_window": (
+                    self._restore_transitions_in_current_control_window
+                ),
+                "degrade_transitions_in_current_control_window": (
+                    self._degrade_transitions_in_current_control_window
+                ),
+                "evictions_in_current_control_window": self._evictions_in_current_control_window,
+                "recoveries_in_current_control_window": self._recoveries_in_current_control_window,
+                "transition_counts_total": dict(self._transition_counts_total),
+                "wake_reason_counts_total": dict(self._wake_reason_counts_total),
             },
             "attention_path": self.attention_path_stats(),
             "performance_attribution": self._perf_trace.snapshot(),
@@ -463,6 +507,8 @@ class AdaptiveKVManager:
         self.ghost_store.mark_reactivated(block.block_id)
         self.metrics.counter(RESTORES_TOTAL)
         self._mutations_in_current_control_window += 1
+        self._restore_transitions_in_current_control_window += 1
+        self._transition_counts_total["restore"] += 1
 
     def _degrade_block(self, block: BlockRecord, *, reason: str) -> None:
         if block.profile is not ResidentProfile.TQ_SAFE:
@@ -478,6 +524,8 @@ class AdaptiveKVManager:
         self.registry.update(updated)
         self.metrics.counter(DEGRADES_TOTAL)
         self._mutations_in_current_control_window += 1
+        self._degrade_transitions_in_current_control_window += 1
+        self._transition_counts_total["degrade"] += 1
 
     def _evict_block(self, block: BlockRecord, *, reason: str) -> None:
         if block.pin_state is PinState.HARD:
@@ -498,6 +546,8 @@ class AdaptiveKVManager:
         self.ghost_store.create(updated, step=self.decode_steps)
         self.metrics.counter(EVICTIONS_TOTAL)
         self._mutations_in_current_control_window += 1
+        self._evictions_in_current_control_window += 1
+        self._transition_counts_total["evict"] += 1
 
     def _recover_request(self, request: Any) -> None:
         if self._model is None:
@@ -543,7 +593,9 @@ class AdaptiveKVManager:
             )
             self.metrics.counter(RECOVERY_MATERIALIZATION_EVENTS_TOTAL)
             self._recovery_wave_seen = True
-            self._wake_active_control()
+            self._recoveries_in_current_control_window += 1
+            self._transition_counts_total["recover"] += 1
+            self._wake_active_control(reason="recovery")
         if recovered_any and self._hard_episode_active:
             self._hard_episode_recovery_hold = True
 
@@ -688,6 +740,15 @@ class AdaptiveKVManager:
         wake_threshold = max(1, int(soft_budget * _SOFT_WAKE_FRACTION))
         return resident_bytes >= wake_threshold
 
+    def _profile_transitions_hold_active(
+        self,
+        resident_bytes: int,
+        pressure: PressureState,
+    ) -> bool:
+        if pressure is not PressureState.NORMAL:
+            return True
+        return self._near_soft_budget(resident_bytes)
+
     def _control_interval_steps(self, mode: _ControlCadenceMode) -> int:
         base = self.config.update_window_steps
         if base <= 1:
@@ -702,26 +763,27 @@ class AdaptiveKVManager:
         *,
         step: int,
         pressure: PressureState | None = None,
-    ) -> _ControlCadenceMode:
+    ) -> tuple[_ControlCadenceMode, str]:
         current_pressure = (
             pressure
             if pressure is not None
             else self._classify_pressure_state(resident_bytes, emit_metrics=False)
         )
         if current_pressure is PressureState.HARD:
-            return _ControlCadenceMode.STRESSED
+            return (_ControlCadenceMode.STRESSED, "pressure_hard")
         if current_pressure is PressureState.SOFT:
-            return _ControlCadenceMode.ACTIVE
+            return (_ControlCadenceMode.ACTIVE, "pressure_soft")
         if self._near_soft_budget(resident_bytes):
-            return _ControlCadenceMode.ACTIVE
+            return (_ControlCadenceMode.ACTIVE, "near_soft_budget")
         if step <= self._force_active_until_step:
-            return _ControlCadenceMode.ACTIVE
+            return (_ControlCadenceMode.ACTIVE, "active_hold")
         if self._calm_control_windows >= _DORMANT_ENTRY_CALM_WINDOWS:
-            return _ControlCadenceMode.DORMANT
-        return _ControlCadenceMode.ACTIVE
+            return (_ControlCadenceMode.DORMANT, "calm_dormant")
+        return (_ControlCadenceMode.ACTIVE, "calm_bootstrap")
 
-    def _wake_active_control(self) -> None:
+    def _wake_active_control(self, *, reason: str) -> None:
         base = max(1, self.config.update_window_steps)
+        self._wake_reason_counts_total[reason] = self._wake_reason_counts_total.get(reason, 0) + 1
         self._force_active_until_step = max(
             self._force_active_until_step,
             self.decode_steps + (base * _POST_MUTATION_ACTIVE_WINDOWS),
@@ -729,27 +791,47 @@ class AdaptiveKVManager:
 
     def _finalize_control_cadence(self, *, pressure: PressureState) -> None:
         resident_bytes = self.resident_bytes()
+        profile_transitions_urgent = self._profile_transitions_hold_active(
+            resident_bytes,
+            pressure,
+        )
+        urgent_mutation_count = self._evictions_in_current_control_window
+        urgent_mutation_count += self._recoveries_in_current_control_window
+        if profile_transitions_urgent:
+            urgent_mutation_count += self._restore_transitions_in_current_control_window
+            urgent_mutation_count += self._degrade_transitions_in_current_control_window
         if (
             pressure is PressureState.NORMAL
             and not self._near_soft_budget(resident_bytes)
-            and self._mutations_in_current_control_window == 0
+            and urgent_mutation_count == 0
             and self._pending_recompute_requests == 0
         ):
             self._calm_control_windows += 1
         else:
             self._calm_control_windows = 0
-            if (
-                self._mutations_in_current_control_window > 0
-                or self._pending_recompute_requests > 0
-                or pressure is not PressureState.NORMAL
+            if pressure is not PressureState.NORMAL:
+                self._wake_active_control(reason="post_window_pressure")
+            if self._evictions_in_current_control_window > 0:
+                self._wake_active_control(reason="post_window_eviction")
+            if self._recoveries_in_current_control_window > 0:
+                self._wake_active_control(reason="post_window_recovery")
+            if profile_transitions_urgent and (
+                self._restore_transitions_in_current_control_window > 0
+                or self._degrade_transitions_in_current_control_window > 0
             ):
-                self._wake_active_control()
-        self._control_cadence_mode = self._control_mode_for(
+                self._wake_active_control(reason="post_window_profile_transition")
+            if self._pending_recompute_requests > 0:
+                self._wake_active_control(reason="post_window_recompute")
+        self._control_cadence_mode, self._last_mode_reason = self._control_mode_for(
             resident_bytes,
             step=self.decode_steps,
             pressure=pressure,
         )
         self._mutations_in_current_control_window = 0
+        self._restore_transitions_in_current_control_window = 0
+        self._degrade_transitions_in_current_control_window = 0
+        self._evictions_in_current_control_window = 0
+        self._recoveries_in_current_control_window = 0
         self._pending_recompute_requests = 0
 
     def _clear_hard_best_achievable_state(self) -> None:
@@ -818,7 +900,7 @@ class AdaptiveKVManager:
     def _increment_recompute_requests(self) -> None:
         self._pending_recompute_requests += 1
         self.metrics.counter(RECOMPUTATIONS_TOTAL)
-        self._wake_active_control()
+        self._wake_active_control(reason="recompute")
 
     def _should_sample_usage(self) -> bool:
         next_step = self.decode_steps + 1
@@ -826,7 +908,7 @@ class AdaptiveKVManager:
             return True
         resident_bytes = self.resident_bytes()
         pressure = self._classify_pressure_state(resident_bytes, emit_metrics=False)
-        mode = self._control_mode_for(resident_bytes, step=next_step, pressure=pressure)
+        mode, _ = self._control_mode_for(resident_bytes, step=next_step, pressure=pressure)
         if next_step - self._last_control_step >= self._control_interval_steps(mode):
             return True
         if pressure is not PressureState.NORMAL:

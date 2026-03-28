@@ -575,6 +575,61 @@ def test_calm_control_cadence_enters_dormant_mode() -> None:
     assert manager.should_sample_usage() is False
 
 
+def test_profile_only_transitions_do_not_block_dormancy_when_far_from_soft_budget() -> None:
+    manager = _make_manager(prompt_tokens=list(range(1, 13)))
+    manager.config = manager.config.model_copy(
+        update={"update_window_steps": 2, "soft_budget_bytes": 10_000_000}
+    )
+
+    manager.before_decode_forward(13)
+    manager.after_decode_forward()
+
+    manager.before_decode_forward(14)
+    manager._degrade_block(manager.registry.get(1), reason="test_profile_transition")
+    manager.after_decode_forward()
+
+    snap = manager.debug_snapshot()["control_cadence"]
+    assert snap["mode"] == "active"
+    assert snap["mode_reason"] == "calm_bootstrap"
+    assert snap["calm_control_windows"] == 1
+    assert snap["wake_reason_counts_total"] == {}
+
+    manager.before_decode_forward(15)
+    manager.after_decode_forward()
+    manager.before_decode_forward(16)
+    manager.after_decode_forward()
+
+    snap = manager.debug_snapshot()["control_cadence"]
+    assert snap["mode"] == "dormant"
+    assert snap["mode_reason"] == "calm_dormant"
+    assert snap["calm_control_windows"] == 2
+    assert snap["wake_reason_counts_total"] == {}
+
+
+def test_profile_only_transitions_hold_active_near_soft_budget() -> None:
+    manager = _make_manager(prompt_tokens=list(range(1, 13)))
+    resident_bytes = manager.resident_bytes()
+    manager.config = manager.config.model_copy(
+        update={
+            "update_window_steps": 2,
+            "soft_budget_bytes": resident_bytes + max(1, resident_bytes // 10),
+        }
+    )
+
+    manager.before_decode_forward(13)
+    manager.after_decode_forward()
+
+    manager.before_decode_forward(14)
+    manager._degrade_block(manager.registry.get(1), reason="test_profile_transition")
+    manager.after_decode_forward()
+
+    snap = manager.debug_snapshot()["control_cadence"]
+    assert snap["mode"] == "active"
+    assert snap["mode_reason"] == "near_soft_budget"
+    assert snap["calm_control_windows"] == 0
+    assert snap["wake_reason_counts_total"]["post_window_profile_transition"] == 1
+
+
 def test_attention_path_stats_do_not_depend_on_current_sampling_step() -> None:
     config = AdaptiveKVConfig(
         enabled=True,
