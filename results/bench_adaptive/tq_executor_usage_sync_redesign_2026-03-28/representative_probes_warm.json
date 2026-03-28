@@ -1,0 +1,349 @@
+{
+  "runs": [
+    {
+      "name": "llama_short_hard",
+      "adaptive_tok_s": 188.06,
+      "adaptive_elapsed_s": 0.0851,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "pressure_state": "hard",
+      "resident_bytes": 585728,
+      "attention_path": {
+        "n_execution_slabs": 2,
+        "n_visible_slices": 3,
+        "slab_token_counts": [
+          15,
+          128
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            143
+          ]
+        ],
+        "fabric_compactions_total": 1,
+        "execution_view_topology_rebuilds_total": 12,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      }
+    },
+    {
+      "name": "llama_long_hard",
+      "adaptive_tok_s": 53.24,
+      "adaptive_elapsed_s": 1.8031,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "pressure_state": "hard",
+      "resident_bytes": 4583424,
+      "attention_path": {
+        "n_execution_slabs": 11,
+        "n_visible_slices": 11,
+        "slab_token_counts": [
+          8,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          80,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            264
+          ],
+          [
+            264,
+            392
+          ],
+          [
+            392,
+            520
+          ],
+          [
+            520,
+            648
+          ],
+          [
+            648,
+            776
+          ],
+          [
+            776,
+            904
+          ],
+          [
+            904,
+            1032
+          ],
+          [
+            1032,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 88,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      }
+    },
+    {
+      "name": "ministral3_short",
+      "adaptive_tok_s": 221.65,
+      "adaptive_elapsed_s": 0.0722,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "pressure_state": "hard",
+      "resident_bytes": 585728,
+      "attention_path": {
+        "n_execution_slabs": 2,
+        "n_visible_slices": 3,
+        "slab_token_counts": [
+          15,
+          128
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            143
+          ]
+        ],
+        "fabric_compactions_total": 1,
+        "execution_view_topology_rebuilds_total": 12,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      }
+    },
+    {
+      "name": "ministral3_long_soft_96",
+      "adaptive_tok_s": 80.32,
+      "adaptive_elapsed_s": 1.1952,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "pressure_state": "hard",
+      "resident_bytes": 4583424,
+      "attention_path": {
+        "n_execution_slabs": 11,
+        "n_visible_slices": 11,
+        "slab_token_counts": [
+          8,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          80,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            264
+          ],
+          [
+            264,
+            392
+          ],
+          [
+            392,
+            520
+          ],
+          [
+            520,
+            648
+          ],
+          [
+            648,
+            776
+          ],
+          [
+            776,
+            904
+          ],
+          [
+            904,
+            1032
+          ],
+          [
+            1032,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 88,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      }
+    },
+    {
+      "name": "qwen35_short_hybrid",
+      "adaptive_tok_s": 134.29,
+      "adaptive_elapsed_s": 0.1191,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "pressure_state": "hard",
+      "resident_bytes": 185344,
+      "attention_path": {
+        "n_execution_slabs": 2,
+        "n_visible_slices": 3,
+        "slab_token_counts": [
+          15,
+          128
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            143
+          ]
+        ],
+        "fabric_compactions_total": 1,
+        "execution_view_topology_rebuilds_total": 12,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      }
+    },
+    {
+      "name": "qwen35_long_soft_96",
+      "adaptive_tok_s": 65.37,
+      "adaptive_elapsed_s": 1.4685,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "pressure_state": "hard",
+      "resident_bytes": 1184768,
+      "attention_path": {
+        "n_execution_slabs": 11,
+        "n_visible_slices": 11,
+        "slab_token_counts": [
+          8,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          80,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            264
+          ],
+          [
+            264,
+            392
+          ],
+          [
+            392,
+            520
+          ],
+          [
+            520,
+            648
+          ],
+          [
+            648,
+            776
+          ],
+          [
+            776,
+            904
+          ],
+          [
+            904,
+            1032
+          ],
+          [
+            1032,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 88,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      }
+    }
+  ]
+}

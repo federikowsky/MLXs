@@ -13,6 +13,8 @@ from mlx.utils import tree_map
 
 from mlxs.adaptive_kv.resident import ResidentExecutionMode
 
+_ADAPTIVE_DENSE_FAST_SLICE_LIMIT = 4
+
 
 def quantized_scaled_dot_product_attention(
     queries: mx.array,
@@ -212,6 +214,68 @@ def _slice_output(weights: mx.array, slice_ref: Any) -> mx.array:
     return _full_segment_output(weights, slice_ref.values_view)
 
 
+def _concatenate_resident_slices(
+    resident_state: Any,
+) -> tuple[mx.array, mx.array]:
+    if len(resident_state.slices) == 1:
+        slice_ref = resident_state.slices[0]
+        return slice_ref.keys_view, slice_ref.values_view
+    return (
+        mx.concatenate([slice_ref.keys_view for slice_ref in resident_state.slices], axis=-2),
+        mx.concatenate([slice_ref.values_view for slice_ref in resident_state.slices], axis=-2),
+    )
+
+
+def _adaptive_dense_concat_attention(
+    queries: mx.array,
+    resident_state: Any,
+    *,
+    scale: float,
+    mask: mx.array | str | None,
+    sample_usage: bool,
+    cache: Any | None = None,
+) -> mx.array | tuple[mx.array, mx.array]:
+    trace = getattr(cache, "record_perf_ns", None)
+    sync_enabled = bool(getattr(cache, "perf_sync_enabled", lambda: False)())
+    total_started_ns = time.perf_counter_ns()
+    for slice_ref in resident_state.slices:
+        if slice_ref.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
+            raise ValueError(
+                "Family-specific adaptive attention execution must be resolved by the "
+                "runtime before reaching the generic attention path"
+            )
+    keys, values = _concatenate_resident_slices(resident_state)
+    if not sample_usage:
+        out = mx.fast.scaled_dot_product_attention(
+            queries,
+            keys,
+            values,
+            scale=scale,
+            mask=mask,
+            sinks=None,
+        )
+        if sync_enabled:
+            mx.eval(out)
+        if trace is not None:
+            elapsed_ns = time.perf_counter_ns() - total_started_ns
+            trace("attention.fast_path_ns", elapsed_ns)
+            trace("attention.total_ns", elapsed_ns)
+        return out
+
+    scores = _full_segment_scores(queries, keys, scale=scale)
+    scores, _ = _apply_attention_mask(scores, mask)
+    weights = mx.softmax(scores, axis=-1, precise=True)
+    out = _full_segment_output(weights, values)
+    usage_by_token = _usage_by_token(weights)
+    if sync_enabled:
+        mx.eval(out, usage_by_token)
+    if trace is not None:
+        elapsed_ns = time.perf_counter_ns() - total_started_ns
+        trace("attention.concat_usage_path_ns", elapsed_ns)
+        trace("attention.total_ns", elapsed_ns)
+    return out, usage_by_token
+
+
 def _adaptive_segmented_reference_attention(
     queries: mx.array,
     resident_state: Any,
@@ -306,31 +370,17 @@ def adaptive_scaled_dot_product_attention(
     sample_usage: bool,
     cache: Any | None = None,
 ) -> mx.array | tuple[mx.array, mx.array]:
+    if len(resident_state.slices) <= _ADAPTIVE_DENSE_FAST_SLICE_LIMIT:
+        return _adaptive_dense_concat_attention(
+            queries,
+            resident_state,
+            scale=scale,
+            mask=mask,
+            sample_usage=sample_usage,
+            cache=cache,
+        )
     trace = getattr(cache, "record_perf_ns", None)
-    sync_enabled = bool(getattr(cache, "perf_sync_enabled", lambda: False)())
     total_started_ns = time.perf_counter_ns()
-    if len(resident_state.slices) == 1 and not sample_usage:
-        slice_ref = resident_state.slices[0]
-        if slice_ref.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
-            raise ValueError(
-                "Family-specific adaptive attention execution must be resolved by the "
-                "runtime before reaching the generic attention path"
-            )
-        if slice_ref.logical_span == slice_ref.visible_span:
-            out = mx.fast.scaled_dot_product_attention(
-                queries,
-                slice_ref.keys_view,
-                slice_ref.values_view,
-                scale=scale,
-                mask=mask,
-                sinks=None,
-            )
-            if sync_enabled:
-                mx.eval(out)
-            if trace is not None:
-                trace("attention.fast_path_ns", time.perf_counter_ns() - total_started_ns)
-                trace("attention.total_ns", time.perf_counter_ns() - total_started_ns)
-            return out
     out = _adaptive_segmented_reference_attention(
         queries,
         resident_state,

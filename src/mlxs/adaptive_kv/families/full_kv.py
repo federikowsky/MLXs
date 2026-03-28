@@ -530,19 +530,23 @@ class FullAttentionKVAdaptiveLayerCache:
         usage_by_token: mx.array,
     ) -> None:
         started_ns = time.perf_counter_ns()
+        aggregated_by_block: dict[int, mx.array] = {}
         for slice_ref in resident_state.slices:
             seg_start, seg_end = slice_ref.resident_slice
             segment_usage = usage_by_token[seg_start:seg_end]
-            values: list[mx.array] = []
-            block_ids: list[int] = []
+            if not slice_ref.block_slices:
+                continue
             for block_id, local_start, local_end in slice_ref.block_slices:
-                block_ids.append(block_id)
-                values.append(segment_usage[local_start:local_end].mean(keepdims=True))
-            if values:
-                self._manager.usage.record_batch(
-                    tuple(block_ids),
-                    values[0] if len(values) == 1 else mx.concatenate(values, axis=0),
-                )
+                value = segment_usage[local_start:local_end].mean(keepdims=True)
+                existing = aggregated_by_block.get(block_id)
+                aggregated_by_block[block_id] = value if existing is None else existing + value
+        if aggregated_by_block:
+            block_ids = tuple(aggregated_by_block.keys())
+            values = tuple(aggregated_by_block[block_id] for block_id in block_ids)
+            self._manager.usage.record_batch(
+                block_ids,
+                values[0] if len(values) == 1 else mx.concatenate(values, axis=0),
+            )
         self.record_perf_ns(
             "usage.record_from_attention_ns",
             time.perf_counter_ns() - started_ns,
