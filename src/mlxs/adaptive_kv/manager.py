@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -36,6 +37,7 @@ from mlxs.adaptive_kv.metrics import (
     block_debug_view,
     emit_population,
 )
+from mlxs.adaptive_kv.perf_trace import AdaptiveKVPerfTrace
 from mlxs.adaptive_kv.recompute import AdaptiveRecomputeCoordinator
 from mlxs.adaptive_kv.runtime import (
     AdaptiveKVLayerRuntime,
@@ -86,6 +88,12 @@ class AdaptiveKVManager:
         self.ghost_store = AdaptiveGhostStore()
         self.transitions = AdaptiveTransitionEngine(config)
         self.evictions = AdaptiveEvictionEngine(config, self.ghost_store)
+        perf_enabled = os.environ.get("MLXS_ADAPTIVE_KV_PERF_ATTRIBUTION") == "1"
+        self._perf_trace = AdaptiveKVPerfTrace(
+            enabled=perf_enabled,
+            sync_enabled=perf_enabled
+            and os.environ.get("MLXS_ADAPTIVE_KV_PERF_ATTRIBUTION_SYNC", "1") == "1",
+        )
         self.decode_steps = 0
         self.prompt_token_count = 0
         self.source_tokens: list[int] = []
@@ -101,6 +109,8 @@ class AdaptiveKVManager:
         self._prefill_step_size = 2048
         self._pending_recompute_requests = 0
         self._adaptive_usage_timing_acc: dict[str, int] | None = None
+        if self._perf_trace.enabled and self._adaptive_usage_timing_acc is None:
+            self._adaptive_usage_timing_acc = {}
         self._hard_episode_active = False
         self._hard_episode_stabilized_blocks: set[int] = set()
         self._hard_episode_recovery_hold = False
@@ -130,6 +140,19 @@ class AdaptiveKVManager:
 
     def bump_resident_version(self) -> None:
         self._resident_version += 1
+
+    @property
+    def perf_trace(self) -> AdaptiveKVPerfTrace:
+        return self._perf_trace
+
+    def record_perf_ns(self, name: str, elapsed_ns: int) -> None:
+        self._perf_trace.record_ns(name, elapsed_ns)
+
+    def increment_perf(self, name: str, delta: int = 1) -> None:
+        self._perf_trace.increment(name, delta)
+
+    def perf_sync_enabled(self) -> bool:
+        return self._perf_trace.sync_enabled
 
     def caches(self) -> list[AdaptiveKVLayerRuntime]:
         return self._layer_caches
@@ -162,7 +185,26 @@ class AdaptiveKVManager:
         if self.decode_steps % self.config.update_window_steps != 0:
             return
         started = time.perf_counter()
+        prev_eval_ns = 0
+        prev_host_ns = 0
+        if self._adaptive_usage_timing_acc is not None:
+            prev_eval_ns = self._adaptive_usage_timing_acc.get("eval_ns", 0)
+            prev_host_ns = self._adaptive_usage_timing_acc.get("host_ns", 0)
+        usage_started_ns = time.perf_counter_ns()
         usage = self.usage.snapshot_and_reset(timing_acc=self._adaptive_usage_timing_acc)
+        self.record_perf_ns(
+            "manager.usage_snapshot_total_ns",
+            time.perf_counter_ns() - usage_started_ns,
+        )
+        if self._adaptive_usage_timing_acc is not None:
+            self.record_perf_ns(
+                "manager.usage_snapshot_eval_ns",
+                self._adaptive_usage_timing_acc.get("eval_ns", 0) - prev_eval_ns,
+            )
+            self.record_perf_ns(
+                "manager.usage_snapshot_host_ns",
+                self._adaptive_usage_timing_acc.get("host_ns", 0) - prev_host_ns,
+            )
         self._update_scores(usage)
         pressure = self._compute_pressure_state()
         self._update_hard_episode_state(pressure)
@@ -223,6 +265,7 @@ class AdaptiveKVManager:
             "pressure_state": self._pressure_state.value,
             "resident_bytes": self.resident_bytes(),
             "attention_path": self.attention_path_stats(),
+            "performance_attribution": self._perf_trace.snapshot(),
             "hard_stabilization": {
                 "episode_active": self._hard_episode_active,
                 "stabilized_block_ids": sorted(self._hard_episode_stabilized_blocks),

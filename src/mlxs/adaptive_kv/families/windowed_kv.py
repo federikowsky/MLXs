@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
@@ -79,14 +80,30 @@ class WindowedKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
         return max(0, history_tokens - max(0, window_size - 1))
 
     def _resident_view_query_key_for(self, *, query_tokens: int) -> Any:
+        started_ns = time.perf_counter_ns()
         del query_tokens
-        return self._configured_window_size()
+        window_size = self._configured_window_size()
+        self.record_perf_ns(
+            "family.window_query_key_ns",
+            time.perf_counter_ns() - started_ns,
+        )
+        return window_size
 
     def _resident_visible_start_for_query(self, *, query_tokens: int) -> int:
+        started_ns = time.perf_counter_ns()
         window_size = self._configured_window_size()
         if window_size is None:
+            self.record_perf_ns(
+                "family.window_visible_start_ns",
+                time.perf_counter_ns() - started_ns,
+            )
             return 0
-        return max(0, self._logical_offset - query_tokens - max(0, window_size - 1))
+        visible_start = max(0, self._logical_offset - query_tokens - max(0, window_size - 1))
+        self.record_perf_ns(
+            "family.window_visible_start_ns",
+            time.perf_counter_ns() - started_ns,
+        )
+        return visible_start
 
     def make_mask(
         self,
@@ -137,6 +154,7 @@ class WindowedKVRuntimeSubstrate(FullAttentionKVRuntimeSubstrate):
             aggr_bits=manager.config.tq_aggr_bits,
             safe_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
             aggr_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+            perf_trace=manager.perf_trace,
         )
         return WindowedKVAdaptiveLayerCache(manager, layer_index=layer_index, backend=backend)
 

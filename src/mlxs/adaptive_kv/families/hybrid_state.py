@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
@@ -171,7 +172,12 @@ class HybridStateAdaptiveLayerCache:
         self._delegate: AdaptiveKVLayerRuntime | HybridStateArraysLayerCache | None = None
 
     def _resolve_delegate(self) -> AdaptiveKVLayerRuntime | HybridStateArraysLayerCache:
+        started_ns = time.perf_counter_ns()
         if self._delegate is not None:
+            self._manager.record_perf_ns(
+                "family.hybrid_delegate_resolve_ns",
+                time.perf_counter_ns() - started_ns,
+            )
             return self._delegate
         model = self._manager._model
         if model is None:
@@ -192,12 +198,17 @@ class HybridStateAdaptiveLayerCache:
                 aggr_bits=self._manager.config.tq_aggr_bits,
                 safe_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
                 aggr_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+                perf_trace=self._manager.perf_trace,
             )
             self._delegate = HybridStateKVAdaptiveLayerCache(
                 self._manager,
                 layer_index=self._layer_index,
                 backend=backend,
             )
+        self._manager.record_perf_ns(
+            "family.hybrid_delegate_resolve_ns",
+            time.perf_counter_ns() - started_ns,
+        )
         return self._delegate
 
     def __getitem__(self, idx: int) -> Any:
@@ -295,6 +306,17 @@ class HybridStateAdaptiveLayerCache:
 
     def block_live_bytes(self, block_id: int) -> int:
         return self._resolve_delegate().block_live_bytes(block_id)
+
+    def record_perf_ns(self, name: str, elapsed_ns: int) -> None:
+        recorder = getattr(self._resolve_delegate(), "record_perf_ns", None)
+        if recorder is not None:
+            recorder(name, elapsed_ns)
+
+    def perf_sync_enabled(self) -> bool:
+        perf_sync = getattr(self._resolve_delegate(), "perf_sync_enabled", None)
+        if perf_sync is not None:
+            return bool(perf_sync())
+        return False
 
     def begin_cold_mutation_batch(self) -> None:
         begin = getattr(self._resolve_delegate(), "begin_cold_mutation_batch", None)

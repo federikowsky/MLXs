@@ -5,6 +5,7 @@ Used by all transformer model architectures. No dependency on cache or models.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import mlx.core as mx
@@ -218,10 +219,15 @@ def _adaptive_segmented_reference_attention(
     scale: float,
     mask: mx.array | str | None,
     sample_usage: bool,
+    cache: Any | None = None,
 ) -> mx.array | tuple[mx.array, mx.array]:
     if not resident_state.slices:
         raise ValueError("Adaptive attention requires at least one resident slice")
 
+    trace = getattr(cache, "record_perf_ns", None)
+    sync_enabled = bool(getattr(cache, "perf_sync_enabled", lambda: False)())
+
+    pass1_started_ns = time.perf_counter_ns()
     global_max: mx.array | None = None
     exp_sum: mx.array | None = None
     query_tokens = queries.shape[-2]
@@ -248,7 +254,12 @@ def _adaptive_segmented_reference_attention(
 
     if global_max is None or exp_sum is None:
         raise ValueError("Adaptive attention requires at least one resident slice score pass")
+    if sync_enabled:
+        mx.eval(global_max, exp_sum)
+    if trace is not None:
+        trace("attention.pass1_ns", time.perf_counter_ns() - pass1_started_ns)
 
+    pass2_started_ns = time.perf_counter_ns()
     out: mx.array | None = None
     usage_parts: list[mx.array] | None = [] if sample_usage else None
     for slice_ref in resident_state.slices:
@@ -269,12 +280,20 @@ def _adaptive_segmented_reference_attention(
     if out is None:
         raise ValueError("Adaptive attention requires at least one resident slice output")
     if usage_parts is None:
+        if sync_enabled:
+            mx.eval(out)
+        if trace is not None:
+            trace("attention.pass2_ns", time.perf_counter_ns() - pass2_started_ns)
         return out
     usage_by_token = (
         usage_parts[0]
         if len(usage_parts) == 1
         else mx.concatenate(usage_parts, axis=0)
     )
+    if sync_enabled:
+        mx.eval(out, usage_by_token)
+    if trace is not None:
+        trace("attention.pass2_ns", time.perf_counter_ns() - pass2_started_ns)
     return out, usage_by_token
 
 
@@ -285,7 +304,11 @@ def adaptive_scaled_dot_product_attention(
     mask: mx.array | str | None,
     *,
     sample_usage: bool,
+    cache: Any | None = None,
 ) -> mx.array | tuple[mx.array, mx.array]:
+    trace = getattr(cache, "record_perf_ns", None)
+    sync_enabled = bool(getattr(cache, "perf_sync_enabled", lambda: False)())
+    total_started_ns = time.perf_counter_ns()
     if len(resident_state.slices) == 1 and not sample_usage:
         slice_ref = resident_state.slices[0]
         if slice_ref.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
@@ -294,7 +317,7 @@ def adaptive_scaled_dot_product_attention(
                 "runtime before reaching the generic attention path"
             )
         if slice_ref.logical_span == slice_ref.visible_span:
-            return mx.fast.scaled_dot_product_attention(
+            out = mx.fast.scaled_dot_product_attention(
                 queries,
                 slice_ref.keys_view,
                 slice_ref.values_view,
@@ -302,13 +325,23 @@ def adaptive_scaled_dot_product_attention(
                 mask=mask,
                 sinks=None,
             )
-    return _adaptive_segmented_reference_attention(
+            if sync_enabled:
+                mx.eval(out)
+            if trace is not None:
+                trace("attention.fast_path_ns", time.perf_counter_ns() - total_started_ns)
+                trace("attention.total_ns", time.perf_counter_ns() - total_started_ns)
+            return out
+    out = _adaptive_segmented_reference_attention(
         queries,
         resident_state,
         scale=scale,
         mask=mask,
         sample_usage=sample_usage,
+        cache=cache,
     )
+    if trace is not None:
+        trace("attention.total_ns", time.perf_counter_ns() - total_started_ns)
+    return out
 
 
 def scaled_dot_product_attention(
@@ -330,6 +363,7 @@ def scaled_dot_product_attention(
             scale=scale,
             mask=mask,
             sample_usage=cache.should_sample_usage(),
+            cache=cache,
         )
         if isinstance(out, tuple):
             out_tensor, usage_by_token = out

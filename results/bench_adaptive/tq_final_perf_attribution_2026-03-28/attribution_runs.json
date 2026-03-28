@@ -1,0 +1,1495 @@
+{
+  "runs": [
+    {
+      "name": "llama_short_hard",
+      "seed": 101,
+      "prompt_tokens": 128,
+      "decode_tokens": 16,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "adaptive_elapsed_s": 0.1704,
+      "adaptive_tok_s": 93.87,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "profile_transitions": 31.0,
+      "replay_forward_seconds_total": 0.013294249991304241,
+      "recovery_materialization_seconds_total": 0.0022095409949542955,
+      "post_recovery_decode_seconds_total": 0.0660277939750813,
+      "pressure_state": "hard",
+      "resident_bytes": 585728,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 16
+      },
+      "attention_path": {
+        "n_execution_slabs": 2,
+        "n_visible_slices": 3,
+        "slab_token_counts": [
+          15,
+          128
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            143
+          ]
+        ],
+        "fabric_compactions_total": 1,
+        "execution_view_topology_rebuilds_total": 12,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 271923171,
+        "traced_total_ms": 271.9232,
+        "stats": {
+          "attention.pass1_ns": {
+            "total_ns": 58115000,
+            "total_ms": 58.115,
+            "calls": 96,
+            "avg_ns": 605364.5833333334,
+            "avg_ms": 0.605365,
+            "share_of_traced_ns": 0.21371845505582163
+          },
+          "attention.pass2_ns": {
+            "total_ns": 47905664,
+            "total_ms": 47.9057,
+            "calls": 96,
+            "avg_ns": 499017.3333333333,
+            "avg_ms": 0.499017,
+            "share_of_traced_ns": 0.17617352660248287
+          },
+          "attention.total_ns": {
+            "total_ns": 106624879,
+            "total_ms": 106.6249,
+            "calls": 96,
+            "avg_ns": 1110675.8229166667,
+            "avg_ms": 1.110676,
+            "share_of_traced_ns": 0.3921139879616953
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 1916622,
+            "total_ms": 1.9166,
+            "calls": 96,
+            "avg_ns": 19964.8125,
+            "avg_ms": 0.019965,
+            "share_of_traced_ns": 0.007048395298391103
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 6337789,
+            "total_ms": 6.3378,
+            "calls": 96,
+            "avg_ns": 66018.63541666667,
+            "avg_ms": 0.066019,
+            "share_of_traced_ns": 0.023307278216463577
+          },
+          "fabric.block_slice_mapping_ns": {
+            "total_ns": 152716,
+            "total_ms": 0.1527,
+            "calls": 184,
+            "avg_ns": 829.9782608695652,
+            "avg_ms": 0.00083,
+            "share_of_traced_ns": 0.0005616145157412864
+          },
+          "fabric.query_total_ns": {
+            "total_ns": 3119037,
+            "total_ms": 3.119,
+            "calls": 96,
+            "avg_ns": 32489.96875,
+            "avg_ms": 0.03249,
+            "share_of_traced_ns": 0.01147028768651716
+          },
+          "fabric.slice_ref_count": {
+            "count": 184
+          },
+          "fabric.tensor_view_setup_ns": {
+            "total_ns": 888876,
+            "total_ms": 0.8889,
+            "calls": 184,
+            "avg_ns": 4830.847826086957,
+            "avg_ms": 0.004831,
+            "share_of_traced_ns": 0.003268849788457343
+          },
+          "fabric.visible_piece_count": {
+            "count": 1400
+          },
+          "fabric.visible_slice_derivation_ns": {
+            "total_ns": 1473328,
+            "total_ms": 1.4733,
+            "calls": 96,
+            "avg_ns": 15347.166666666666,
+            "avg_ms": 0.015347,
+            "share_of_traced_ns": 0.005418177474842701
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 15755250,
+            "total_ms": 15.7553,
+            "calls": 3,
+            "avg_ns": 5251750.0,
+            "avg_ms": 5.25175,
+            "share_of_traced_ns": 0.05794007896443661
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 67583,
+            "total_ms": 0.0676,
+            "calls": 3,
+            "avg_ns": 22527.666666666668,
+            "avg_ms": 0.022528,
+            "share_of_traced_ns": 0.00024853711344812173
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 16074166,
+            "total_ms": 16.0742,
+            "calls": 3,
+            "avg_ns": 5358055.333333333,
+            "avg_ms": 5.358055,
+            "share_of_traced_ns": 0.05911289553180446
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 5619499,
+            "total_ms": 5.6195,
+            "calls": 96,
+            "avg_ns": 58536.447916666664,
+            "avg_ms": 0.058536,
+            "share_of_traced_ns": 0.02066576003558005
+          },
+          "view.backend_query_ns": {
+            "total_ns": 3296595,
+            "total_ms": 3.2966,
+            "calls": 96,
+            "avg_ns": 34339.53125,
+            "avg_ms": 0.03434,
+            "share_of_traced_ns": 0.012123258889180871
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 96
+          },
+          "view.compose_state_ns": {
+            "total_ns": 278750,
+            "total_ms": 0.2787,
+            "calls": 96,
+            "avg_ns": 2903.6458333333335,
+            "avg_ms": 0.002904,
+            "share_of_traced_ns": 0.001025105727382092
+          },
+          "view.ordered_handles_ns": {
+            "total_ns": 208457,
+            "total_ms": 0.2085,
+            "calls": 96,
+            "avg_ns": 2171.4270833333335,
+            "avg_ms": 0.002171,
+            "share_of_traced_ns": 0.0007666025636336816
+          },
+          "view.query_key_ns": {
+            "total_ns": 17828,
+            "total_ms": 0.0178,
+            "calls": 97,
+            "avg_ns": 183.79381443298968,
+            "avg_ms": 0.000184,
+            "share_of_traced_ns": 6.556263644042309e-05
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 4060915,
+            "total_ms": 4.0609,
+            "calls": 97,
+            "avg_ns": 41865.1030927835,
+            "avg_ms": 0.041865,
+            "share_of_traced_ns": 0.014934052824795868
+          },
+          "view.visible_start_ns": {
+            "total_ns": 10217,
+            "total_ms": 0.0102,
+            "calls": 97,
+            "avg_ns": 105.3298969072165,
+            "avg_ms": 0.000105,
+            "share_of_traced_ns": 3.757311288488909e-05
+          }
+        }
+      }
+    },
+    {
+      "name": "llama_long_hard",
+      "seed": 131,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "adaptive_elapsed_s": 2.4354,
+      "adaptive_tok_s": 39.42,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 265.0,
+      "replay_forward_seconds_total": 0.152932166995015,
+      "recovery_materialization_seconds_total": 0.021426125007565133,
+      "post_recovery_decode_seconds_total": 0.8177393340301933,
+      "pressure_state": "hard",
+      "resident_bytes": 4583424,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      },
+      "attention_path": {
+        "n_execution_slabs": 11,
+        "n_visible_slices": 11,
+        "slab_token_counts": [
+          8,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          80,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            264
+          ],
+          [
+            264,
+            392
+          ],
+          [
+            392,
+            520
+          ],
+          [
+            520,
+            648
+          ],
+          [
+            648,
+            776
+          ],
+          [
+            776,
+            904
+          ],
+          [
+            904,
+            1032
+          ],
+          [
+            1032,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 88,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 4288961759,
+        "traced_total_ms": 4288.9618,
+        "stats": {
+          "attention.pass1_ns": {
+            "total_ns": 558355209,
+            "total_ms": 558.3552,
+            "calls": 640,
+            "avg_ns": 872430.0140625,
+            "avg_ms": 0.87243,
+            "share_of_traced_ns": 0.13018423580679914
+          },
+          "attention.pass2_ns": {
+            "total_ns": 470209604,
+            "total_ms": 470.2096,
+            "calls": 640,
+            "avg_ns": 734702.50625,
+            "avg_ms": 0.734703,
+            "share_of_traced_ns": 0.1096325009224686
+          },
+          "attention.total_ns": {
+            "total_ns": 1035934016,
+            "total_ms": 1035.934,
+            "calls": 640,
+            "avg_ns": 1618646.9,
+            "avg_ms": 1.618647,
+            "share_of_traced_ns": 0.24153491549002173
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 18815920,
+            "total_ms": 18.8159,
+            "calls": 640,
+            "avg_ns": 29399.875,
+            "avg_ms": 0.0294,
+            "share_of_traced_ns": 0.004387057068185905
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 138418465,
+            "total_ms": 138.4185,
+            "calls": 640,
+            "avg_ns": 216278.8515625,
+            "avg_ms": 0.216279,
+            "share_of_traced_ns": 0.032273187027033134
+          },
+          "fabric.block_slice_mapping_ns": {
+            "total_ns": 5423331,
+            "total_ms": 5.4233,
+            "calls": 4676,
+            "avg_ns": 1159.8227117194183,
+            "avg_ms": 0.00116,
+            "share_of_traced_ns": 0.0012644857438095893
+          },
+          "fabric.query_total_ns": {
+            "total_ns": 101408122,
+            "total_ms": 101.4081,
+            "calls": 640,
+            "avg_ns": 158450.190625,
+            "avg_ms": 0.15845,
+            "share_of_traced_ns": 0.02364397905558477
+          },
+          "fabric.slice_ref_count": {
+            "count": 4676
+          },
+          "fabric.tensor_view_setup_ns": {
+            "total_ns": 26055358,
+            "total_ms": 26.0554,
+            "calls": 4676,
+            "avg_ns": 5572.146706586826,
+            "avg_ms": 0.005572,
+            "share_of_traced_ns": 0.00607498025491255
+          },
+          "fabric.visible_piece_count": {
+            "count": 68240
+          },
+          "fabric.visible_slice_derivation_ns": {
+            "total_ns": 56408701,
+            "total_ms": 56.4087,
+            "calls": 640,
+            "avg_ns": 88138.5953125,
+            "avg_ms": 0.088139,
+            "share_of_traced_ns": 0.013152064338561989
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 712586873,
+            "total_ms": 712.5869,
+            "calls": 23,
+            "avg_ns": 30982037.95652174,
+            "avg_ms": 30.982038,
+            "share_of_traced_ns": 0.16614437550176347
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 1191127,
+            "total_ms": 1.1911,
+            "calls": 23,
+            "avg_ns": 51788.13043478261,
+            "avg_ms": 0.051788,
+            "share_of_traced_ns": 0.00027771919334569194
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 721253750,
+            "total_ms": 721.2537,
+            "calls": 23,
+            "avg_ns": 31358858.695652176,
+            "avg_ms": 31.358859,
+            "share_of_traced_ns": 0.16816511559855107
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 210842441,
+            "total_ms": 210.8424,
+            "calls": 640,
+            "avg_ns": 329441.3140625,
+            "avg_ms": 0.329441,
+            "share_of_traced_ns": 0.04915931939881864
+          },
+          "view.backend_query_ns": {
+            "total_ns": 103947506,
+            "total_ms": 103.9475,
+            "calls": 640,
+            "avg_ns": 162417.978125,
+            "avg_ms": 0.162418,
+            "share_of_traced_ns": 0.024236053348313382
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 640
+          },
+          "view.compose_state_ns": {
+            "total_ns": 4329712,
+            "total_ms": 4.3297,
+            "calls": 640,
+            "avg_ns": 6765.175,
+            "avg_ms": 0.006765,
+            "share_of_traced_ns": 0.0010095011900990933
+          },
+          "view.ordered_handles_ns": {
+            "total_ns": 6666322,
+            "total_ms": 6.6663,
+            "calls": 640,
+            "avg_ns": 10416.128125,
+            "avg_ms": 0.010416,
+            "share_of_traced_ns": 0.0015542973741864972
+          },
+          "view.query_key_ns": {
+            "total_ns": 123416,
+            "total_ms": 0.1234,
+            "calls": 641,
+            "avg_ns": 192.53666146645867,
+            "avg_ms": 0.000193,
+            "share_of_traced_ns": 2.8775262390955722e-05
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 116918630,
+            "total_ms": 116.9186,
+            "calls": 641,
+            "avg_ns": 182400.35881435257,
+            "avg_ms": 0.1824,
+            "share_of_traced_ns": 0.027260357300844845
+          },
+          "view.visible_start_ns": {
+            "total_ns": 73256,
+            "total_ms": 0.0733,
+            "calls": 641,
+            "avg_ns": 114.28393135725429,
+            "avg_ms": 0.000114,
+            "share_of_traced_ns": 1.7080124308937678e-05
+          }
+        }
+      }
+    },
+    {
+      "name": "ministral3_short",
+      "seed": 103,
+      "prompt_tokens": 128,
+      "decode_tokens": 16,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "adaptive_elapsed_s": 0.1591,
+      "adaptive_tok_s": 100.59,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "profile_transitions": 31.0,
+      "replay_forward_seconds_total": 0.011105583005701192,
+      "recovery_materialization_seconds_total": 0.002149457999621518,
+      "post_recovery_decode_seconds_total": 0.05815920799796004,
+      "pressure_state": "hard",
+      "resident_bytes": 585728,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 16
+      },
+      "attention_path": {
+        "n_execution_slabs": 2,
+        "n_visible_slices": 3,
+        "slab_token_counts": [
+          15,
+          128
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            143
+          ]
+        ],
+        "fabric_compactions_total": 1,
+        "execution_view_topology_rebuilds_total": 12,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 260553153,
+        "traced_total_ms": 260.5532,
+        "stats": {
+          "attention.pass1_ns": {
+            "total_ns": 59825542,
+            "total_ms": 59.8255,
+            "calls": 96,
+            "avg_ns": 623182.7291666666,
+            "avg_ms": 0.623183,
+            "share_of_traced_ns": 0.2296097410880305
+          },
+          "attention.pass2_ns": {
+            "total_ns": 47453542,
+            "total_ms": 47.4535,
+            "calls": 96,
+            "avg_ns": 494307.7291666667,
+            "avg_ms": 0.494308,
+            "share_of_traced_ns": 0.18212614759645607
+          },
+          "attention.total_ns": {
+            "total_ns": 107729962,
+            "total_ms": 107.73,
+            "calls": 96,
+            "avg_ns": 1122187.1041666667,
+            "avg_ms": 1.122187,
+            "share_of_traced_ns": 0.4134663532549921
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 1643497,
+            "total_ms": 1.6435,
+            "calls": 96,
+            "avg_ns": 17119.760416666668,
+            "avg_ms": 0.01712,
+            "share_of_traced_ns": 0.0063077225551747594
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 5343249,
+            "total_ms": 5.3432,
+            "calls": 96,
+            "avg_ns": 55658.84375,
+            "avg_ms": 0.055659,
+            "share_of_traced_ns": 0.02050732811511976
+          },
+          "fabric.block_slice_mapping_ns": {
+            "total_ns": 128074,
+            "total_ms": 0.1281,
+            "calls": 162,
+            "avg_ns": 790.5802469135803,
+            "avg_ms": 0.000791,
+            "share_of_traced_ns": 0.0004915465367636522
+          },
+          "fabric.query_total_ns": {
+            "total_ns": 2324789,
+            "total_ms": 2.3248,
+            "calls": 96,
+            "avg_ns": 24216.552083333332,
+            "avg_ms": 0.024217,
+            "share_of_traced_ns": 0.008922513403627859
+          },
+          "fabric.slice_ref_count": {
+            "count": 162
+          },
+          "fabric.tensor_view_setup_ns": {
+            "total_ns": 716908,
+            "total_ms": 0.7169,
+            "calls": 162,
+            "avg_ns": 4425.358024691358,
+            "avg_ms": 0.004425,
+            "share_of_traced_ns": 0.002751484646205759
+          },
+          "fabric.visible_piece_count": {
+            "count": 1104
+          },
+          "fabric.visible_slice_derivation_ns": {
+            "total_ns": 995623,
+            "total_ms": 0.9956,
+            "calls": 96,
+            "avg_ns": 10371.072916666666,
+            "avg_ms": 0.010371,
+            "share_of_traced_ns": 0.0038211896057922584
+          },
+          "family.window_query_key_ns": {
+            "total_ns": 83258,
+            "total_ms": 0.0833,
+            "calls": 97,
+            "avg_ns": 858.3298969072165,
+            "avg_ms": 0.000858,
+            "share_of_traced_ns": 0.0003195432449823396
+          },
+          "family.window_visible_start_ns": {
+            "total_ns": 51751,
+            "total_ms": 0.0518,
+            "calls": 97,
+            "avg_ns": 533.5154639175257,
+            "avg_ms": 0.000534,
+            "share_of_traced_ns": 0.00019861974189964993
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 11268708,
+            "total_ms": 11.2687,
+            "calls": 3,
+            "avg_ns": 3756236.0,
+            "avg_ms": 3.756236,
+            "share_of_traced_ns": 0.04324917150398099
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 35167,
+            "total_ms": 0.0352,
+            "calls": 3,
+            "avg_ns": 11722.333333333334,
+            "avg_ms": 0.011722,
+            "share_of_traced_ns": 0.000134970540924523
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 11460791,
+            "total_ms": 11.4608,
+            "calls": 3,
+            "avg_ns": 3820263.6666666665,
+            "avg_ms": 3.820264,
+            "share_of_traced_ns": 0.04398638384544899
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 4897712,
+            "total_ms": 4.8977,
+            "calls": 96,
+            "avg_ns": 51017.833333333336,
+            "avg_ms": 0.051018,
+            "share_of_traced_ns": 0.01879736224109328
+          },
+          "view.backend_query_ns": {
+            "total_ns": 2531451,
+            "total_ms": 2.5315,
+            "calls": 96,
+            "avg_ns": 26369.28125,
+            "avg_ms": 0.026369,
+            "share_of_traced_ns": 0.009715679779165827
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 96
+          },
+          "view.compose_state_ns": {
+            "total_ns": 248126,
+            "total_ms": 0.2481,
+            "calls": 96,
+            "avg_ns": 2584.6458333333335,
+            "avg_ms": 0.002585,
+            "share_of_traced_ns": 0.0009523047299297122
+          },
+          "view.ordered_handles_ns": {
+            "total_ns": 181254,
+            "total_ms": 0.1813,
+            "calls": 96,
+            "avg_ns": 1888.0625,
+            "avg_ms": 0.001888,
+            "share_of_traced_ns": 0.0006956507642031874
+          },
+          "view.query_key_ns": {
+            "total_ns": 134499,
+            "total_ms": 0.1345,
+            "calls": 97,
+            "avg_ns": 1386.5876288659795,
+            "avg_ms": 0.001387,
+            "share_of_traced_ns": 0.0005162056127564881
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 3404784,
+            "total_ms": 3.4048,
+            "calls": 97,
+            "avg_ns": 35100.865979381444,
+            "avg_ms": 0.035101,
+            "share_of_traced_ns": 0.013067521773570708
+          },
+          "view.visible_start_ns": {
+            "total_ns": 94466,
+            "total_ms": 0.0945,
+            "calls": 97,
+            "avg_ns": 973.8762886597938,
+            "avg_ms": 0.000974,
+            "share_of_traced_ns": 0.00036255941988159324
+          }
+        }
+      }
+    },
+    {
+      "name": "ministral3_long_soft_96",
+      "seed": 123,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "adaptive_elapsed_s": 1.8605,
+      "adaptive_tok_s": 51.6,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 265.0,
+      "replay_forward_seconds_total": 0.1658652079931926,
+      "recovery_materialization_seconds_total": 0.028401000003213994,
+      "post_recovery_decode_seconds_total": 0.6877455810463289,
+      "pressure_state": "hard",
+      "resident_bytes": 4583424,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      },
+      "attention_path": {
+        "n_execution_slabs": 11,
+        "n_visible_slices": 11,
+        "slab_token_counts": [
+          8,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          80,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            264
+          ],
+          [
+            264,
+            392
+          ],
+          [
+            392,
+            520
+          ],
+          [
+            520,
+            648
+          ],
+          [
+            648,
+            776
+          ],
+          [
+            776,
+            904
+          ],
+          [
+            904,
+            1032
+          ],
+          [
+            1032,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 88,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 3102692022,
+        "traced_total_ms": 3102.692,
+        "stats": {
+          "attention.pass1_ns": {
+            "total_ns": 462473419,
+            "total_ms": 462.4734,
+            "calls": 640,
+            "avg_ns": 722614.7171875,
+            "avg_ms": 0.722615,
+            "share_of_traced_ns": 0.1490555349099357
+          },
+          "attention.pass2_ns": {
+            "total_ns": 385263202,
+            "total_ms": 385.2632,
+            "calls": 640,
+            "avg_ns": 601973.753125,
+            "avg_ms": 0.601974,
+            "share_of_traced_ns": 0.12417062320985979
+          },
+          "attention.total_ns": {
+            "total_ns": 853731625,
+            "total_ms": 853.7316,
+            "calls": 640,
+            "avg_ns": 1333955.6640625,
+            "avg_ms": 1.333956,
+            "share_of_traced_ns": 0.27515835247150416
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 18944975,
+            "total_ms": 18.945,
+            "calls": 640,
+            "avg_ns": 29601.5234375,
+            "avg_ms": 0.029602,
+            "share_of_traced_ns": 0.006105979860607641
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 107156192,
+            "total_ms": 107.1562,
+            "calls": 640,
+            "avg_ns": 167431.55,
+            "avg_ms": 0.167432,
+            "share_of_traced_ns": 0.034536522233014594
+          },
+          "fabric.block_slice_mapping_ns": {
+            "total_ns": 3751699,
+            "total_ms": 3.7517,
+            "calls": 2974,
+            "avg_ns": 1261.4993275050438,
+            "avg_ms": 0.001261,
+            "share_of_traced_ns": 0.0012091754429373396
+          },
+          "fabric.query_total_ns": {
+            "total_ns": 68889657,
+            "total_ms": 68.8897,
+            "calls": 640,
+            "avg_ns": 107640.0890625,
+            "avg_ms": 0.10764,
+            "share_of_traced_ns": 0.02220318887969861
+          },
+          "fabric.slice_ref_count": {
+            "count": 2974
+          },
+          "fabric.tensor_view_setup_ns": {
+            "total_ns": 13366230,
+            "total_ms": 13.3662,
+            "calls": 2974,
+            "avg_ns": 4494.361129791527,
+            "avg_ms": 0.004494,
+            "share_of_traced_ns": 0.0043079461013936235
+          },
+          "fabric.visible_piece_count": {
+            "count": 37064
+          },
+          "fabric.visible_slice_derivation_ns": {
+            "total_ns": 37992414,
+            "total_ms": 37.9924,
+            "calls": 640,
+            "avg_ns": 59363.146875,
+            "avg_ms": 0.059363,
+            "share_of_traced_ns": 0.012244983946395695
+          },
+          "family.window_query_key_ns": {
+            "total_ns": 737724,
+            "total_ms": 0.7377,
+            "calls": 641,
+            "avg_ns": 1150.8954758190328,
+            "avg_ms": 0.001151,
+            "share_of_traced_ns": 0.0002377690066461904
+          },
+          "family.window_visible_start_ns": {
+            "total_ns": 357350,
+            "total_ms": 0.3574,
+            "calls": 641,
+            "avg_ns": 557.4882995319813,
+            "avg_ms": 0.000557,
+            "share_of_traced_ns": 0.0001151741769618667
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 426318750,
+            "total_ms": 426.3188,
+            "calls": 23,
+            "avg_ns": 18535597.826086957,
+            "avg_ms": 18.535598,
+            "share_of_traced_ns": 0.13740285757565918
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 927499,
+            "total_ms": 0.9275,
+            "calls": 23,
+            "avg_ns": 40326.04347826087,
+            "avg_ms": 0.040326,
+            "share_of_traced_ns": 0.00029893363357479894
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 432276542,
+            "total_ms": 432.2765,
+            "calls": 23,
+            "avg_ns": 18794632.260869566,
+            "avg_ms": 18.794632,
+            "share_of_traced_ns": 0.1393230584714476
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 121270417,
+            "total_ms": 121.2704,
+            "calls": 640,
+            "avg_ns": 189485.0265625,
+            "avg_ms": 0.189485,
+            "share_of_traced_ns": 0.03908554769217117
+          },
+          "view.backend_query_ns": {
+            "total_ns": 71329445,
+            "total_ms": 71.3294,
+            "calls": 640,
+            "avg_ns": 111452.2578125,
+            "avg_ms": 0.111452,
+            "share_of_traced_ns": 0.0229895344089037
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 640
+          },
+          "view.compose_state_ns": {
+            "total_ns": 3486736,
+            "total_ms": 3.4867,
+            "calls": 640,
+            "avg_ns": 5448.025,
+            "avg_ms": 0.005448,
+            "share_of_traced_ns": 0.0011237776663867672
+          },
+          "view.ordered_handles_ns": {
+            "total_ns": 7171823,
+            "total_ms": 7.1718,
+            "calls": 640,
+            "avg_ns": 11205.9734375,
+            "avg_ms": 0.011206,
+            "share_of_traced_ns": 0.0023114840110289234
+          },
+          "view.query_key_ns": {
+            "total_ns": 1120049,
+            "total_ms": 1.12,
+            "calls": 641,
+            "avg_ns": 1747.346333853354,
+            "avg_ms": 0.001747,
+            "share_of_traced_ns": 0.00036099264511532626
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 85462090,
+            "total_ms": 85.4621,
+            "calls": 641,
+            "avg_ns": 133326.1934477379,
+            "avg_ms": 0.133326,
+            "share_of_traced_ns": 0.027544496648078853
+          },
+          "view.visible_start_ns": {
+            "total_ns": 664184,
+            "total_ms": 0.6642,
+            "calls": 641,
+            "avg_ns": 1036.1684867394695,
+            "avg_ms": 0.001036,
+            "share_of_traced_ns": 0.00021406700867843983
+          }
+        }
+      }
+    },
+    {
+      "name": "qwen35_short_hybrid",
+      "seed": 107,
+      "prompt_tokens": 128,
+      "decode_tokens": 16,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "adaptive_elapsed_s": 0.2159,
+      "adaptive_tok_s": 74.12,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "profile_transitions": 31.0,
+      "replay_forward_seconds_total": 0.06065770800341852,
+      "recovery_materialization_seconds_total": 0.0016992079908959568,
+      "post_recovery_decode_seconds_total": 0.04703050199896097,
+      "pressure_state": "hard",
+      "resident_bytes": 185344,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 16
+      },
+      "attention_path": {
+        "n_execution_slabs": 2,
+        "n_visible_slices": 3,
+        "slab_token_counts": [
+          15,
+          128
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            143
+          ]
+        ],
+        "fabric_compactions_total": 1,
+        "execution_view_topology_rebuilds_total": 12,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 241727349,
+        "traced_total_ms": 241.7273,
+        "stats": {
+          "attention.pass1_ns": {
+            "total_ns": 72023627,
+            "total_ms": 72.0236,
+            "calls": 48,
+            "avg_ns": 1500492.2291666667,
+            "avg_ms": 1.500492,
+            "share_of_traced_ns": 0.2979539853390772
+          },
+          "attention.pass2_ns": {
+            "total_ns": 34008002,
+            "total_ms": 34.008,
+            "calls": 48,
+            "avg_ns": 708500.0416666666,
+            "avg_ms": 0.7085,
+            "share_of_traced_ns": 0.1406874403772988
+          },
+          "attention.total_ns": {
+            "total_ns": 106720086,
+            "total_ms": 106.7201,
+            "calls": 48,
+            "avg_ns": 2223335.125,
+            "avg_ms": 2.223335,
+            "share_of_traced_ns": 0.44148949815355815
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 1234789,
+            "total_ms": 1.2348,
+            "calls": 48,
+            "avg_ns": 25724.770833333332,
+            "avg_ms": 0.025725,
+            "share_of_traced_ns": 0.005108189061387505
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 3806706,
+            "total_ms": 3.8067,
+            "calls": 48,
+            "avg_ns": 79306.375,
+            "avg_ms": 0.079306,
+            "share_of_traced_ns": 0.015747932601536122
+          },
+          "fabric.block_slice_mapping_ns": {
+            "total_ns": 87002,
+            "total_ms": 0.087,
+            "calls": 92,
+            "avg_ns": 945.6739130434783,
+            "avg_ms": 0.000946,
+            "share_of_traced_ns": 0.00035991790072541604
+          },
+          "fabric.query_total_ns": {
+            "total_ns": 1668660,
+            "total_ms": 1.6687,
+            "calls": 48,
+            "avg_ns": 34763.75,
+            "avg_ms": 0.034764,
+            "share_of_traced_ns": 0.006903066644726245
+          },
+          "fabric.slice_ref_count": {
+            "count": 92
+          },
+          "fabric.tensor_view_setup_ns": {
+            "total_ns": 554750,
+            "total_ms": 0.5547,
+            "calls": 92,
+            "avg_ns": 6029.891304347826,
+            "avg_ms": 0.00603,
+            "share_of_traced_ns": 0.0022949409832811263
+          },
+          "fabric.visible_piece_count": {
+            "count": 700
+          },
+          "fabric.visible_slice_derivation_ns": {
+            "total_ns": 684165,
+            "total_ms": 0.6842,
+            "calls": 48,
+            "avg_ns": 14253.4375,
+            "avg_ms": 0.014253,
+            "share_of_traced_ns": 0.0028303168955863575
+          },
+          "family.hybrid_delegate_resolve_ns": {
+            "total_ns": 147487,
+            "total_ms": 0.1475,
+            "calls": 1210,
+            "avg_ns": 121.8900826446281,
+            "avg_ms": 0.000122,
+            "share_of_traced_ns": 0.0006101378292946074
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 6472249,
+            "total_ms": 6.4722,
+            "calls": 3,
+            "avg_ns": 2157416.3333333335,
+            "avg_ms": 2.157416,
+            "share_of_traced_ns": 0.026774996816764825
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 44166,
+            "total_ms": 0.0442,
+            "calls": 3,
+            "avg_ns": 14722.0,
+            "avg_ms": 0.014722,
+            "share_of_traced_ns": 0.0001827099837180608
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 6660125,
+            "total_ms": 6.6601,
+            "calls": 3,
+            "avg_ns": 2220041.6666666665,
+            "avg_ms": 2.220042,
+            "share_of_traced_ns": 0.027552219587697543
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 3202336,
+            "total_ms": 3.2023,
+            "calls": 48,
+            "avg_ns": 66715.33333333333,
+            "avg_ms": 0.066715,
+            "share_of_traced_ns": 0.013247719024130779
+          },
+          "view.backend_query_ns": {
+            "total_ns": 1809870,
+            "total_ms": 1.8099,
+            "calls": 48,
+            "avg_ns": 37705.625,
+            "avg_ms": 0.037706,
+            "share_of_traced_ns": 0.0074872372012816804
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 48
+          },
+          "view.compose_state_ns": {
+            "total_ns": 169164,
+            "total_ms": 0.1692,
+            "calls": 48,
+            "avg_ns": 3524.25,
+            "avg_ms": 0.003524,
+            "share_of_traced_ns": 0.0006998132428945804
+          },
+          "view.ordered_handles_ns": {
+            "total_ns": 122664,
+            "total_ms": 0.1227,
+            "calls": 48,
+            "avg_ns": 2555.5,
+            "avg_ms": 0.002556,
+            "share_of_traced_ns": 0.000507447752633071
+          },
+          "view.query_key_ns": {
+            "total_ns": 15793,
+            "total_ms": 0.0158,
+            "calls": 49,
+            "avg_ns": 322.3061224489796,
+            "avg_ms": 0.000322,
+            "share_of_traced_ns": 6.533393952043052e-05
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 2285710,
+            "total_ms": 2.2857,
+            "calls": 49,
+            "avg_ns": 46647.142857142855,
+            "avg_ms": 0.046647,
+            "share_of_traced_ns": 0.009455736016035157
+          },
+          "view.visible_start_ns": {
+            "total_ns": 9998,
+            "total_ms": 0.01,
+            "calls": 49,
+            "avg_ns": 204.0408163265306,
+            "avg_ms": 0.000204,
+            "share_of_traced_ns": 4.1360648852356376e-05
+          }
+        }
+      }
+    },
+    {
+      "name": "qwen35_long_soft_96",
+      "seed": 123,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "adaptive_elapsed_s": 1.6884,
+      "adaptive_tok_s": 56.86,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 265.0,
+      "replay_forward_seconds_total": 0.2626122090005083,
+      "recovery_materialization_seconds_total": 0.011124832992209122,
+      "post_recovery_decode_seconds_total": 0.45515349398192484,
+      "pressure_state": "hard",
+      "resident_bytes": 1184768,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      },
+      "attention_path": {
+        "n_execution_slabs": 11,
+        "n_visible_slices": 11,
+        "slab_token_counts": [
+          8,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          80,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            264
+          ],
+          [
+            264,
+            392
+          ],
+          [
+            392,
+            520
+          ],
+          [
+            520,
+            648
+          ],
+          [
+            648,
+            776
+          ],
+          [
+            776,
+            904
+          ],
+          [
+            904,
+            1032
+          ],
+          [
+            1032,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 88,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0
+      },
+      "performance_attribution": {
+        "enabled": true,
+        "sync_enabled": true,
+        "traced_total_ns": 2448606729,
+        "traced_total_ms": 2448.6067,
+        "stats": {
+          "attention.pass1_ns": {
+            "total_ns": 444938826,
+            "total_ms": 444.9388,
+            "calls": 320,
+            "avg_ns": 1390433.83125,
+            "avg_ms": 1.390434,
+            "share_of_traced_ns": 0.18171101987525412
+          },
+          "attention.pass2_ns": {
+            "total_ns": 224621962,
+            "total_ms": 224.622,
+            "calls": 320,
+            "avg_ns": 701943.63125,
+            "avg_ms": 0.701944,
+            "share_of_traced_ns": 0.09173460128966263
+          },
+          "attention.total_ns": {
+            "total_ns": 674705916,
+            "total_ms": 674.7059,
+            "calls": 320,
+            "avg_ns": 2108455.9875,
+            "avg_ms": 2.108456,
+            "share_of_traced_ns": 0.27554686835135295
+          },
+          "cache.update_and_fetch_append_ns": {
+            "total_ns": 9773354,
+            "total_ms": 9.7734,
+            "calls": 320,
+            "avg_ns": 30541.73125,
+            "avg_ms": 0.030542,
+            "share_of_traced_ns": 0.003991393915670318
+          },
+          "cache.update_and_fetch_total_ns": {
+            "total_ns": 70587837,
+            "total_ms": 70.5878,
+            "calls": 320,
+            "avg_ns": 220586.990625,
+            "avg_ms": 0.220587,
+            "share_of_traced_ns": 0.028827755867855413
+          },
+          "fabric.block_slice_mapping_ns": {
+            "total_ns": 3037456,
+            "total_ms": 3.0375,
+            "calls": 2338,
+            "avg_ns": 1299.1685201026519,
+            "avg_ms": 0.001299,
+            "share_of_traced_ns": 0.0012404833998150792
+          },
+          "fabric.query_total_ns": {
+            "total_ns": 50368125,
+            "total_ms": 50.3681,
+            "calls": 320,
+            "avg_ns": 157400.390625,
+            "avg_ms": 0.1574,
+            "share_of_traced_ns": 0.020570116223020476
+          },
+          "fabric.slice_ref_count": {
+            "count": 2338
+          },
+          "fabric.tensor_view_setup_ns": {
+            "total_ns": 10082683,
+            "total_ms": 10.0827,
+            "calls": 2338,
+            "avg_ns": 4312.524807527801,
+            "avg_ms": 0.004313,
+            "share_of_traced_ns": 0.004117722491156317
+          },
+          "fabric.visible_piece_count": {
+            "count": 34120
+          },
+          "fabric.visible_slice_derivation_ns": {
+            "total_ns": 30628408,
+            "total_ms": 30.6284,
+            "calls": 320,
+            "avg_ns": 95713.775,
+            "avg_ms": 0.095714,
+            "share_of_traced_ns": 0.012508504382207797
+          },
+          "family.hybrid_delegate_resolve_ns": {
+            "total_ns": 732956,
+            "total_ms": 0.733,
+            "calls": 8382,
+            "avg_ns": 87.44404676688141,
+            "avg_ms": 8.7e-05,
+            "share_of_traced_ns": 0.00029933594125967954
+          },
+          "manager.usage_snapshot_eval_ns": {
+            "total_ns": 351214249,
+            "total_ms": 351.2142,
+            "calls": 23,
+            "avg_ns": 15270184.739130436,
+            "avg_ms": 15.270185,
+            "share_of_traced_ns": 0.143434323217528
+          },
+          "manager.usage_snapshot_host_ns": {
+            "total_ns": 801957,
+            "total_ms": 0.802,
+            "calls": 23,
+            "avg_ns": 34867.69565217391,
+            "avg_ms": 0.034868,
+            "share_of_traced_ns": 0.00032751564001766653
+          },
+          "manager.usage_snapshot_total_ns": {
+            "total_ns": 355827709,
+            "total_ms": 355.8277,
+            "calls": 23,
+            "avg_ns": 15470769.956521738,
+            "avg_ms": 15.47077,
+            "share_of_traced_ns": 0.14531843957862456
+          },
+          "usage.record_from_attention_ns": {
+            "total_ns": 104149126,
+            "total_ms": 104.1491,
+            "calls": 320,
+            "avg_ns": 325466.01875,
+            "avg_ms": 0.325466,
+            "share_of_traced_ns": 0.04253403568915864
+          },
+          "view.backend_query_ns": {
+            "total_ns": 52130338,
+            "total_ms": 52.1303,
+            "calls": 320,
+            "avg_ns": 162907.30625,
+            "avg_ms": 0.162907,
+            "share_of_traced_ns": 0.021289796104288987
+          },
+          "view.cache_hit_count": {
+            "count": 1
+          },
+          "view.cache_miss_count": {
+            "count": 320
+          },
+          "view.compose_state_ns": {
+            "total_ns": 2236577,
+            "total_ms": 2.2366,
+            "calls": 320,
+            "avg_ns": 6989.303125,
+            "avg_ms": 0.006989,
+            "share_of_traced_ns": 0.0009134080101598871
+          },
+          "view.ordered_handles_ns": {
+            "total_ns": 3620376,
+            "total_ms": 3.6204,
+            "calls": 320,
+            "avg_ns": 11313.675,
+            "avg_ms": 0.011314,
+            "share_of_traced_ns": 0.001478545311961364
+          },
+          "view.query_key_ns": {
+            "total_ns": 70582,
+            "total_ms": 0.0706,
+            "calls": 321,
+            "avg_ns": 219.8816199376947,
+            "avg_ms": 0.00022,
+            "share_of_traced_ns": 2.8825372063248953e-05
+          },
+          "view.resident_state_total_ns": {
+            "total_ns": 59037281,
+            "total_ms": 59.0373,
+            "calls": 321,
+            "avg_ns": 183916.76323987538,
+            "avg_ms": 0.183917,
+            "share_of_traced_ns": 0.024110560630579727
+          },
+          "view.visible_start_ns": {
+            "total_ns": 41011,
+            "total_ms": 0.041,
+            "calls": 321,
+            "avg_ns": 127.7601246105919,
+            "avg_ms": 0.000128,
+            "share_of_traced_ns": 1.6748708363122367e-05
+          }
+        }
+      }
+    }
+  ]
+}

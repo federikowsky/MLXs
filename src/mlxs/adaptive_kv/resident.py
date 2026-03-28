@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
@@ -171,17 +172,26 @@ class _VisiblePiece:
 class ResidentExecutionFabric:
     """Persistent exact execution substrate for resident KV state."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, perf_trace: Any | None = None) -> None:
         self._slabs: dict[int, ExecutionSlab] = {}
         self._handles: dict[int, ResidentBlockHandle] = {}
         self._next_slab_id = 0
         self._compactions_total = 0
         self._cold_batch_depth = 0
         self._dirty_slab_ids: set[int] = set()
+        self._perf_trace = perf_trace
 
     @property
     def compactions_total(self) -> int:
         return self._compactions_total
+
+    def _record_perf_ns(self, name: str, elapsed_ns: int) -> None:
+        if self._perf_trace is not None:
+            self._perf_trace.record_ns(name, elapsed_ns)
+
+    def _increment_perf(self, name: str, delta: int = 1) -> None:
+        if self._perf_trace is not None:
+            self._perf_trace.increment(name, delta)
 
     def register_handle(self, handle: ResidentBlockHandle) -> None:
         self._handles[handle.block_id] = handle
@@ -498,7 +508,14 @@ class ResidentExecutionFabric:
     ) -> Any:
         from mlxs.adaptive_kv.storage import ExecutionSliceRef, ResidentStateView
 
+        query_started_ns = time.perf_counter_ns()
+        pieces_started_ns = query_started_ns
         pieces = self._visible_pieces(ordered_handles, visible_start=visible_start)
+        self._record_perf_ns(
+            "fabric.visible_slice_derivation_ns",
+            time.perf_counter_ns() - pieces_started_ns,
+        )
+        self._increment_perf("fabric.visible_piece_count", len(pieces))
         slices: list[ExecutionSliceRef] = []
         resident_cursor = resident_cursor_start
         slab_token_counts: dict[int, int] = {}
@@ -527,8 +544,9 @@ class ResidentExecutionFabric:
             slab_token_counts[slice_ref.slab_id] = (
                 slab_token_counts.get(slice_ref.slab_id, 0) + slice_ref.token_count
             )
+            self._increment_perf("fabric.slice_ref_count")
 
-        return ResidentStateView(
+        view = ResidentStateView(
             total_tokens=resident_cursor,
             slices=tuple(slices),
             topology_epoch=topology_epoch,
@@ -540,6 +558,8 @@ class ResidentExecutionFabric:
             execution_view_local_repairs_total=execution_view_local_repairs_total,
             execution_view_repaired_suffix_tokens_total=execution_view_repaired_suffix_tokens_total,
         )
+        self._record_perf_ns("fabric.query_total_ns", time.perf_counter_ns() - query_started_ns)
+        return view
 
     def _visible_pieces(
         self,
@@ -581,6 +601,7 @@ class ResidentExecutionFabric:
     ) -> Any:
         from mlxs.adaptive_kv.storage import ExecutionSliceRef
 
+        started_ns = time.perf_counter_ns()
         slab = self._slabs[group[0].slab_id]
         local_start = group[0].local_start
         local_end = group[-1].local_end
@@ -598,8 +619,10 @@ class ResidentExecutionFabric:
                 block_slices[-1] = (block_id, old_start, piece_end)
             else:
                 block_slices.append((piece.block_id, piece_start, piece_end))
+        block_slice_ns = time.perf_counter_ns() - started_ns
+        view_started_ns = time.perf_counter_ns()
 
-        return ExecutionSliceRef(
+        slice_ref = ExecutionSliceRef(
             slab_id=slab.slab_id,
             profile=slab.profile,
             token_count=token_count,
@@ -612,6 +635,12 @@ class ResidentExecutionFabric:
             values_view=slab.values[..., local_start:local_end, :],
             execution_mode=self._handles[group[0].block_id].execution_mode,
         )
+        self._record_perf_ns("fabric.block_slice_mapping_ns", block_slice_ns)
+        self._record_perf_ns(
+            "fabric.tensor_view_setup_ns",
+            time.perf_counter_ns() - view_started_ns,
+        )
+        return slice_ref
 
     def _remove_handle_fragments(self, handle: ResidentBlockHandle) -> None:
         for fragment in handle.fragments:
@@ -927,11 +956,22 @@ class TurboQuantResidentBackend:
         aggr_bits: int,
         safe_execution_mode: ResidentExecutionMode = ResidentExecutionMode.DEQUANTIZE_ON_READ,
         aggr_execution_mode: ResidentExecutionMode = ResidentExecutionMode.DEQUANTIZE_ON_READ,
+        perf_trace: Any | None = None,
     ) -> None:
         del safe_bits, aggr_bits
         self._safe_execution_mode = safe_execution_mode
         self._aggr_execution_mode = aggr_execution_mode
-        self.fabric = ResidentExecutionFabric()
+        self.fabric = ResidentExecutionFabric(perf_trace=perf_trace)
+
+    def _record_perf_ns(self, name: str, elapsed_ns: int) -> None:
+        trace = getattr(self.fabric, "_perf_trace", None)
+        if trace is not None:
+            trace.record_ns(name, elapsed_ns)
+
+    def _increment_perf(self, name: str, delta: int = 1) -> None:
+        trace = getattr(self.fabric, "_perf_trace", None)
+        if trace is not None:
+            trace.increment(name, delta)
 
     @property
     def compactions_total(self) -> int:

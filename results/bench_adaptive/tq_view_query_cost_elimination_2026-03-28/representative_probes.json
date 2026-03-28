@@ -1,0 +1,421 @@
+{
+  "runs": [
+    {
+      "name": "llama_short_hard",
+      "seed": 101,
+      "prompt_tokens": 128,
+      "decode_tokens": 16,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 221.48,
+      "adaptive_tok_s": 84.17,
+      "baseline_elapsed_s": 0.0722,
+      "adaptive_elapsed_s": 0.1901,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "profile_transitions": 31.0,
+      "pressure_state": "hard",
+      "resident_bytes": 585728,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 16
+      },
+      "attention_path": {
+        "n_execution_slabs": 2,
+        "n_visible_slices": 3,
+        "slab_token_counts": [
+          15,
+          128
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            143
+          ]
+        ],
+        "fabric_compactions_total": 1,
+        "execution_view_topology_rebuilds_total": 12,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0,
+        "execution_view_descriptor_fast_path_slices": 3,
+        "execution_view_trimmed_slices": 0
+      }
+    },
+    {
+      "name": "llama_long_hard",
+      "seed": 131,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 166.52,
+      "adaptive_tok_s": 39.64,
+      "baseline_elapsed_s": 0.5765,
+      "adaptive_elapsed_s": 2.4219,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 265.0,
+      "pressure_state": "hard",
+      "resident_bytes": 4583424,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      },
+      "attention_path": {
+        "n_execution_slabs": 11,
+        "n_visible_slices": 11,
+        "slab_token_counts": [
+          8,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          80,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            264
+          ],
+          [
+            264,
+            392
+          ],
+          [
+            392,
+            520
+          ],
+          [
+            520,
+            648
+          ],
+          [
+            648,
+            776
+          ],
+          [
+            776,
+            904
+          ],
+          [
+            904,
+            1032
+          ],
+          [
+            1032,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 88,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0,
+        "execution_view_descriptor_fast_path_slices": 11,
+        "execution_view_trimmed_slices": 0
+      }
+    },
+    {
+      "name": "ministral3_short",
+      "seed": 103,
+      "prompt_tokens": 128,
+      "decode_tokens": 16,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 372.69,
+      "adaptive_tok_s": 136.09,
+      "baseline_elapsed_s": 0.0429,
+      "adaptive_elapsed_s": 0.1176,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "profile_transitions": 31.0,
+      "pressure_state": "hard",
+      "resident_bytes": 585728,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 16
+      },
+      "attention_path": {
+        "n_execution_slabs": 2,
+        "n_visible_slices": 3,
+        "slab_token_counts": [
+          15,
+          128
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            143
+          ]
+        ],
+        "fabric_compactions_total": 1,
+        "execution_view_topology_rebuilds_total": 12,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0,
+        "execution_view_descriptor_fast_path_slices": 3,
+        "execution_view_trimmed_slices": 0
+      }
+    },
+    {
+      "name": "ministral3_long_soft_96",
+      "seed": 123,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 326.49,
+      "adaptive_tok_s": 54.74,
+      "baseline_elapsed_s": 0.294,
+      "adaptive_elapsed_s": 1.7537,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 265.0,
+      "pressure_state": "hard",
+      "resident_bytes": 4583424,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      },
+      "attention_path": {
+        "n_execution_slabs": 11,
+        "n_visible_slices": 11,
+        "slab_token_counts": [
+          8,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          80,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            264
+          ],
+          [
+            264,
+            392
+          ],
+          [
+            392,
+            520
+          ],
+          [
+            520,
+            648
+          ],
+          [
+            648,
+            776
+          ],
+          [
+            776,
+            904
+          ],
+          [
+            904,
+            1032
+          ],
+          [
+            1032,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 88,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0,
+        "execution_view_descriptor_fast_path_slices": 11,
+        "execution_view_trimmed_slices": 0
+      }
+    },
+    {
+      "name": "qwen35_short_hybrid",
+      "seed": 107,
+      "prompt_tokens": 128,
+      "decode_tokens": 16,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 162.08,
+      "adaptive_tok_s": 107.03,
+      "baseline_elapsed_s": 0.0987,
+      "adaptive_elapsed_s": 0.1495,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "profile_transitions": 31.0,
+      "pressure_state": "hard",
+      "resident_bytes": 185344,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 16
+      },
+      "attention_path": {
+        "n_execution_slabs": 2,
+        "n_visible_slices": 3,
+        "slab_token_counts": [
+          15,
+          128
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            143
+          ]
+        ],
+        "fabric_compactions_total": 1,
+        "execution_view_topology_rebuilds_total": 12,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0,
+        "execution_view_descriptor_fast_path_slices": 3,
+        "execution_view_trimmed_slices": 0
+      }
+    },
+    {
+      "name": "qwen35_long_soft_96",
+      "seed": 123,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 209.56,
+      "adaptive_tok_s": 56.82,
+      "baseline_elapsed_s": 0.4581,
+      "adaptive_elapsed_s": 1.6896,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 265.0,
+      "pressure_state": "hard",
+      "resident_bytes": 1184768,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      },
+      "attention_path": {
+        "n_execution_slabs": 11,
+        "n_visible_slices": 11,
+        "slab_token_counts": [
+          8,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          80,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            136
+          ],
+          [
+            136,
+            264
+          ],
+          [
+            264,
+            392
+          ],
+          [
+            392,
+            520
+          ],
+          [
+            520,
+            648
+          ],
+          [
+            648,
+            776
+          ],
+          [
+            776,
+            904
+          ],
+          [
+            904,
+            1032
+          ],
+          [
+            1032,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ],
+        "fabric_compactions_total": 2,
+        "execution_view_topology_rebuilds_total": 88,
+        "execution_view_local_repairs_total": 0,
+        "execution_view_repaired_suffix_tokens_total": 0,
+        "execution_view_descriptor_fast_path_slices": 11,
+        "execution_view_trimmed_slices": 0
+      }
+    }
+  ]
+}

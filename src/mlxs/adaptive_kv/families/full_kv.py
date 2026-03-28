@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
@@ -53,6 +54,7 @@ class FullAttentionKVRuntimeSubstrate(AdaptiveKVRuntimeSubstrate):
             aggr_bits=manager.config.tq_aggr_bits,
             safe_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
             aggr_execution_mode=self._aggr_execution_mode(),
+            perf_trace=manager.perf_trace,
         )
         return FullAttentionKVAdaptiveLayerCache(
             manager,
@@ -209,11 +211,13 @@ class FullAttentionKVAdaptiveLayerCache:
         return sum(handle.live_bytes for handle in self._handles.values())
 
     def update_and_fetch(self, keys: mx.array, values: mx.array) -> tuple[Any, Any]:
+        total_started_ns = time.perf_counter_ns()
         start = self._logical_offset
         end = start + keys.shape[2]
         if self._dtype is None:
             self._dtype = keys.dtype
         self._manager.ensure_block_coverage(end)
+        append_started_ns = time.perf_counter_ns()
         tail_epoch_changed = False
         append_only_topology_changed = False
         repair_logical_start: int | None = None
@@ -237,6 +241,10 @@ class FullAttentionKVAdaptiveLayerCache:
                     if repair_logical_start is None
                     else min(repair_logical_start, block.start_token)
                 )
+        self.record_perf_ns(
+            "cache.update_and_fetch_append_ns",
+            time.perf_counter_ns() - append_started_ns,
+        )
         if append_only_topology_changed:
             self._topology_epoch += 1
             self._append_only_topology_pending = True
@@ -246,6 +254,10 @@ class FullAttentionKVAdaptiveLayerCache:
         self._logical_offset = end
         self._manager.bump_resident_version()
         resident_state = self.resident_state_for_execution(query_tokens=keys.shape[2])
+        self.record_perf_ns(
+            "cache.update_and_fetch_total_ns",
+            time.perf_counter_ns() - total_started_ns,
+        )
         return resident_state, resident_state
 
     def remove_token_range(self, start: int, end: int) -> None:
@@ -332,8 +344,19 @@ class FullAttentionKVAdaptiveLayerCache:
         self._manager.bump_resident_version()
 
     def resident_state_for_execution(self, *, query_tokens: int = 1) -> ResidentStateView:
+        total_started_ns = time.perf_counter_ns()
+        query_key_started_ns = total_started_ns
         query_key = self._resident_view_query_key_for(query_tokens=query_tokens)
+        self.record_perf_ns(
+            "view.query_key_ns",
+            time.perf_counter_ns() - query_key_started_ns,
+        )
+        visible_started_ns = time.perf_counter_ns()
         visible_start = self._resident_visible_start_for_query(query_tokens=query_tokens)
+        self.record_perf_ns(
+            "view.visible_start_ns",
+            time.perf_counter_ns() - visible_started_ns,
+        )
         if (
             self._resident_state is not None
             and self._resident_view_topology_epoch == self._topology_epoch
@@ -341,19 +364,44 @@ class FullAttentionKVAdaptiveLayerCache:
             and self._resident_view_query_key == query_key
             and self._resident_view_visible_start == visible_start
         ):
+            self.increment_perf("view.cache_hit_count")
+            self.record_perf_ns(
+                "view.resident_state_total_ns",
+                time.perf_counter_ns() - total_started_ns,
+            )
             return self._resident_state
 
+        self.increment_perf("view.cache_miss_count")
+        ordered_started_ns = time.perf_counter_ns()
         ordered = tuple(self._ordered_handles(self._logical_offset))
+        self.record_perf_ns(
+            "view.ordered_handles_ns",
+            time.perf_counter_ns() - ordered_started_ns,
+        )
         if self._resident_view_topology_epoch != self._topology_epoch:
             self._execution_view_topology_rebuilds_total += 1
+        backend_started_ns = time.perf_counter_ns()
         queried = self._query_resident_state(ordered, query_tokens=query_tokens)
+        self.record_perf_ns(
+            "view.backend_query_ns",
+            time.perf_counter_ns() - backend_started_ns,
+        )
+        compose_started_ns = time.perf_counter_ns()
         self._resident_state = self._compose_resident_state(queried.slices)
+        self.record_perf_ns(
+            "view.compose_state_ns",
+            time.perf_counter_ns() - compose_started_ns,
+        )
         self._resident_view_topology_epoch = self._topology_epoch
         self._resident_view_tail_epoch = self._tail_epoch
         self._resident_view_query_key = query_key
         self._resident_view_visible_start = visible_start
         self._append_only_topology_pending = False
         self._append_only_repair_logical_start = None
+        self.record_perf_ns(
+            "view.resident_state_total_ns",
+            time.perf_counter_ns() - total_started_ns,
+        )
         return self._resident_state
 
     def _resident_view_query_key_for(self, *, query_tokens: int) -> Any:
@@ -481,6 +529,7 @@ class FullAttentionKVAdaptiveLayerCache:
         resident_state: ResidentStateView,
         usage_by_token: mx.array,
     ) -> None:
+        started_ns = time.perf_counter_ns()
         for slice_ref in resident_state.slices:
             seg_start, seg_end = slice_ref.resident_slice
             segment_usage = usage_by_token[seg_start:seg_end]
@@ -494,6 +543,10 @@ class FullAttentionKVAdaptiveLayerCache:
                     tuple(block_ids),
                     values[0] if len(values) == 1 else mx.concatenate(values, axis=0),
                 )
+        self.record_perf_ns(
+            "usage.record_from_attention_ns",
+            time.perf_counter_ns() - started_ns,
+        )
 
     def block_live_bytes(self, block_id: int) -> int:
         handle = self._handles.get(block_id)
@@ -577,6 +630,15 @@ class FullAttentionKVAdaptiveLayerCache:
         self._topology_epoch += 1
         self._append_only_topology_pending = False
         self._append_only_repair_logical_start = None
+
+    def record_perf_ns(self, name: str, elapsed_ns: int) -> None:
+        self._manager.record_perf_ns(name, elapsed_ns)
+
+    def increment_perf(self, name: str, delta: int = 1) -> None:
+        self._manager.increment_perf(name, delta)
+
+    def perf_sync_enabled(self) -> bool:
+        return self._manager.perf_sync_enabled()
 
 
 def make_full_kv_family_bindings() -> RuntimeFamilyBindings:
