@@ -502,8 +502,8 @@ The implementation for this branch should introduce or refactor toward the follo
 `ResidentStateView`
 - Ordered attention/runtime view assembled for execution from family-correct resident handles.
 
-`ResidentAttentionSegment`
-- Execution-facing segment metadata with family/profile-specific visibility semantics.
+`ExecutionSliceRef`
+- Execution-facing slice metadata over persistent resident slabs with family/profile-specific visibility semantics.
 
 `FamilyProfileCapabilities`
 - Support descriptor for each family/profile combination, including oracle-validation requirement and permitted execution modes.
@@ -593,6 +593,55 @@ Family B:
 Family C:
 - validate against exact hybrid baseline semantics, including both KV-bearing and pass-through recurrent/state layers.
 
+### 12.4 Final hardening matrix
+
+The final hardening/proof pass for this branch broadened validation beyond the retained representative closure set.
+
+That final matrix covered:
+
+- Family A, Family B, and Family C,
+- short and long prompt/decode shapes,
+- true soft-pressure and true hard-pressure operating points,
+- one warmup run plus three measured runs per core case,
+- additional pathology probes for equal-budget edges, tight hard-churn regimes, and chunk-size sensitivity.
+
+The core repeated matrix contained twelve measured cases:
+
+- Family A: short soft, short hard, long soft, long hard
+- Family B: short soft, short hard, long soft, long hard
+- Family C: short soft, short hard, long soft, long hard
+
+Final measured outcome:
+
+- all measured matrix cases remained exact,
+- `reference_token_match` remained closed,
+- `first_mismatch_token` remained `null`,
+- resident-byte outcomes were stable within each repeated case,
+- topology rebuild counts were stable within each repeated case.
+
+Representative medians from the broadened repeated matrix were:
+
+- Family A: short soft `277.82 tok/s`, short hard `193.20 tok/s`, long soft `55.76 tok/s`, long hard `48.32 tok/s`
+- Family B: short soft `189.70 tok/s`, short hard `150.54 tok/s`, long soft `77.15 tok/s`, long hard `76.39 tok/s`
+- Family C: short soft `178.87 tok/s`, short hard `155.79 tok/s`, long soft `80.66 tok/s`, long hard `65.26 tok/s`
+
+These values characterize the retained branch on the tiny-model proof harness used for exact closure. They are branch-proof evidence, not a promise of universal production throughput.
+
+### 12.5 Pathology findings and retained caveats
+
+The final pathology hunt did not find a new correctness blocker or a support-honesty blocker.
+
+Important retained findings:
+
+- equal-budget edge cases remained exact and converged into the expected hard-pressure regime with bounded resident bytes and explicit replay,
+- tight hard-churn regimes remained exact and operationally stable, but throughput dropped materially as pressure churn increased,
+- very small prefill chunks remained exact but were materially slower because they increased policy-window cadence and execution-view rebuild cadence,
+- short soft-pressure runs on the tiny-model proof harness showed more variance than long or hard runs; that variance did not correlate with correctness loss, resident-byte drift, or pressure-state instability.
+
+Operational caveat:
+
+- the retained branch is exact under small chunk sizes and churn-heavy hard budgets, but those settings are not performance-neutral; future evaluations should treat chunk-size selection as an operational parameter, not as a purely cosmetic benchmark knob.
+
 
 ## 13. Performance and Optimization Principles
 
@@ -653,6 +702,59 @@ The completed branch retains the following implementation position.
 - Metrics and diagnostics are resident-profile-aware and expose slab/slice execution-path state.
 - No operational `FULL` resident tier or hidden dense runtime fallback remains.
 
+### 14.1 Frozen baseline invariants
+
+The retained branch is frozen around the following invariants.
+
+Control-plane invariants:
+
+- `TQ_SAFE`, `TQ_AGGR`, and `EVICTED` are the only operational resident outcomes.
+- `EVICTED -> resident` is never implicit; replay-backed recovery is mandatory.
+- support is granted only through explicit runtime-family/adaptor gating and per-family oracle validation.
+
+Data-plane invariants:
+
+- resident hot-path storage is the persistent exact slab/slice execution substrate,
+- resident execution views are ordered slice-based views over those slabs,
+- transient grouped-segment assembly is not the retained hot path,
+- no retained lossy resident compression path is allowed to claim support without renewed oracle closure.
+
+Hot-path invariants:
+
+- one-slice exact fast paths are allowed where validated,
+- multi-slice resident execution remains exact relative to the family baseline,
+- no hidden dense fallback may silently replace the retained resident execution path.
+
+Cold-path invariants:
+
+- replay and recovery remain explicit,
+- cold mutation batching and deferred compaction may reduce cost but must not change semantics,
+- compaction is an implementation detail, not a correctness requirement.
+
+Family invariants:
+
+- Family A remains exact against contiguous full-history semantics,
+- Family B remains exact against resident logical span plus effective visible span under window-local replay semantics,
+- Family C keeps KV-bearing layers inside resident-profile planning and recurrent/state-array layers outside it.
+
+### 14.2 Forbidden regressions and future validation obligations
+
+Future changes must not reintroduce:
+
+- an operational `FULL` resident tier,
+- a hidden dense runtime fallback,
+- a retained lossy resident backend path without new oracle closure,
+- transient grouped-segment execution as the normative hot path,
+- benchmark-negative view-repair/composition paths or grouped-query fallbacks merely because they look architecturally elegant.
+
+Future changes that touch policy hot paths, resident execution, or replay behavior must rerun:
+
+- per-family short/long validation,
+- soft/hard budget validation,
+- representative warm repeated sweeps,
+- budget-edge and churn/pathology checks,
+- chunk-size sensitivity checks when prefill/decode cadence changes materially.
+
 ## 15. Final Closure Status
 
 The branch is complete and retained because all of the following are now true.
@@ -668,6 +770,38 @@ The branch is complete and retained because all of the following are now true.
 - The long path improved materially over earlier retained baselines.
 - The remaining short Family C gap was closed on warm representative sweeps.
 - The branch now clears the intended “excellent” bar and is considered archivable.
+
+### 15.1 Support and capability freeze
+
+For this branch, "supported" means:
+
+- the model path matches a registered runtime-family adapter,
+- the runtime surface is inside the single-request generation envelope,
+- all three operational resident outcomes (`TQ_SAFE`, `TQ_AGGR`, `EVICTED`) preserve exact family semantics,
+- the path is inside the retained oracle-validated support envelope.
+
+The final frozen support matrix is:
+
+- Family A `full_kv`:
+  supported for the registered Llama-style full-attention adapter when the runtime uses the standard homogeneous `list[KVCache]` baseline, the layers remain full-attention, and `head_dim % 32 == 0`
+- Family B `full_kv`:
+  supported only when the registered Ministral3 path is assessed as a homogeneous full-attention `list[KVCache]` baseline rather than the explicit sliding/windowed runtime
+- Family B `windowed_kv`:
+  supported for the registered Ministral3 adapter when sliding layers use the windowed runtime contract and the cache layout matches the adapter's expected `RotatingKVCache`/`KVCache` split; `head_dim % 32 == 0` remains required
+- Family C `full_kv`:
+  supported only when the registered Qwen3.5 path is assessed as a homogeneous `list[KVCache]` full-attention baseline
+- Family C `hybrid_state`:
+  supported for the registered Qwen3.5 adapter when KV-bearing layers and linear/state-array layers match the hybrid adapter contract (`KVCache` on full-attention layers and `ArraysCache` on linear-attention layers); `head_dim % 32 == 0` remains required
+
+Explicitly unsupported surfaces remain:
+
+- `compile_decode=True`
+- legacy `quantized_kv_start > 0`
+- external cache reuse
+- multimodal or `input_embeddings` requests
+- missing or malformed `model.make_cache()`
+- unregistered adapters or families
+- batch/speculative surfaces and complex cache-family compositions outside the registered support envelope
 
 ## 16. Historical Risks and Rejected Paths
 

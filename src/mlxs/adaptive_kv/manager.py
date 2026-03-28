@@ -252,10 +252,6 @@ class AdaptiveKVManager:
             "visible_spans": [slice_ref.visible_span for slice_ref in rs.slices],
             "fabric_compactions_total": rs.fabric_compactions_total,
             "execution_view_topology_rebuilds_total": rs.execution_view_topology_rebuilds_total,
-            "execution_view_local_repairs_total": rs.execution_view_local_repairs_total,
-            "execution_view_repaired_suffix_tokens_total": (
-                rs.execution_view_repaired_suffix_tokens_total
-            ),
         }
 
     def debug_snapshot(self) -> dict[str, Any]:

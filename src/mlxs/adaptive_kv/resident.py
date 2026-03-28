@@ -428,12 +428,9 @@ class ResidentExecutionFabric:
         return self._query_view(
             ordered_handles,
             visible_start=0,
-            resident_cursor_start=0,
             topology_epoch=topology_epoch,
             tail_epoch=tail_epoch,
             execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
-            execution_view_local_repairs_total=0,
-            execution_view_repaired_suffix_tokens_total=0,
         )
 
     def query_window_view(
@@ -451,35 +448,9 @@ class ResidentExecutionFabric:
         return self._query_view(
             ordered_handles,
             visible_start=visible_start,
-            resident_cursor_start=0,
             topology_epoch=topology_epoch,
             tail_epoch=tail_epoch,
             execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
-            execution_view_local_repairs_total=0,
-            execution_view_repaired_suffix_tokens_total=0,
-        )
-
-    def query_view_from_visible_start(
-        self,
-        ordered_handles: tuple[ResidentBlockHandle, ...],
-        *,
-        visible_start: int,
-        resident_cursor_start: int,
-        topology_epoch: int,
-        tail_epoch: int,
-        execution_view_topology_rebuilds_total: int,
-        execution_view_local_repairs_total: int,
-        execution_view_repaired_suffix_tokens_total: int,
-    ) -> Any:
-        return self._query_view(
-            ordered_handles,
-            visible_start=visible_start,
-            resident_cursor_start=resident_cursor_start,
-            topology_epoch=topology_epoch,
-            tail_epoch=tail_epoch,
-            execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
-            execution_view_local_repairs_total=execution_view_local_repairs_total,
-            execution_view_repaired_suffix_tokens_total=execution_view_repaired_suffix_tokens_total,
         )
 
     def slabs_for_handles(
@@ -499,12 +470,9 @@ class ResidentExecutionFabric:
         ordered_handles: tuple[ResidentBlockHandle, ...],
         *,
         visible_start: int,
-        resident_cursor_start: int,
         topology_epoch: int,
         tail_epoch: int,
         execution_view_topology_rebuilds_total: int,
-        execution_view_local_repairs_total: int,
-        execution_view_repaired_suffix_tokens_total: int,
     ) -> Any:
         from mlxs.adaptive_kv.storage import ExecutionSliceRef, ResidentStateView
 
@@ -517,7 +485,7 @@ class ResidentExecutionFabric:
         )
         self._increment_perf("fabric.visible_piece_count", len(pieces))
         slices: list[ExecutionSliceRef] = []
-        resident_cursor = resident_cursor_start
+        resident_cursor = 0
         slab_token_counts: dict[int, int] = {}
 
         idx = 0
@@ -555,8 +523,6 @@ class ResidentExecutionFabric:
             slab_token_counts=tuple(slab_token_counts.values()),
             fabric_compactions_total=self._compactions_total,
             execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
-            execution_view_local_repairs_total=execution_view_local_repairs_total,
-            execution_view_repaired_suffix_tokens_total=execution_view_repaired_suffix_tokens_total,
         )
         self._record_perf_ns("fabric.query_total_ns", time.perf_counter_ns() - query_started_ns)
         return view
@@ -1125,29 +1091,6 @@ class TurboQuantResidentBackend:
             topology_epoch=topology_epoch,
             tail_epoch=tail_epoch,
             execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
-        )
-
-    def query_view_from_visible_start(
-        self,
-        ordered_handles: tuple[ResidentBlockHandle, ...],
-        *,
-        visible_start: int,
-        resident_cursor_start: int,
-        topology_epoch: int,
-        tail_epoch: int,
-        execution_view_topology_rebuilds_total: int,
-        execution_view_local_repairs_total: int,
-        execution_view_repaired_suffix_tokens_total: int,
-    ) -> Any:
-        return self.fabric.query_view_from_visible_start(
-            ordered_handles,
-            visible_start=visible_start,
-            resident_cursor_start=resident_cursor_start,
-            topology_epoch=topology_epoch,
-            tail_epoch=tail_epoch,
-            execution_view_topology_rebuilds_total=execution_view_topology_rebuilds_total,
-            execution_view_local_repairs_total=execution_view_local_repairs_total,
-            execution_view_repaired_suffix_tokens_total=execution_view_repaired_suffix_tokens_total,
         )
 
 
