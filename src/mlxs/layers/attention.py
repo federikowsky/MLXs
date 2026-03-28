@@ -10,7 +10,7 @@ from typing import Any
 import mlx.core as mx
 from mlx.utils import tree_map
 
-from mlxs.adaptive_kv.block_types import BlockTier
+from mlxs.adaptive_kv.resident import ResidentExecutionMode, ResidentStorageKind
 
 
 def quantized_scaled_dot_product_attention(
@@ -150,16 +150,19 @@ def _quantized_segment_output(
 
 
 def _dequantized_segment_tensors(
-    q_state: tuple[mx.array, mx.array, mx.array],
+    segment_state: tuple[mx.array, ...],
     *,
+    storage_kind: ResidentStorageKind,
     group_size: int,
     bits: int,
     dtype: mx.Dtype,
 ) -> mx.array:
+    if storage_kind is ResidentStorageKind.BITPACKED_EXACT:
+        return segment_state[0].view(dtype)
     return mx.dequantize(
-        q_state[0],
-        q_state[1],
-        q_state[2],
+        segment_state[0],
+        segment_state[1],
+        segment_state[2],
         group_size=group_size,
         bits=bits,
         dtype=dtype,
@@ -170,34 +173,24 @@ def _segment_scores(
     queries: mx.array,
     segment: Any,
     *,
-    full_keys: mx.array | None,
     scale: float,
 ) -> mx.array:
-    if segment.tier is BlockTier.FULL:
-        if full_keys is None or segment.full_slice is None:
-            raise ValueError("Adaptive FULL segment is missing contiguous resident tensors")
-        start, end = segment.full_slice
-        return _full_segment_scores(
-            queries,
-            full_keys[..., start:end, :],
-            scale=scale,
-        )
-    if (
-        segment.q_keys is None
-        or segment.group_size is None
-        or segment.bits is None
-    ):
-        raise ValueError("Adaptive COMPRESSED segment is missing quantized resident tensors")
-    if segment.dequantize_for_attention:
+    if segment.execution_mode is ResidentExecutionMode.DEQUANTIZE_ON_READ:
         return _full_segment_scores(
             queries,
             _dequantized_segment_tensors(
                 segment.q_keys,
+                storage_kind=segment.storage_kind,
                 group_size=segment.group_size,
                 bits=segment.bits,
                 dtype=queries.dtype,
             ),
             scale=scale,
+        )
+    if segment.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
+        raise ValueError(
+            "Family-specific adaptive attention execution must be resolved by the "
+            "runtime before reaching the generic attention path"
         )
     return _quantized_segment_scores(
         queries,
@@ -211,32 +204,22 @@ def _segment_scores(
 def _segment_output(
     weights: mx.array,
     segment: Any,
-    *,
-    full_values: mx.array | None,
 ) -> mx.array:
-    if segment.tier is BlockTier.FULL:
-        if full_values is None or segment.full_slice is None:
-            raise ValueError("Adaptive FULL segment is missing contiguous resident tensors")
-        start, end = segment.full_slice
-        return _full_segment_output(
-            weights,
-            full_values[..., start:end, :],
-        )
-    if (
-        segment.q_values is None
-        or segment.group_size is None
-        or segment.bits is None
-    ):
-        raise ValueError("Adaptive COMPRESSED segment is missing quantized resident tensors")
-    if segment.dequantize_for_attention:
+    if segment.execution_mode is ResidentExecutionMode.DEQUANTIZE_ON_READ:
         return _full_segment_output(
             weights,
             _dequantized_segment_tensors(
                 segment.q_values,
+                storage_kind=segment.storage_kind,
                 group_size=segment.group_size,
                 bits=segment.bits,
                 dtype=weights.dtype,
             ),
+        )
+    if segment.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
+        raise ValueError(
+            "Family-specific adaptive attention execution must be resolved by the "
+            "runtime before reaching the generic attention path"
         )
     return _quantized_segment_output(
         weights,
@@ -268,31 +251,10 @@ def _apply_attention_mask(
     return scores, mask
 
 
-def _is_all_full_contiguous_resident_state(
-    resident_state: Any,
-    full_keys: mx.array | None,
-    full_values: mx.array | None,
-) -> bool:
-    if full_keys is None or full_values is None or resident_state.has_compressed:
-        return False
-    if len(resident_state.segments) != 1:
-        return False
-    segment = resident_state.segments[0]
-    return (
-        segment.tier is BlockTier.FULL
-        and segment.token_count == resident_state.total_tokens
-        and segment.full_slice == (0, resident_state.total_tokens)
-        and full_keys.shape[2] == resident_state.total_tokens
-        and full_values.shape[2] == resident_state.total_tokens
-    )
-
-
 def _adaptive_segmented_reference_attention(
     queries: mx.array,
     resident_state: Any,
     *,
-    full_keys: mx.array | None,
-    full_values: mx.array | None,
     scale: float,
     mask: mx.array | str | None,
     sample_usage: bool,
@@ -303,7 +265,6 @@ def _adaptive_segmented_reference_attention(
             _segment_scores(
                 queries,
                 segment,
-                full_keys=full_keys,
                 scale=scale,
             )
         )
@@ -325,75 +286,8 @@ def _adaptive_segmented_reference_attention(
         segment_out = _segment_output(
             segment_weights,
             segment,
-            full_values=full_values,
         )
         out = segment_out if out is None else out + segment_out
-    if out is None:
-        raise ValueError("Adaptive attention requires at least one resident segment output")
-    if usage_parts is None:
-        return out
-    usage_by_token = (
-        usage_parts[0]
-        if len(usage_parts) == 1
-        else mx.concatenate(usage_parts, axis=0)
-    )
-    return out, usage_by_token
-
-
-def _adaptive_decode_mixed_tier_attention(
-    queries: mx.array,
-    resident_state: Any,
-    *,
-    full_keys: mx.array,
-    full_values: mx.array | None,
-    scale: float,
-    mask: mx.array | str | None,
-    sample_usage: bool,
-) -> mx.array | tuple[mx.array, mx.array]:
-    full_scores = _full_segment_scores(
-        queries,
-        full_keys,
-        scale=scale,
-    )
-
-    score_parts: list[mx.array] = []
-    for segment in resident_state.segments:
-        if segment.tier is BlockTier.FULL:
-            if segment.full_slice is None:
-                raise ValueError("Adaptive FULL segment is missing contiguous resident tensors")
-            start, end = segment.full_slice
-            score_parts.append(full_scores[..., start:end])
-            continue
-        score_parts.append(
-            _segment_scores(
-                queries,
-                segment,
-                full_keys=None,
-                scale=scale,
-            )
-        )
-
-    if not score_parts:
-        raise ValueError("Adaptive attention requires at least one resident segment")
-
-    scores = score_parts[0] if len(score_parts) == 1 else mx.concatenate(score_parts, axis=-1)
-    scores, _ = _apply_attention_mask(scores, mask)
-    weights = mx.softmax(scores, axis=-1, precise=True)
-
-    out: mx.array | None = None
-    usage_parts: list[mx.array] | None = [] if sample_usage else None
-    for segment in resident_state.segments:
-        start, end = segment.resident_slice
-        segment_weights = weights[..., start:end]
-        if usage_parts is not None:
-            usage_parts.append(_usage_by_token(segment_weights))
-        segment_out = _segment_output(
-            segment_weights,
-            segment,
-            full_values=full_values,
-        )
-        out = segment_out if out is None else out + segment_out
-
     if out is None:
         raise ValueError("Adaptive attention requires at least one resident segment output")
     if usage_parts is None:
@@ -414,66 +308,24 @@ def adaptive_scaled_dot_product_attention(
     *,
     sample_usage: bool,
 ) -> mx.array | tuple[mx.array, mx.array]:
-    if resident_state.full_keys is None or resident_state.full_values is None:
-        full_keys = None
-        full_values = None
-    else:
-        full_keys = resident_state.full_keys
-        full_values = resident_state.full_values
-
-    if (
-        _is_all_full_contiguous_resident_state(
-            resident_state,
-            full_keys,
-            full_values,
-        )
-        and full_keys is not None
-        and full_values is not None
-    ):
-        # Keep the generation result on fused SDPA when adaptive resident state is
-        # semantically identical to the baseline contiguous FULL cache.
-        out = mx.fast.scaled_dot_product_attention(
-            queries,
-            full_keys,
-            full_values,
-            scale=scale,
-            mask=mask,
-            sinks=None,
-        )
-        if not sample_usage:
-            return out
-        scores = _full_segment_scores(
-            queries,
-            full_keys,
-            scale=scale,
-        )
-        scores, _ = _apply_attention_mask(scores, mask)
-        weights = mx.softmax(scores, axis=-1, precise=True)
-        return out, weights.mean(axis=(0, 1, 2))
     if (
         len(resident_state.segments) == 1
-        and resident_state.segments[0].tier is BlockTier.COMPRESSED
         and not sample_usage
     ):
         segment = resident_state.segments[0]
-        if (
-            segment.q_keys is None
-            or segment.q_values is None
-            or segment.group_size is None
-            or segment.bits is None
-        ):
-            raise ValueError("Adaptive COMPRESSED segment is missing quantized resident tensors")
-        if segment.dequantize_for_attention:
+        if segment.execution_mode is ResidentExecutionMode.DEQUANTIZE_ON_READ:
             return mx.fast.scaled_dot_product_attention(
                 queries,
                 _dequantized_segment_tensors(
                     segment.q_keys,
+                    storage_kind=segment.storage_kind,
                     group_size=segment.group_size,
                     bits=segment.bits,
                     dtype=queries.dtype,
                 ),
                 _dequantized_segment_tensors(
                     segment.q_values,
+                    storage_kind=segment.storage_kind,
                     group_size=segment.group_size,
                     bits=segment.bits,
                     dtype=queries.dtype,
@@ -481,6 +333,11 @@ def adaptive_scaled_dot_product_attention(
                 scale=scale,
                 mask=mask,
                 sinks=None,
+            )
+        if segment.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
+            raise ValueError(
+                "Family-specific adaptive attention execution must be resolved by the "
+                "runtime before reaching the generic attention path"
             )
         return quantized_scaled_dot_product_attention(
             queries,
@@ -491,27 +348,9 @@ def adaptive_scaled_dot_product_attention(
             group_size=segment.group_size,
             bits=segment.bits,
         )
-    if (
-        queries.shape[-2] == 1
-        and full_keys is not None
-        and full_values is not None
-        and resident_state.full_segments
-        and len(resident_state.segments) > 1
-    ):
-        return _adaptive_decode_mixed_tier_attention(
-            queries,
-            resident_state,
-            full_keys=full_keys,
-            full_values=full_values,
-            scale=scale,
-            mask=mask,
-            sample_usage=sample_usage,
-        )
     return _adaptive_segmented_reference_attention(
         queries,
         resident_state,
-        full_keys=full_keys,
-        full_values=full_values,
         scale=scale,
         mask=mask,
         sample_usage=sample_usage,
@@ -528,7 +367,7 @@ def scaled_dot_product_attention(
     sinks: mx.array | None = None,
 ) -> mx.array:
     """Dispatch SDPA to quantized or standard path based on cache type."""
-    if hasattr(cache, "resident_state_for_attention"):
+    if hasattr(cache, "resident_state_for_execution"):
         if sinks is not None:
             raise ValueError("Adaptive segmented SDPA does not support attention sinks.")
         out = adaptive_scaled_dot_product_attention(

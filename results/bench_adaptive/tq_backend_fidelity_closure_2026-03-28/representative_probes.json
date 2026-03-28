@@ -1,0 +1,130 @@
+{
+  "runs": [
+    {
+      "name": "llama_short_hard",
+      "seed": 101,
+      "prompt_tokens": 128,
+      "decode_tokens": 16,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 281.84,
+      "adaptive_tok_s": 194.27,
+      "baseline_elapsed_s": 0.0568,
+      "adaptive_elapsed_s": 0.0824,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 585728,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 16
+      }
+    },
+    {
+      "name": "llama_long_hard",
+      "seed": 131,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 403.73,
+      "adaptive_tok_s": 62.92,
+      "baseline_elapsed_s": 0.2378,
+      "adaptive_elapsed_s": 1.5257,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 4583424,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      }
+    },
+    {
+      "name": "ministral3_short",
+      "seed": 23,
+      "prompt_tokens": 4,
+      "decode_tokens": 4,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 308.95,
+      "adaptive_tok_s": 273.49,
+      "baseline_elapsed_s": 0.0129,
+      "adaptive_elapsed_s": 0.0146,
+      "evictions": 1.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 28672,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 2
+      }
+    },
+    {
+      "name": "ministral3_long_soft_96",
+      "seed": 123,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 368.56,
+      "adaptive_tok_s": 91.11,
+      "baseline_elapsed_s": 0.2605,
+      "adaptive_elapsed_s": 1.0537,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 4583424,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      }
+    },
+    {
+      "name": "qwen35_short_hybrid",
+      "seed": 19,
+      "prompt_tokens": 4,
+      "decode_tokens": 4,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 245.72,
+      "adaptive_tok_s": 339.49,
+      "baseline_elapsed_s": 0.0163,
+      "adaptive_elapsed_s": 0.0118,
+      "evictions": 1.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 46080,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 2
+      }
+    },
+    {
+      "name": "qwen35_long_soft_96",
+      "seed": 123,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 233.65,
+      "adaptive_tok_s": 71.29,
+      "baseline_elapsed_s": 0.4109,
+      "adaptive_elapsed_s": 1.3466,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 1184768,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      }
+    }
+  ]
+}

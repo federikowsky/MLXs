@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mlxs.adaptive_kv.block_types import BlockRecord, BlockTier, PinState
+from mlxs.adaptive_kv.block_types import BlockRecord, PinState, ResidentProfile
 from mlxs.adaptive_kv.config import AdaptiveKVConfig
 from mlxs.adaptive_kv.scoring import AdaptiveScoreEngine
 
@@ -14,7 +14,7 @@ def _block(structural_prior: float = 0.2) -> BlockRecord:
         source_end=4,
         segment_id=0,
         pin_state=PinState.NORMAL,
-        tier=BlockTier.FULL,
+        profile=ResidentProfile.TQ_SAFE,
         created_step=0,
         structural_prior=structural_prior,
     )
@@ -57,4 +57,3 @@ def test_structural_prior_keeps_score_bounded() -> None:
     updated = engine.update(block, usage=0.0, step=1)
 
     assert updated.score.composite == 1.0
-

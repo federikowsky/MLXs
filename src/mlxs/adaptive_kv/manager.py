@@ -9,9 +9,9 @@ from mlxs.adaptive_kv.adapters import default_generation_adapter
 from mlxs.adaptive_kv.block_registry import AdaptiveBlockRegistry
 from mlxs.adaptive_kv.block_types import (
     BlockRecord,
-    BlockTier,
     PinState,
     PressureState,
+    ResidentProfile,
     TransitionRecord,
 )
 from mlxs.adaptive_kv.config import AdaptiveKVConfig
@@ -19,19 +19,19 @@ from mlxs.adaptive_kv.eviction import AdaptiveEvictionEngine
 from mlxs.adaptive_kv.exceptions import AdaptiveKVError, AdaptiveKVUnsupportedError
 from mlxs.adaptive_kv.ghost import AdaptiveGhostStore
 from mlxs.adaptive_kv.metrics import (
-    DEMOTIONS_TOTAL,
+    DEGRADES_TOTAL,
     EVICTIONS_TOTAL,
     POLICY_TIME_SECONDS,
     POST_RECOVERY_DECODE_FORWARDS_TOTAL,
     POST_RECOVERY_DECODE_TIME_SECONDS_TOTAL,
     PRESSURE_HARD_COUNT,
     PRESSURE_SOFT_COUNT,
-    PROMOTIONS_TOTAL,
     RECOMPUTATIONS_TOTAL,
     RECOVERY_MATERIALIZATION_EVENTS_TOTAL,
     RECOVERY_MATERIALIZATION_TIME_SECONDS_TOTAL,
     REPLAY_FORWARD_EVENTS_TOTAL,
     REPLAY_FORWARD_TIME_SECONDS_TOTAL,
+    RESTORES_TOTAL,
     SCORE_UPDATES_TOTAL,
     block_debug_view,
     emit_population,
@@ -51,13 +51,11 @@ _DEFAULT_LAYER_RUNTIME = default_generation_adapter().layer_runtime_type
 if _DEFAULT_LAYER_RUNTIME is None:
     raise RuntimeError("Adaptive KV default adapter must expose a concrete layer runtime type")
 
-# Backward-compatible alias retained for tests and diagnostics that still refer to
-# the currently retained concrete layer runtime.
 AdaptiveLayerCache = _DEFAULT_LAYER_RUNTIME
 
 
 class AdaptiveKVManager:
-    """Top-level coordinator for adaptive KV V1."""
+    """Top-level coordinator for the TurboQuant-first Adaptive KV branch."""
 
     def __init__(
         self,
@@ -175,20 +173,7 @@ class AdaptiveKVManager:
         self.metrics.histogram(POLICY_TIME_SECONDS, time.perf_counter() - started)
 
     def should_sample_usage(self) -> bool:
-        if self._collect_usage_this_forward:
-            return True
-        return any(block.tier is BlockTier.COMPRESSED for block in self.registry.snapshot())
-
-    def force_full_for_append(self, block_id: int) -> BlockRecord:
-        block = self.registry.get(block_id)
-        if block.tier is BlockTier.FULL:
-            return block
-        if block.tier is BlockTier.EVICTED:
-            raise AdaptiveKVError(
-                f"Block {block_id} cannot be resurrected for append without replay"
-            )
-        self._promote_block(block, reason="append_requires_full")
-        return self.registry.get(block_id)
+        return self._collect_usage_this_forward
 
     def request_recompute(self, block_ids: tuple[int, ...], *, reason: str) -> Any:
         return self.recompute.request(block_ids, reason=reason)
@@ -200,11 +185,6 @@ class AdaptiveKVManager:
         self.metrics.counter(POST_RECOVERY_DECODE_FORWARDS_TOTAL)
 
     def attention_path_stats(self) -> dict[str, Any]:
-        """Diagnostic only: segment structure for a representative attention-bearing layer.
-
-        Counts match ``AdaptiveLayerCache.resident_state_for_attention`` — the hot-path
-        segment list (FULL runs coalesced; each compressed *run* is one segment).
-        """
         if not self._layer_caches:
             return {}
         rs = None
@@ -213,31 +193,20 @@ class AdaptiveKVManager:
             if not layer_cache.should_sample_usage():
                 continue
             try:
-                rs = layer_cache.resident_state_for_attention()
+                rs = layer_cache.resident_state_for_execution()
                 break
             except (AdaptiveKVError, RuntimeError) as exc:
                 last_error = str(exc)
         if rs is None:
             return {"error": last_error or "no attention-bearing adaptive layer is available"}
-        n_full = sum(1 for s in rs.segments if s.tier is BlockTier.FULL)
-        n_comp = sum(1 for s in rs.segments if s.tier is BlockTier.COMPRESSED)
-        logical_in_comp_runs = sum(
-            len(s.block_slices) for s in rs.segments if s.tier is BlockTier.COMPRESSED
-        )
-        logical_in_full_segments = sum(
-            len(s.block_slices) for s in rs.segments if s.tier is BlockTier.FULL
-        )
-        comp_counts = [s.token_count for s in rs.segments if s.tier is BlockTier.COMPRESSED]
-        comp_span = sum(comp_counts)
+        n_safe = sum(1 for s in rs.segments if s.profile is ResidentProfile.TQ_SAFE)
+        n_aggr = sum(1 for s in rs.segments if s.profile is ResidentProfile.TQ_AGGR)
         return {
-            "n_attention_segments": len(rs.segments),
-            "n_full_attention_segments": n_full,
-            "n_compressed_attention_segments": n_comp,
-            "logical_blocks_in_compressed_runs": logical_in_comp_runs,
-            "logical_blocks_in_full_segments": logical_in_full_segments,
-            "compressed_attention_token_span": comp_span,
-            "max_compressed_segment_tokens": max(comp_counts) if comp_counts else 0,
-            "compressed_segment_token_counts": comp_counts,
+            "n_execution_segments": len(rs.segments),
+            "n_tq_safe_segments": n_safe,
+            "n_tq_aggr_segments": n_aggr,
+            "segment_token_counts": [segment.token_count for segment in rs.segments],
+            "visible_spans": [segment.visible_span for segment in rs.segments],
         }
 
     def debug_snapshot(self) -> dict[str, Any]:
@@ -275,8 +244,20 @@ class AdaptiveKVManager:
         history_tokens = self.history_token_count()
         if history_tokens == 0:
             return ()
+        required_start = min(
+            (
+                layer_cache.required_history_start(history_tokens)
+                for layer_cache in self._layer_caches
+                if layer_cache.should_sample_usage()
+            ),
+            default=0,
+        )
         return tuple(
-            block.block_id for block in self.registry.required_evicted_blocks(history_tokens)
+            block.block_id
+            for block in self.registry.required_evicted_blocks(
+                history_tokens,
+                start_token=required_start,
+            )
         )
 
     def _protected_block_ids(self) -> set[int]:
@@ -330,16 +311,16 @@ class AdaptiveKVManager:
 
     def _apply_transitions(self, *, pressure: PressureState, protected: set[int]) -> None:
         for block in self.registry.snapshot():
-            if self.transitions.should_promote(block, pressure=pressure, step=self.decode_steps):
-                self._promote_block(block, reason="score_promote")
+            if self.transitions.should_restore(block, pressure=pressure, step=self.decode_steps):
+                self._restore_block(block, reason="score_restore")
                 continue
-            if self.transitions.should_demote(
+            if self.transitions.should_degrade(
                 block,
                 pressure=pressure,
                 recent_tail=protected,
                 step=self.decode_steps,
             ):
-                self._demote_block(block, reason="score_demote")
+                self._degrade_block(block, reason="score_degrade")
 
     def _evict_if_needed(self, *, pressure: PressureState, protected: set[int]) -> None:
         if pressure is not PressureState.HARD:
@@ -361,42 +342,54 @@ class AdaptiveKVManager:
                 break
         self._update_hard_best_achievable_state(pressure=pressure, protected=protected)
 
-    def _promote_block(self, block: BlockRecord, *, reason: str) -> None:
-        if block.tier is BlockTier.FULL:
+    def _restore_block(self, block: BlockRecord, *, reason: str) -> None:
+        if block.profile is ResidentProfile.TQ_SAFE:
             return
-        if block.tier is BlockTier.EVICTED:
+        if block.profile is ResidentProfile.EVICTED:
             raise AdaptiveKVError(
-                f"Block {block.block_id} cannot promote from EVICTED without recovery"
+                f"Block {block.block_id} cannot restore from evicted state without recovery"
             )
         for cache in self._layer_caches:
-            cache.promote_block(block.block_id)
-        updated = self._mark_transition(block, to_tier=BlockTier.FULL, reason=reason)
-        updated.last_promote_step = self.decode_steps
+            cache.restore_block(block.block_id)
+        updated = self._mark_transition(
+            block,
+            to_profile=ResidentProfile.TQ_SAFE,
+            reason=reason,
+        )
+        updated.last_restore_step = self.decode_steps
         self.registry.update(updated)
         self.ghost_store.mark_reactivated(block.block_id)
-        self.metrics.counter(PROMOTIONS_TOTAL)
+        self.metrics.counter(RESTORES_TOTAL)
 
-    def _demote_block(self, block: BlockRecord, *, reason: str) -> None:
-        if block.tier is not BlockTier.FULL:
+    def _degrade_block(self, block: BlockRecord, *, reason: str) -> None:
+        if block.profile is not ResidentProfile.TQ_SAFE:
             return
         for cache in self._layer_caches:
-            cache.demote_block(block.block_id)
-        updated = self._mark_transition(block, to_tier=BlockTier.COMPRESSED, reason=reason)
-        updated.last_demote_step = self.decode_steps
+            cache.degrade_block(block.block_id)
+        updated = self._mark_transition(
+            block,
+            to_profile=ResidentProfile.TQ_AGGR,
+            reason=reason,
+        )
+        updated.last_degrade_step = self.decode_steps
         self.registry.update(updated)
-        self.metrics.counter(DEMOTIONS_TOTAL)
+        self.metrics.counter(DEGRADES_TOTAL)
 
     def _evict_block(self, block: BlockRecord, *, reason: str) -> None:
         if block.pin_state is PinState.HARD:
             return
-        if block.tier is not BlockTier.COMPRESSED:
+        if block.profile is not ResidentProfile.TQ_AGGR:
             raise AdaptiveKVError(
-                f"Adaptive hard eviction requires COMPRESSED tier; block {block.block_id} is "
-                f"{block.tier.value}"
+                "Adaptive hard eviction requires TQ_AGGR resident state; "
+                f"block {block.block_id} is {block.profile.value}"
             )
         for cache in self._layer_caches:
             cache.evict_block(block.block_id)
-        updated = self._mark_transition(block, to_tier=BlockTier.EVICTED, reason=reason)
+        updated = self._mark_transition(
+            block,
+            to_profile=ResidentProfile.EVICTED,
+            reason=reason,
+        )
         self.registry.update(updated)
         self.ghost_store.create(updated, step=self.decode_steps)
         self.metrics.counter(EVICTIONS_TOTAL)
@@ -421,11 +414,12 @@ class AdaptiveKVManager:
                     recovery_group,
                     scratch_layer,
                     self.replay_backend,
+                    recovery_profile=ResidentProfile.TQ_AGGR,
                 )
             for block in recovery_group:
                 updated = self._mark_transition(
                     block,
-                    to_tier=BlockTier.COMPRESSED,
+                    to_profile=ResidentProfile.TQ_AGGR,
                     reason="recovered_replay",
                 )
                 self.registry.update(updated)
@@ -455,7 +449,7 @@ class AdaptiveKVManager:
         current: list[BlockRecord] = []
         for block_id in block_ids:
             block = self.registry.get(block_id)
-            if block.tier is not BlockTier.EVICTED:
+            if block.profile is not ResidentProfile.EVICTED:
                 continue
             if current and current[-1].end_token != block.start_token:
                 groups.append(current)
@@ -499,13 +493,13 @@ class AdaptiveKVManager:
         self,
         block: BlockRecord,
         *,
-        to_tier: BlockTier,
+        to_profile: ResidentProfile,
         reason: str,
     ) -> BlockRecord:
         transition = TransitionRecord(
             step=self.decode_steps,
-            from_tier=block.tier,
-            to_tier=to_tier,
+            from_profile=block.profile,
+            to_profile=to_profile,
             reason=reason,
         )
         return BlockRecord(
@@ -516,15 +510,15 @@ class AdaptiveKVManager:
             source_end=block.source_end,
             segment_id=block.segment_id,
             pin_state=block.pin_state,
-            tier=to_tier,
+            profile=to_profile,
             created_step=block.created_step,
             structural_prior=block.structural_prior,
             age_windows=block.age_windows,
-            windows_in_tier=0,
+            windows_in_profile=0,
             last_access_step=block.last_access_step,
             last_transition_step=self.decode_steps,
-            last_promote_step=block.last_promote_step,
-            last_demote_step=block.last_demote_step,
+            last_restore_step=block.last_restore_step,
+            last_degrade_step=block.last_degrade_step,
             score=block.score,
             last_transition=transition,
         )
@@ -550,7 +544,7 @@ class AdaptiveKVManager:
         avoid.update(
             block.block_id
             for block in self.registry.snapshot()
-            if block.tier is BlockTier.COMPRESSED and block.start_token < history_tokens
+            if block.profile is ResidentProfile.TQ_AGGR and block.start_token < history_tokens
         )
         return avoid
 
@@ -578,7 +572,7 @@ class AdaptiveKVManager:
         blocking_blocks = [
             block.block_id
             for block in self.registry.snapshot()
-            if block.tier is not BlockTier.EVICTED
+            if block.profile is not ResidentProfile.EVICTED
             and (
                 block.pin_state is PinState.HARD
                 or block.block_id in protected

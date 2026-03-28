@@ -44,7 +44,7 @@ class AdaptiveScoreEngine:
         return replace(
             block,
             age_windows=age_windows,
-            windows_in_tier=block.windows_in_tier + 1,
+            windows_in_profile=block.windows_in_profile + 1,
             last_access_step=step if smoothed_usage > 0 else block.last_access_step,
             score=score,
         )
@@ -54,4 +54,3 @@ class AdaptiveScoreEngine:
 
     def _clamp(self, value: float) -> float:
         return max(0.0, min(1.0, value))
-

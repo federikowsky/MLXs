@@ -37,7 +37,7 @@ def adaptive_config_for_baseline(
             **base_kw,
             soft_budget_bytes=_HUGE_BUDGET,
             hard_budget_bytes=_HUGE_BUDGET,
-            t_full_demote=0.0,
+            t_tq_safe_degrade=0.0,
             t_evict_candidate=0.0,
         )
 
@@ -61,8 +61,8 @@ def adaptive_config_for_baseline(
             soft_budget_bytes=soft,
             hard_budget_bytes=hard,
             recent_tail_protect_blocks=0,
-            t_full_promote=0.95,
-            t_full_demote=0.9,
+            t_tq_safe_restore=0.95,
+            t_tq_safe_degrade=0.9,
             t_evict_candidate=0.99,
         )
 

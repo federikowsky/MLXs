@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
 
+from mlxs.adaptive_kv.block_types import ResidentProfile
 from mlxs.adaptive_kv.families.full_kv import (
     FullAttentionKVAdaptiveLayerCache,
     FullAttentionKVReplayBackend,
 )
+from mlxs.adaptive_kv.resident import ResidentExecutionMode, TurboQuantResidentBackend
 from mlxs.adaptive_kv.runtime import (
     AdaptiveKVLayerRuntime,
     AdaptiveKVReplayBackend,
@@ -17,7 +19,6 @@ from mlxs.adaptive_kv.runtime import (
     RuntimeFamily,
     RuntimeFamilyBindings,
     RuntimeFamilyDescriptor,
-    ScratchReplayState,
 )
 from mlxs.cache.arrays import ArraysCache
 
@@ -27,11 +28,10 @@ if TYPE_CHECKING:
 
 HYBRID_STATE_FAMILY = RuntimeFamilyDescriptor(
     family=RuntimeFamily.HYBRID_STATE,
-    display_name="Hybrid-State Decoder",
+    display_name="TurboQuant Hybrid-State Decoder",
     summary=(
-        "Mixed recurrent or linear state plus token-addressable KV state across layers, "
-        "with Adaptive KV applied to the KV-bearing layers and exact pass-through state "
-        "for the recurrent layers."
+        "Mixed recurrent/state-array layers plus TurboQuant-profiled KV layers, with "
+        "resident planning applied only to KV-bearing layers."
     ),
     token_addressable=False,
     hybrid_state=True,
@@ -39,13 +39,11 @@ HYBRID_STATE_FAMILY = RuntimeFamilyDescriptor(
 
 
 class HybridStateArraysLayerCache:
-    """Adaptive-KV-compatible wrapper for recurrent/state-array layers."""
+    """Pass-through wrapper for recurrent/state-array layers outside profile planning."""
 
-    __slots__ = ("_cache", "_layer_index", "_logical_offset", "_manager")
+    __slots__ = ("_cache", "_logical_offset")
 
-    def __init__(self, manager: AdaptiveKVManager, layer_index: int) -> None:
-        self._manager = manager
-        self._layer_index = layer_index
+    def __init__(self) -> None:
         self._cache = ArraysCache(size=2)
         self._logical_offset = 0
 
@@ -78,45 +76,33 @@ class HybridStateArraysLayerCache:
         return self._cache.state_size_bytes
 
     def update_and_fetch(self, keys: mx.array, values: mx.array) -> tuple[Any, Any]:
-        raise RuntimeError(
-            "Hybrid-state recurrent layers do not support KV update_and_fetch"
-        )
+        raise RuntimeError("Hybrid recurrent layers do not support KV update_and_fetch")
 
     def remove_token_range(self, start: int, end: int) -> None:
         del start, end
 
-    def demote_block(self, block_id: int) -> None:
+    def degrade_block(self, block_id: int) -> None:
         del block_id
 
-    def promote_block(self, block_id: int) -> None:
+    def restore_block(self, block_id: int) -> None:
         del block_id
 
     def evict_block(self, block_id: int) -> None:
         del block_id
-
-    def recover_block(self, block_id: int, keys: mx.array, values: mx.array) -> None:
-        del block_id, keys, values
-
-    def recover_blocks(
-        self,
-        blocks: tuple[Any, ...],
-        keys: mx.array,
-        values: mx.array,
-    ) -> None:
-        del blocks, keys, values
 
     def recover_blocks_from_scratch(
         self,
         blocks: tuple[Any, ...],
         replay_layer: Any,
         replay_backend: AdaptiveKVReplayBackend,
+        *,
+        recovery_profile: ResidentProfile,
     ) -> None:
-        del blocks, replay_layer, replay_backend
+        del blocks, replay_layer, replay_backend, recovery_profile
 
-    def resident_state_for_attention(self) -> Any:
-        raise RuntimeError(
-            "Hybrid-state recurrent layers do not expose resident attention state"
-        )
+    def resident_state_for_execution(self, *, query_tokens: int = 1) -> Any:
+        del query_tokens
+        raise RuntimeError("Hybrid recurrent layers do not expose resident execution state")
 
     def make_mask(
         self,
@@ -138,6 +124,9 @@ class HybridStateArraysLayerCache:
 
     def should_sample_usage(self) -> bool:
         return False
+
+    def required_history_start(self, history_tokens: int) -> int:
+        return history_tokens
 
     def record_usage_from_attention(
         self,
@@ -162,15 +151,11 @@ class HybridStateArraysLayerCache:
 
 
 class HybridStateKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
-    """KV-bearing hybrid-state layers keep compressed resident storage but dequantize
-    compressed segments during attention execution to preserve token fidelity."""
-
-    def _dequantize_compressed_attention(self) -> bool:
-        return True
+    """KV-bearing Family C layers remain inside resident-profile planning."""
 
 
 class HybridStateAdaptiveLayerCache:
-    """Lazy per-layer delegate: recurrent layers pass through, KV layers stay adaptive."""
+    """Lazy per-layer delegate with strict KV-vs-state-array planning separation."""
 
     __slots__ = ("_delegate", "_layer_index", "_manager")
 
@@ -194,14 +179,18 @@ class HybridStateAdaptiveLayerCache:
             )
         layer = layers[self._layer_index]
         if getattr(layer, "is_linear", False):
-            self._delegate = HybridStateArraysLayerCache(
-                self._manager,
-                layer_index=self._layer_index,
-            )
+            self._delegate = HybridStateArraysLayerCache()
         else:
+            backend = TurboQuantResidentBackend(
+                safe_bits=self._manager.config.tq_safe_bits,
+                aggr_bits=self._manager.config.tq_aggr_bits,
+                safe_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+                aggr_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+            )
             self._delegate = HybridStateKVAdaptiveLayerCache(
                 self._manager,
                 layer_index=self._layer_index,
+                backend=backend,
             )
         return self._delegate
 
@@ -239,40 +228,32 @@ class HybridStateAdaptiveLayerCache:
     def remove_token_range(self, start: int, end: int) -> None:
         self._resolve_delegate().remove_token_range(start, end)
 
-    def demote_block(self, block_id: int) -> None:
-        self._resolve_delegate().demote_block(block_id)
+    def degrade_block(self, block_id: int) -> None:
+        self._resolve_delegate().degrade_block(block_id)
 
-    def promote_block(self, block_id: int) -> None:
-        self._resolve_delegate().promote_block(block_id)
+    def restore_block(self, block_id: int) -> None:
+        self._resolve_delegate().restore_block(block_id)
 
     def evict_block(self, block_id: int) -> None:
         self._resolve_delegate().evict_block(block_id)
-
-    def recover_block(self, block_id: int, keys: mx.array, values: mx.array) -> None:
-        self._resolve_delegate().recover_block(block_id, keys, values)
-
-    def recover_blocks(
-        self,
-        blocks: tuple[Any, ...],
-        keys: mx.array,
-        values: mx.array,
-    ) -> None:
-        self._resolve_delegate().recover_blocks(blocks, keys, values)
 
     def recover_blocks_from_scratch(
         self,
         blocks: tuple[Any, ...],
         replay_layer: Any,
         replay_backend: AdaptiveKVReplayBackend,
+        *,
+        recovery_profile: ResidentProfile,
     ) -> None:
         self._resolve_delegate().recover_blocks_from_scratch(
             blocks,
             replay_layer,
             replay_backend,
+            recovery_profile=recovery_profile,
         )
 
-    def resident_state_for_attention(self) -> Any:
-        return self._resolve_delegate().resident_state_for_attention()
+    def resident_state_for_execution(self, *, query_tokens: int = 1) -> Any:
+        return self._resolve_delegate().resident_state_for_execution(query_tokens=query_tokens)
 
     def make_mask(
         self,
@@ -295,6 +276,9 @@ class HybridStateAdaptiveLayerCache:
 
     def should_sample_usage(self) -> bool:
         return self._resolve_delegate().should_sample_usage()
+
+    def required_history_start(self, history_tokens: int) -> int:
+        return self._resolve_delegate().required_history_start(history_tokens)
 
     def record_usage_from_attention(
         self,
@@ -326,8 +310,6 @@ class HybridStateAdaptiveLayerCache:
 
 
 class HybridStateRuntimeSubstrate(AdaptiveKVRuntimeSubstrate):
-    """Runtime substrate for hybrid recurrent/stateful + KV decoder families."""
-
     def make_layer_runtime(
         self,
         manager: AdaptiveKVManager,
@@ -337,20 +319,7 @@ class HybridStateRuntimeSubstrate(AdaptiveKVRuntimeSubstrate):
 
 
 class HybridStateReplayBackend(FullAttentionKVReplayBackend):
-    """Replay backend for mixed ArraysCache/KVCache language runtimes."""
-
-    @staticmethod
-    def _cache_eval_tensors(cache: Any) -> list[mx.array]:
-        state = getattr(cache, "state", None)
-        if state is not None:
-            if isinstance(state, tuple):
-                return [tensor for tensor in state if hasattr(tensor, "nbytes")]
-            if hasattr(state, "nbytes"):
-                return [state]
-        cache_list = getattr(cache, "cache", None)
-        if cache_list is None:
-            return []
-        return [tensor for tensor in cache_list if hasattr(tensor, "nbytes")]
+    """Hybrid-state replay keeps exact model cache layout during scratch replay."""
 
     def ensure_scratch_replay_prefix(
         self,
@@ -363,50 +332,20 @@ class HybridStateReplayBackend(FullAttentionKVReplayBackend):
         source_tokens: list[int],
         total_tokens: int,
         prefill_step_size: int,
-    ) -> ScratchReplayState:
-        del num_layers
-        total_tokens = max(0, min(total_tokens, len(source_tokens)))
+    ):
         if scratch_cache is None:
             scratch_cache = model.make_cache()
             replayed_tokens = 0
             materialized = True
-        if total_tokens <= replayed_tokens:
-            return ScratchReplayState(
-                cache=scratch_cache,
-                replayed_tokens=replayed_tokens,
-                materialized=materialized,
-            )
-        offset = replayed_tokens
-        if not materialized and offset > 0:
-            tensors = [
-                tensor
-                for cache_entry in scratch_cache
-                for tensor in self._cache_eval_tensors(cache_entry)
-            ]
-            if tensors:
-                mx.eval(tensors)
-            materialized = True
-        while offset < total_tokens:
-            n = min(prefill_step_size, total_tokens - offset)
-            chunk = mx.array(source_tokens[offset : offset + n])
-            model(chunk[None], cache=scratch_cache)
-            offset += n
-            if offset < total_tokens:
-                tensors = [
-                    tensor
-                    for cache_entry in scratch_cache
-                    for tensor in self._cache_eval_tensors(cache_entry)
-                ]
-                if tensors:
-                    mx.eval(tensors)
-                materialized = True
-                mx.clear_cache()
-            else:
-                materialized = False
-        return ScratchReplayState(
-            cache=scratch_cache,
-            replayed_tokens=total_tokens,
+        return super().ensure_scratch_replay_prefix(
+            model=model,
+            num_layers=num_layers,
+            scratch_cache=scratch_cache,
+            replayed_tokens=replayed_tokens,
             materialized=materialized,
+            source_tokens=source_tokens,
+            total_tokens=total_tokens,
+            prefill_step_size=prefill_step_size,
         )
 
 
@@ -422,7 +361,6 @@ def make_hybrid_state_family_bindings() -> RuntimeFamilyBindings:
 __all__ = [
     "HYBRID_STATE_FAMILY",
     "HybridStateAdaptiveLayerCache",
-    "HybridStateArraysLayerCache",
     "HybridStateReplayBackend",
     "HybridStateRuntimeSubstrate",
     "make_hybrid_state_family_bindings",

@@ -65,12 +65,12 @@ def sanitize_debug_snapshot(snap: dict[str, Any]) -> dict[str, Any]:
         out["attention_path"] = dict(ap)
     blocks = snap.get("blocks")
     if isinstance(blocks, list):
-        tier_counts: dict[str, int] = {}
+        profile_counts: dict[str, int] = {}
         for b in blocks:
-            if isinstance(b, dict) and "tier" in b:
-                t = str(b["tier"])
-                tier_counts[t] = tier_counts.get(t, 0) + 1
-        out["tier_counts"] = tier_counts
+            if isinstance(b, dict) and "profile" in b:
+                profile = str(b["profile"])
+                profile_counts[profile] = profile_counts.get(profile, 0) + 1
+        out["profile_counts"] = profile_counts
         out["blocks"] = blocks
     ghosts = snap.get("ghosts")
     if isinstance(ghosts, dict):

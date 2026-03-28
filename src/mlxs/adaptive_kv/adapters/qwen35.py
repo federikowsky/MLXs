@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from mlxs.adaptive_kv.block_types import ResidentProfile
 from mlxs.adaptive_kv.families import (
     make_full_kv_family_bindings,
     make_hybrid_state_family_bindings,
 )
 from mlxs.adaptive_kv.families.full_kv import FULL_KV_FAMILY
+from mlxs.adaptive_kv.resident import ResidentExecutionMode
 from mlxs.adaptive_kv.runtime import (
     AdapterCapabilities,
     AdaptiveKVCapabilityProvider,
     CapabilityStatus,
     ComposedAdaptiveKVRuntimeAdapter,
+    FamilyProfileCapability,
     RuntimeFamily,
 )
 from mlxs.cache.arrays import ArraysCache
@@ -27,14 +30,31 @@ def _capabilities(
     overall: CapabilityStatus,
     num_layers: int = 0,
 ) -> AdapterCapabilities:
+    execution_modes = (ResidentExecutionMode.DEQUANTIZE_ON_READ,)
+    profile_capabilities = (
+        FamilyProfileCapability(
+            profile=ResidentProfile.TQ_SAFE,
+            status=overall,
+            execution_modes=execution_modes,
+        ),
+        FamilyProfileCapability(
+            profile=ResidentProfile.TQ_AGGR,
+            status=overall,
+            execution_modes=execution_modes,
+        ),
+        FamilyProfileCapability(
+            profile=ResidentProfile.EVICTED,
+            status=CapabilityStatus.full(),
+        ),
+    )
     return AdapterCapabilities(
         adapter_name=adapter_name,
         runtime_family=runtime_family,
         overall=overall,
         baseline_cache=overall,
         resident_attention=overall,
-        compressed_tier=overall,
         replay_recovery=overall,
+        profile_capabilities=profile_capabilities,
         num_layers=num_layers,
     )
 
@@ -61,7 +81,7 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.UNKNOWN,
                 overall=CapabilityStatus.unsupported(
-                    "adaptive_kv_v1 supports model_type='qwen3_5' only through the "
+                    "adaptive_kv_turboquant supports model_type='qwen3_5' only through the "
                     "dedicated qwen3_5 adapter"
                 ),
             )
@@ -70,7 +90,7 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 does not support compile_decode=True"
+                    "adaptive_kv_turboquant does not support compile_decode=True"
                 ),
             )
         if quantized_kv_start > 0:
@@ -78,7 +98,7 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 does not support legacy quantized_kv_start flow"
+                    "adaptive_kv_turboquant does not support legacy quantized_kv_start flow"
                 ),
             )
         if cache is not None:
@@ -86,7 +106,7 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 does not support external cache reuse"
+                    "adaptive_kv_turboquant does not support external cache reuse"
                 ),
             )
         if input_embeddings_present:
@@ -94,7 +114,7 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.HYBRID_STATE,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 supports text-only qwen3_5 requests only; "
+                    "adaptive_kv_turboquant supports text-only qwen3_5 requests only; "
                     "multimodal/input_embeddings requests are unsupported"
                 ),
             )
@@ -103,7 +123,8 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 requires model.make_cache() for the supported qwen3_5 baseline"
+                    "adaptive_kv_turboquant requires model.make_cache() for the "
+                    "supported qwen3_5 baseline"
                 ),
             )
 
@@ -126,7 +147,8 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 compressed tier requires qwen3_5 head_dim divisible by 32"
+                    "adaptive_kv_turboquant requires qwen3_5 head_dim divisible by 32 "
+                    "for TurboQuant resident profiles"
                 ),
             )
 
@@ -141,7 +163,7 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=runtime_family,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 requires a non-empty per-layer cache list"
+                    "adaptive_kv_turboquant requires a non-empty per-layer cache list"
                 ),
             )
         if runtime_family is RuntimeFamily.FULL_KV:
@@ -150,7 +172,7 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                     adapter_name=self.name,
                     runtime_family=RuntimeFamily.FULL_KV,
                     overall=CapabilityStatus.partial(
-                        "adaptive_kv_v1 supports full_kv qwen3_5 only for a homogeneous "
+                        "adaptive_kv_turboquant supports full_kv qwen3_5 only for a homogeneous "
                         "list[KVCache] baseline"
                     ),
                 )
@@ -160,7 +182,7 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                     adapter_name=self.name,
                     runtime_family=RuntimeFamily.HYBRID_STATE,
                     overall=CapabilityStatus.partial(
-                        "adaptive_kv_v1 requires layer/cache alignment for hybrid-state "
+                        "adaptive_kv_turboquant requires layer/cache alignment for hybrid-state "
                         "qwen3_5 support"
                     ),
                 )
@@ -171,7 +193,7 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                             adapter_name=self.name,
                             runtime_family=RuntimeFamily.HYBRID_STATE,
                             overall=CapabilityStatus.partial(
-                                "adaptive_kv_v1 hybrid-state qwen3_5 support requires "
+                                "adaptive_kv_turboquant hybrid-state qwen3_5 support requires "
                                 "ArraysCache on linear-attention layers"
                             ),
                         )
@@ -180,7 +202,7 @@ class Qwen35CapabilityProvider(AdaptiveKVCapabilityProvider):
                         adapter_name=self.name,
                         runtime_family=RuntimeFamily.HYBRID_STATE,
                         overall=CapabilityStatus.partial(
-                            "adaptive_kv_v1 hybrid-state qwen3_5 support requires KVCache "
+                            "adaptive_kv_turboquant hybrid-state qwen3_5 support requires KVCache "
                             "on full-attention layers"
                         ),
                     )

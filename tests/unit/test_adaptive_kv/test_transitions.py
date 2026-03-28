@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from mlxs.adaptive_kv.block_types import BlockRecord, BlockTier, PinState, PressureState
+from mlxs.adaptive_kv.block_types import BlockRecord, PinState, PressureState, ResidentProfile
 from mlxs.adaptive_kv.config import AdaptiveKVConfig
 from mlxs.adaptive_kv.transitions import AdaptiveTransitionEngine
 
 
-def _block(tier: BlockTier) -> BlockRecord:
+def _block(profile: ResidentProfile) -> BlockRecord:
     block = BlockRecord(
         block_id=1,
         start_token=0,
@@ -16,27 +16,27 @@ def _block(tier: BlockTier) -> BlockRecord:
         source_end=4,
         segment_id=0,
         pin_state=PinState.NORMAL,
-        tier=tier,
+        profile=profile,
         created_step=0,
         structural_prior=0.0,
     )
-    block.score.composite = 0.8 if tier is BlockTier.COMPRESSED else 0.2
-    return replace(block, windows_in_tier=3)
+    block.score.composite = 0.8 if profile is ResidentProfile.TQ_AGGR else 0.2
+    return replace(block, windows_in_profile=3)
 
 
-def test_hysteresis_allows_promotion_above_promote_threshold() -> None:
+def test_hysteresis_allows_restore_above_safe_threshold() -> None:
     engine = AdaptiveTransitionEngine(AdaptiveKVConfig(enabled=True))
-    block = _block(BlockTier.COMPRESSED)
+    block = _block(ResidentProfile.TQ_AGGR)
 
-    assert engine.should_promote(block, pressure=PressureState.NORMAL, step=3) is True
+    assert engine.should_restore(block, pressure=PressureState.NORMAL, step=3) is True
 
 
-def test_recent_tail_blocks_do_not_demote() -> None:
+def test_recent_tail_blocks_do_not_degrade() -> None:
     engine = AdaptiveTransitionEngine(AdaptiveKVConfig(enabled=True))
-    block = _block(BlockTier.FULL)
+    block = _block(ResidentProfile.TQ_SAFE)
 
     assert (
-        engine.should_demote(
+        engine.should_degrade(
             block,
             pressure=PressureState.NORMAL,
             recent_tail={block.block_id},
@@ -46,12 +46,12 @@ def test_recent_tail_blocks_do_not_demote() -> None:
     )
 
 
-def test_hard_pinned_blocks_do_not_demote() -> None:
+def test_hard_pinned_blocks_do_not_degrade() -> None:
     engine = AdaptiveTransitionEngine(AdaptiveKVConfig(enabled=True))
-    block = replace(_block(BlockTier.FULL), pin_state=PinState.HARD)
+    block = replace(_block(ResidentProfile.TQ_SAFE), pin_state=PinState.HARD)
 
     assert (
-        engine.should_demote(
+        engine.should_degrade(
             block,
             pressure=PressureState.HARD,
             recent_tail=set(),
@@ -65,18 +65,18 @@ def test_hard_pressure_bypasses_dwell_and_cooldown_for_non_protected_block() -> 
     engine = AdaptiveTransitionEngine(
         AdaptiveKVConfig(
             enabled=True,
-            min_dwell_full=5,
-            demote_cooldown=4,
+            min_dwell_safe=5,
+            degrade_cooldown=4,
         )
     )
     block = replace(
-        _block(BlockTier.FULL),
-        windows_in_tier=0,
-        last_promote_step=2,
+        _block(ResidentProfile.TQ_SAFE),
+        windows_in_profile=0,
+        last_restore_step=2,
     )
 
     assert (
-        engine.should_demote(
+        engine.should_degrade(
             block,
             pressure=PressureState.HARD,
             recent_tail=set(),
@@ -86,10 +86,10 @@ def test_hard_pressure_bypasses_dwell_and_cooldown_for_non_protected_block() -> 
     )
 
 
-def test_cooldown_blocks_immediate_repromotion() -> None:
+def test_cooldown_blocks_immediate_restore() -> None:
     engine = AdaptiveTransitionEngine(
-        AdaptiveKVConfig(enabled=True, promote_cooldown=2)
+        AdaptiveKVConfig(enabled=True, restore_cooldown=2)
     )
-    block = replace(_block(BlockTier.COMPRESSED), last_demote_step=2)
+    block = replace(_block(ResidentProfile.TQ_AGGR), last_degrade_step=2)
 
-    assert engine.should_promote(block, pressure=PressureState.NORMAL, step=3) is False
+    assert engine.should_restore(block, pressure=PressureState.NORMAL, step=3) is False

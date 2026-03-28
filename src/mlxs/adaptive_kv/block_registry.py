@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from mlxs.adaptive_kv.block_types import BlockRecord, BlockTier, PinState
+from mlxs.adaptive_kv.block_types import BlockRecord, PinState, ResidentProfile
 
 
 class AdaptiveBlockRegistry:
@@ -89,10 +89,10 @@ class AdaptiveBlockRegistry:
         return created
 
     def active_blocks(self) -> list[BlockRecord]:
-        return [block for block in self._blocks if block.tier is not BlockTier.EVICTED]
+        return [block for block in self._blocks if block.profile is not ResidentProfile.EVICTED]
 
     def resident_blocks(self) -> list[BlockRecord]:
-        return [block for block in self._blocks if block.tier is not BlockTier.EVICTED]
+        return [block for block in self._blocks if block.profile is not ResidentProfile.EVICTED]
 
     def covered_blocks(self, total_tokens: int) -> list[BlockRecord]:
         """Blocks whose spans begin before ``total_tokens``."""
@@ -103,18 +103,27 @@ class AdaptiveBlockRegistry:
         return [
             block
             for block in self._blocks
-            if block.tier is not BlockTier.EVICTED and block.start_token < total_tokens
+            if block.profile is not ResidentProfile.EVICTED and block.start_token < total_tokens
         ]
 
     def evicted_blocks(self) -> list[BlockRecord]:
-        return [block for block in self._blocks if block.tier is BlockTier.EVICTED]
+        return [block for block in self._blocks if block.profile is ResidentProfile.EVICTED]
 
-    def required_evicted_blocks(self, total_tokens: int) -> list[BlockRecord]:
-        """Evicted blocks whose spans are required by a prefix of ``total_tokens``."""
+    def required_evicted_blocks(
+        self,
+        total_tokens: int,
+        *,
+        start_token: int = 0,
+    ) -> list[BlockRecord]:
+        """Evicted blocks whose spans intersect the required prefix window."""
         return [
             block
             for block in self._blocks
-            if block.tier is BlockTier.EVICTED and block.start_token < total_tokens
+            if (
+                block.profile is ResidentProfile.EVICTED
+                and block.start_token < total_tokens
+                and block.end_token > start_token
+            )
         ]
 
     def get(self, block_id: int) -> BlockRecord:
@@ -130,9 +139,9 @@ class AdaptiveBlockRegistry:
                 return
         raise KeyError(block.block_id)
 
-    def mark_tier(self, block_id: int, tier: BlockTier) -> BlockRecord:
+    def mark_profile(self, block_id: int, profile: ResidentProfile) -> BlockRecord:
         block = self.get(block_id)
-        block = replace(block, tier=tier)
+        block = replace(block, profile=profile)
         self.update(block)
         return block
 
@@ -182,7 +191,7 @@ class AdaptiveBlockRegistry:
             source_end=source_end,
             segment_id=segment_id,
             pin_state=pin_state,
-            tier=BlockTier.FULL,
+            profile=ResidentProfile.TQ_SAFE,
             created_step=step,
             structural_prior=structural_prior,
         )

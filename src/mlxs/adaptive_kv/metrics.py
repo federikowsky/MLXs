@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from mlxs.adaptive_kv.block_types import BlockRecord, BlockTier
+from mlxs.adaptive_kv.block_types import BlockRecord, ResidentProfile
 
 BLOCKS_TOTAL = "adaptive_kv_blocks_total"
-BLOCKS_FULL = "adaptive_kv_blocks_full"
-BLOCKS_COMPRESSED = "adaptive_kv_blocks_compressed"
+BLOCKS_TQ_SAFE = "adaptive_kv_blocks_tq_safe"
+BLOCKS_TQ_AGGR = "adaptive_kv_blocks_tq_aggr"
 BLOCKS_EVICTED = "adaptive_kv_blocks_evicted"
-PROMOTIONS_TOTAL = "adaptive_kv_promotions_total"
-DEMOTIONS_TOTAL = "adaptive_kv_demotions_total"
+RESTORES_TOTAL = "adaptive_kv_profile_restores_total"
+DEGRADES_TOTAL = "adaptive_kv_profile_degrades_total"
 EVICTIONS_TOTAL = "adaptive_kv_evictions_total"
 RECOMPUTATIONS_TOTAL = "adaptive_kv_recomputations_total"
 SCORE_UPDATES_TOTAL = "adaptive_kv_score_updates_total"
@@ -31,12 +31,18 @@ POST_RECOVERY_DECODE_FORWARDS_TOTAL = "adaptive_kv_post_recovery_decode_forwards
 
 def emit_population(metrics: Any, blocks: list[BlockRecord]) -> None:
     metrics.gauge(BLOCKS_TOTAL, float(len(blocks)))
-    metrics.gauge(BLOCKS_FULL, float(sum(block.tier is BlockTier.FULL for block in blocks)))
     metrics.gauge(
-        BLOCKS_COMPRESSED,
-        float(sum(block.tier is BlockTier.COMPRESSED for block in blocks)),
+        BLOCKS_TQ_SAFE,
+        float(sum(block.profile is ResidentProfile.TQ_SAFE for block in blocks)),
     )
-    metrics.gauge(BLOCKS_EVICTED, float(sum(block.tier is BlockTier.EVICTED for block in blocks)))
+    metrics.gauge(
+        BLOCKS_TQ_AGGR,
+        float(sum(block.profile is ResidentProfile.TQ_AGGR for block in blocks)),
+    )
+    metrics.gauge(
+        BLOCKS_EVICTED,
+        float(sum(block.profile is ResidentProfile.EVICTED for block in blocks)),
+    )
 
 
 def emit_compatibility_fallback(metrics: Any, *, reason: str) -> None:
@@ -49,7 +55,7 @@ def block_debug_view(block: BlockRecord, *, ghost_present: bool) -> dict[str, An
         "token_span": (block.start_token, block.end_token),
         "source_span": (block.source_start, block.source_end),
         "segment_id": block.segment_id,
-        "tier": block.tier.value,
+        "profile": block.profile.value,
         "pin_state": block.pin_state.value,
         "score_components": {
             "hotness": block.score.hotness,
@@ -63,8 +69,8 @@ def block_debug_view(block: BlockRecord, *, ghost_present: bool) -> dict[str, An
         "last_transition": (
             {
                 "step": block.last_transition.step,
-                "from_tier": block.last_transition.from_tier.value,
-                "to_tier": block.last_transition.to_tier.value,
+                "from_profile": block.last_transition.from_profile.value,
+                "to_profile": block.last_transition.to_profile.value,
                 "reason": block.last_transition.reason,
             }
             if block.last_transition is not None

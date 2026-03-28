@@ -2,85 +2,96 @@ from __future__ import annotations
 
 import mlx.core as mx
 
-from mlxs.adaptive_kv.storage import AdaptiveCompressedRunStore
+from mlxs.adaptive_kv.block_types import ResidentProfile
+from mlxs.adaptive_kv.resident import ResidentExecutionMode, TurboQuantResidentBackend
 
 
-def _full_state(length: int) -> tuple[mx.array, mx.array]:
+def _state(length: int) -> tuple[mx.array, mx.array]:
     base = mx.arange(length * 32, dtype=mx.float32).reshape(1, 1, length, 32)
     return base, base + 100.0
 
 
-def test_adjacent_compressed_runs_merge_with_block_local_slices() -> None:
-    keys_a, values_a = _full_state(2)
-    keys_b, values_b = _full_state(2)
-    run_a = AdaptiveCompressedRunStore.from_full_block(
-        0,
+def test_backend_create_append_and_dequantize_preserve_span_and_length() -> None:
+    backend = TurboQuantResidentBackend(
+        safe_bits=8,
+        aggr_bits=4,
+        safe_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+        aggr_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+    )
+    keys_a, values_a = _state(2)
+    keys_b, values_b = _state(2)
+
+    handle = backend.create_handle(
         block_id=10,
+        profile=ResidentProfile.TQ_SAFE,
+        logical_span=(0, 2),
         keys=keys_a,
         values=values_a,
-        group_size=32,
-        bits=8,
     )
-    run_b = AdaptiveCompressedRunStore.from_full_block(
-        1,
-        block_id=11,
+    handle = backend.append_tokens(
+        handle,
+        logical_span=(0, 4),
         keys=keys_b,
         values=values_b,
-        group_size=32,
-        bits=8,
+        dtype=mx.float32,
     )
+    keys, values = backend.materialize(handle)
 
-    merged = run_a.merge_with(run_b, run_id=0)
+    assert handle.logical_span == (0, 4)
+    assert handle.token_count == 4
+    assert keys.shape[2] == 4
+    assert values.shape[2] == 4
+    assert handle.live_bytes > 0
 
-    assert merged.token_count == 4
-    assert merged.block_slices == ((10, 0, 2), (11, 2, 4))
-    assert merged.block_live_bytes(10) > 0
-    assert merged.block_live_bytes(11) > 0
 
-
-def test_split_without_block_preserves_left_and_right_local_offsets() -> None:
-    runs: list[AdaptiveCompressedRunStore] = []
-    for run_id, block_id in enumerate((10, 11, 12)):
-        keys, values = _full_state(2)
-        runs.append(
-            AdaptiveCompressedRunStore.from_full_block(
-                run_id,
-                block_id=block_id,
-                keys=keys,
-                values=values,
-                group_size=32,
-                bits=8,
-            )
-        )
-    merged = runs[0].merge_with(runs[1], run_id=0).merge_with(runs[2], run_id=0)
-
-    (q_keys, q_values), fragments = merged.split_without_block(
-        11,
-        left_run_id=20,
-        right_run_id=21,
+def test_backend_profile_conversion_updates_descriptor_fields() -> None:
+    backend = TurboQuantResidentBackend(
+        safe_bits=8,
+        aggr_bits=4,
+        safe_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+        aggr_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
     )
-
-    assert q_keys[0].shape[-2] == 2
-    assert q_values[0].shape[-2] == 2
-    assert len(fragments) == 2
-    assert fragments[0].block_slices == ((10, 0, 2),)
-    assert fragments[1].block_slices == ((12, 0, 2),)
-    assert fragments[0].token_count == 2
-    assert fragments[1].token_count == 2
-
-
-def test_from_full_run_preserves_block_local_slices() -> None:
-    keys, values = _full_state(4)
-    run = AdaptiveCompressedRunStore.from_full_run(
-        3,
-        block_slices=((20, 0, 2), (21, 2, 4)),
+    keys, values = _state(2)
+    handle = backend.create_handle(
+        block_id=11,
+        profile=ResidentProfile.TQ_SAFE,
+        logical_span=(2, 4),
         keys=keys,
         values=values,
-        group_size=32,
-        bits=8,
     )
 
-    assert run.token_count == 4
-    assert run.block_slices == ((20, 0, 2), (21, 2, 4))
-    assert run.block_live_bytes(20) > 0
-    assert run.block_live_bytes(21) > 0
+    aggr = backend.convert_profile(
+        handle,
+        profile=ResidentProfile.TQ_AGGR,
+        dtype=mx.float32,
+    )
+
+    assert aggr.profile is ResidentProfile.TQ_AGGR
+    assert aggr.logical_span == (2, 4)
+    assert aggr.bits == 4
+    assert aggr.execution_mode is ResidentExecutionMode.DEQUANTIZE_ON_READ
+
+
+def test_backend_slice_handle_preserves_local_offsets() -> None:
+    backend = TurboQuantResidentBackend(
+        safe_bits=8,
+        aggr_bits=4,
+        safe_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+        aggr_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+    )
+    keys, values = _state(4)
+    handle = backend.create_handle(
+        block_id=12,
+        profile=ResidentProfile.TQ_AGGR,
+        logical_span=(8, 12),
+        keys=keys,
+        values=values,
+    )
+
+    sliced = backend.slice_handle(handle, local_start=1, local_end=3)
+    d_keys, d_values = backend.materialize(sliced)
+
+    assert sliced.logical_span == (9, 11)
+    assert sliced.token_count == 2
+    assert d_keys.shape[2] == 2
+    assert d_values.shape[2] == 2

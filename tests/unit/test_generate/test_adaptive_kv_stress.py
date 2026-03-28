@@ -292,7 +292,7 @@ def test_standard_qwen35_long_chunked_prefill_hard_recovery_preserves_generation
         ("hard", 12_000, 18_000),
     ],
 )
-def test_standard_ministral3_long_compressed_tier_preserves_generation(
+def test_standard_ministral3_long_resident_profiles_preserve_generation(
     pressure_mode: str,
     soft_budget_bytes: int,
     hard_budget_bytes: int,
@@ -353,7 +353,7 @@ def test_standard_ministral3_long_compressed_tier_preserves_generation(
     assert adaptive == baseline
     assert final_state
     attention_path = final_state[0]["attention_path"]
-    assert attention_path["n_compressed_attention_segments"] > 0
+    assert attention_path["n_tq_aggr_segments"] > 0
     if pressure_mode == "hard":
         assert final_state[0]["pressure_state"] in {"soft", "hard"}
 
@@ -365,7 +365,7 @@ def test_standard_ministral3_long_compressed_tier_preserves_generation(
         ("hard", 12_000, 18_000),
     ],
 )
-def test_standard_qwen35_long_compressed_tier_preserves_generation(
+def test_standard_qwen35_long_resident_profiles_preserve_generation(
     pressure_mode: str,
     soft_budget_bytes: int,
     hard_budget_bytes: int,
@@ -425,6 +425,6 @@ def test_standard_qwen35_long_compressed_tier_preserves_generation(
     assert adaptive == baseline
     assert final_state
     attention_path = final_state[0]["attention_path"]
-    assert attention_path["n_compressed_attention_segments"] > 0
+    assert attention_path["n_tq_aggr_segments"] > 0
     if pressure_mode == "hard":
         assert final_state[0]["pressure_state"] in {"soft", "hard"}

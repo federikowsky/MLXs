@@ -1,4 +1,4 @@
-"""Adaptive KV enums and record types."""
+"""Adaptive KV resident-profile enums and record types."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 
-class BlockTier(StrEnum):
-    FULL = "full"
-    COMPRESSED = "compressed"
+class ResidentProfile(StrEnum):
+    TQ_SAFE = "tq_safe"
+    TQ_AGGR = "tq_aggr"
     EVICTED = "evicted"
 
 
@@ -37,8 +37,8 @@ class ScoreComponents:
 @dataclass(slots=True)
 class TransitionRecord:
     step: int
-    from_tier: BlockTier
-    to_tier: BlockTier
+    from_profile: ResidentProfile
+    to_profile: ResidentProfile
     reason: str
 
 
@@ -51,21 +51,25 @@ class BlockRecord:
     source_end: int
     segment_id: int
     pin_state: PinState
-    tier: BlockTier
+    profile: ResidentProfile
     created_step: int
     structural_prior: float
     age_windows: int = 0
-    windows_in_tier: int = 0
+    windows_in_profile: int = 0
     last_access_step: int | None = None
     last_transition_step: int = 0
-    last_promote_step: int = -1
-    last_demote_step: int = -1
+    last_restore_step: int = -1
+    last_degrade_step: int = -1
     score: ScoreComponents = field(default_factory=ScoreComponents)
     last_transition: TransitionRecord | None = None
 
     @property
     def token_count(self) -> int:
         return self.end_token - self.start_token
+
+    @property
+    def resident(self) -> bool:
+        return self.profile is not ResidentProfile.EVICTED
 
 
 @dataclass(slots=True)
@@ -77,6 +81,7 @@ class GhostRecord:
     last_evicted_step: int
     evict_count: int = 1
     last_score: float = 0.0
+    last_profile: ResidentProfile = ResidentProfile.EVICTED
     recently_reactivated: bool = False
 
 

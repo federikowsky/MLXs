@@ -1,4 +1,4 @@
-"""Family B runtime substrate: exact windowed/sliding KV decoders."""
+"""Family B runtime substrate: TurboQuant-first windowed/sliding KV decoders."""
 
 from __future__ import annotations
 
@@ -6,15 +6,19 @@ from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
 
-from mlxs.adaptive_kv.families.full_kv import FullAttentionKVAdaptiveLayerCache
+from mlxs.adaptive_kv.families.full_kv import (
+    FullAttentionKVAdaptiveLayerCache,
+    FullAttentionKVRuntimeSubstrate,
+)
+from mlxs.adaptive_kv.resident import ResidentExecutionMode, TurboQuantResidentBackend
 from mlxs.adaptive_kv.runtime import (
     AdaptiveKVReplayBackend,
-    AdaptiveKVRuntimeSubstrate,
     RuntimeFamily,
     RuntimeFamilyBindings,
     RuntimeFamilyDescriptor,
     ScratchReplayState,
 )
+from mlxs.adaptive_kv.storage import ResidentAttentionSegment, ResidentStateView
 from mlxs.cache.attention_mask import create_causal_mask
 from mlxs.cache.kv import KVCache
 
@@ -24,10 +28,10 @@ if TYPE_CHECKING:
 
 WINDOWED_KV_FAMILY = RuntimeFamilyDescriptor(
     family=RuntimeFamily.WINDOWED_KV,
-    display_name="Windowed / Local KV Decoder",
+    display_name="TurboQuant Windowed / Local KV Decoder",
     summary=(
-        "Token-addressable KV cache with exact sliding/windowed attention masks and "
-        "replay-backed recovery over the same logical history."
+        "Token-addressable TurboQuant resident history with explicit resident logical span, "
+        "effective visible span, and window-local replay semantics."
     ),
     token_addressable=True,
     sliding_window=True,
@@ -35,8 +39,6 @@ WINDOWED_KV_FAMILY = RuntimeFamilyDescriptor(
 
 
 class WindowedScratchKVCache(KVCache):
-    """Replay-time KV cache that always emits an exact sliding mask when requested."""
-
     __slots__ = ("_window_size",)
 
     def __init__(self, *, window_size: int) -> None:
@@ -50,14 +52,13 @@ class WindowedScratchKVCache(KVCache):
         return_array: bool = False,
         window_size: int | None = None,
     ) -> mx.array | str | None:
+        del return_array
         effective_window = window_size if window_size is not None else self._window_size
-        if effective_window is None:
-            return super().make_mask(n, return_array=return_array, window_size=None)
         return create_causal_mask(n, offset=self.offset, window_size=effective_window)
 
 
 class WindowedKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
-    """Adaptive KV layer runtime for sliding/windowed attention layers."""
+    """Family B layer runtime with window-aware execution materialization."""
 
     def _configured_window_size(self) -> int | None:
         model = self._manager._model
@@ -71,6 +72,12 @@ class WindowedKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
             return None
         return getattr(getattr(model, "args", None), "sliding_window", None)
 
+    def required_history_start(self, history_tokens: int) -> int:
+        window_size = self._configured_window_size()
+        if window_size is None:
+            return 0
+        return max(0, history_tokens - max(0, window_size - 1))
+
     def make_mask(
         self,
         n: int,
@@ -79,32 +86,96 @@ class WindowedKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
         window_size: int | None = None,
     ) -> mx.array | str | None:
         effective_window = (
-            window_size
-            if window_size is not None
-            else self._configured_window_size()
+            window_size if window_size is not None else self._configured_window_size()
         )
         if effective_window is None:
             return super().make_mask(n, return_array=return_array, window_size=None)
         del return_array
-        return create_causal_mask(n, offset=self._logical_offset, window_size=effective_window)
+        visible_offset = min(self._logical_offset, max(0, effective_window - 1))
+        return create_causal_mask(n, offset=visible_offset, window_size=effective_window)
 
-    def _dequantize_compressed_attention(self) -> bool:
-        return True
+    def resident_state_for_execution(self, *, query_tokens: int = 1) -> ResidentStateView:
+        state = super().resident_state_for_execution(query_tokens=query_tokens)
+        window_size = self._configured_window_size()
+        if window_size is None or not state.segments:
+            return state
+        visible_start = max(
+            0,
+            self._logical_offset - query_tokens - max(0, window_size - 1),
+        )
+        segments: list[ResidentAttentionSegment] = []
+        resident_cursor = 0
+        for segment in state.segments:
+            seg_start, seg_end = segment.logical_span
+            local_start = max(0, visible_start - seg_start)
+            local_end = segment.token_count
+            if local_start >= local_end:
+                continue
+            q_keys = segment.q_keys if local_start == 0 else tuple(
+                tensor[..., local_start:local_end, :] for tensor in segment.q_keys
+            )
+            q_values = segment.q_values if local_start == 0 else tuple(
+                tensor[..., local_start:local_end, :] for tensor in segment.q_values
+            )
+            block_slices = []
+            segment_cursor = 0
+            for block_id, block_start, block_end in segment.block_slices:
+                clipped_start = max(block_start, local_start)
+                clipped_end = min(block_end, local_end)
+                if clipped_start >= clipped_end:
+                    continue
+                block_slices.append(
+                    (
+                        block_id,
+                        segment_cursor,
+                        segment_cursor + (clipped_end - clipped_start),
+                    )
+                )
+                segment_cursor += clipped_end - clipped_start
+            if not block_slices:
+                continue
+            token_count = local_end - local_start
+            logical_start = seg_start + local_start
+            logical_end = seg_start + local_end
+            segments.append(
+                ResidentAttentionSegment(
+                    profile=segment.profile,
+                    token_count=token_count,
+                    logical_span=(seg_start, seg_end),
+                    visible_span=(logical_start, logical_end),
+                    block_slices=tuple(block_slices),
+                    resident_slice=(resident_cursor, resident_cursor + token_count),
+                    q_keys=q_keys,
+                    q_values=q_values,
+                    group_size=segment.group_size,
+                    bits=segment.bits,
+                    storage_kind=segment.storage_kind,
+                    execution_mode=segment.execution_mode,
+                )
+            )
+            resident_cursor += token_count
+        return ResidentStateView(total_tokens=resident_cursor, segments=tuple(segments))
 
 
-class WindowedKVRuntimeSubstrate(AdaptiveKVRuntimeSubstrate):
-    """Runtime substrate for exact windowed-KV decoder families."""
+class WindowedKVRuntimeSubstrate(FullAttentionKVRuntimeSubstrate):
+    """Runtime substrate for TurboQuant-first windowed-KV decoder families."""
 
     def make_layer_runtime(
         self,
         manager: AdaptiveKVManager,
         layer_index: int,
     ) -> WindowedKVAdaptiveLayerCache:
-        return WindowedKVAdaptiveLayerCache(manager, layer_index=layer_index)
+        backend = TurboQuantResidentBackend(
+            safe_bits=manager.config.tq_safe_bits,
+            aggr_bits=manager.config.tq_aggr_bits,
+            safe_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+            aggr_execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+        )
+        return WindowedKVAdaptiveLayerCache(manager, layer_index=layer_index, backend=backend)
 
 
 class WindowedKVReplayBackend(AdaptiveKVReplayBackend):
-    """Replay backend for models whose standard runtime mixes full and sliding KV layers."""
+    """Replay backend for models mixing full and sliding KV layers."""
 
     @staticmethod
     def _make_scratch_cache(model: Any, num_layers: int) -> list[Any]:

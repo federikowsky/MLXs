@@ -1,0 +1,799 @@
+{
+  "runs": [
+    {
+      "name": "llama_short_hard",
+      "seed": 101,
+      "prompt_tokens": 128,
+      "decode_tokens": 16,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 444.37,
+      "adaptive_tok_s": 238.22,
+      "baseline_elapsed_s": 0.036,
+      "adaptive_elapsed_s": 0.0672,
+      "evictions": 15.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 585728,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 16
+      },
+      "attention_path": {
+        "n_execution_segments": 6,
+        "n_tq_safe_segments": 2,
+        "n_tq_aggr_segments": 4,
+        "segment_token_counts": [
+          8,
+          32,
+          32,
+          32,
+          32,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            40
+          ],
+          [
+            40,
+            72
+          ],
+          [
+            72,
+            104
+          ],
+          [
+            104,
+            136
+          ],
+          [
+            136,
+            143
+          ]
+        ]
+      }
+    },
+    {
+      "name": "llama_long_hard",
+      "seed": 131,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 540.05,
+      "adaptive_tok_s": 40.88,
+      "baseline_elapsed_s": 0.1778,
+      "adaptive_elapsed_s": 2.3481,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 4583424,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      },
+      "attention_path": {
+        "n_execution_segments": 37,
+        "n_tq_safe_segments": 2,
+        "n_tq_aggr_segments": 35,
+        "segment_token_counts": [
+          8,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          16,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            40
+          ],
+          [
+            40,
+            72
+          ],
+          [
+            72,
+            104
+          ],
+          [
+            104,
+            136
+          ],
+          [
+            136,
+            168
+          ],
+          [
+            168,
+            200
+          ],
+          [
+            200,
+            232
+          ],
+          [
+            232,
+            264
+          ],
+          [
+            264,
+            296
+          ],
+          [
+            296,
+            328
+          ],
+          [
+            328,
+            360
+          ],
+          [
+            360,
+            392
+          ],
+          [
+            392,
+            424
+          ],
+          [
+            424,
+            456
+          ],
+          [
+            456,
+            488
+          ],
+          [
+            488,
+            520
+          ],
+          [
+            520,
+            552
+          ],
+          [
+            552,
+            584
+          ],
+          [
+            584,
+            616
+          ],
+          [
+            616,
+            648
+          ],
+          [
+            648,
+            680
+          ],
+          [
+            680,
+            712
+          ],
+          [
+            712,
+            744
+          ],
+          [
+            744,
+            776
+          ],
+          [
+            776,
+            808
+          ],
+          [
+            808,
+            840
+          ],
+          [
+            840,
+            872
+          ],
+          [
+            872,
+            904
+          ],
+          [
+            904,
+            936
+          ],
+          [
+            936,
+            968
+          ],
+          [
+            968,
+            1000
+          ],
+          [
+            1000,
+            1032
+          ],
+          [
+            1032,
+            1064
+          ],
+          [
+            1064,
+            1096
+          ],
+          [
+            1096,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ]
+      }
+    },
+    {
+      "name": "ministral3_short",
+      "seed": 23,
+      "prompt_tokens": 4,
+      "decode_tokens": 4,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 366.28,
+      "adaptive_tok_s": 379.43,
+      "baseline_elapsed_s": 0.0109,
+      "adaptive_elapsed_s": 0.0105,
+      "evictions": 1.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 28672,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 2
+      },
+      "attention_path": {
+        "n_execution_segments": 3,
+        "n_tq_safe_segments": 2,
+        "n_tq_aggr_segments": 1,
+        "segment_token_counts": [
+          2,
+          4,
+          1
+        ],
+        "visible_spans": [
+          [
+            0,
+            2
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            6,
+            7
+          ]
+        ]
+      }
+    },
+    {
+      "name": "ministral3_long_soft_96",
+      "seed": 123,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 430.86,
+      "adaptive_tok_s": 64.48,
+      "baseline_elapsed_s": 0.2228,
+      "adaptive_elapsed_s": 1.4888,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 4583424,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      },
+      "attention_path": {
+        "n_execution_segments": 37,
+        "n_tq_safe_segments": 2,
+        "n_tq_aggr_segments": 35,
+        "segment_token_counts": [
+          8,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          16,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            40
+          ],
+          [
+            40,
+            72
+          ],
+          [
+            72,
+            104
+          ],
+          [
+            104,
+            136
+          ],
+          [
+            136,
+            168
+          ],
+          [
+            168,
+            200
+          ],
+          [
+            200,
+            232
+          ],
+          [
+            232,
+            264
+          ],
+          [
+            264,
+            296
+          ],
+          [
+            296,
+            328
+          ],
+          [
+            328,
+            360
+          ],
+          [
+            360,
+            392
+          ],
+          [
+            392,
+            424
+          ],
+          [
+            424,
+            456
+          ],
+          [
+            456,
+            488
+          ],
+          [
+            488,
+            520
+          ],
+          [
+            520,
+            552
+          ],
+          [
+            552,
+            584
+          ],
+          [
+            584,
+            616
+          ],
+          [
+            616,
+            648
+          ],
+          [
+            648,
+            680
+          ],
+          [
+            680,
+            712
+          ],
+          [
+            712,
+            744
+          ],
+          [
+            744,
+            776
+          ],
+          [
+            776,
+            808
+          ],
+          [
+            808,
+            840
+          ],
+          [
+            840,
+            872
+          ],
+          [
+            872,
+            904
+          ],
+          [
+            904,
+            936
+          ],
+          [
+            936,
+            968
+          ],
+          [
+            968,
+            1000
+          ],
+          [
+            1000,
+            1032
+          ],
+          [
+            1032,
+            1064
+          ],
+          [
+            1064,
+            1096
+          ],
+          [
+            1096,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ]
+      }
+    },
+    {
+      "name": "qwen35_short_hybrid",
+      "seed": 19,
+      "prompt_tokens": 4,
+      "decode_tokens": 4,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 282.26,
+      "adaptive_tok_s": 328.92,
+      "baseline_elapsed_s": 0.0142,
+      "adaptive_elapsed_s": 0.0122,
+      "evictions": 1.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 46080,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 2
+      },
+      "attention_path": {
+        "n_execution_segments": 3,
+        "n_tq_safe_segments": 2,
+        "n_tq_aggr_segments": 1,
+        "segment_token_counts": [
+          2,
+          4,
+          1
+        ],
+        "visible_spans": [
+          [
+            0,
+            2
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            6,
+            7
+          ]
+        ]
+      }
+    },
+    {
+      "name": "qwen35_long_soft_96",
+      "seed": 123,
+      "prompt_tokens": 1024,
+      "decode_tokens": 96,
+      "reference_token_match": true,
+      "first_mismatch_token": null,
+      "baseline_tok_s": 245.62,
+      "adaptive_tok_s": 56.27,
+      "baseline_elapsed_s": 0.3909,
+      "adaptive_elapsed_s": 1.7061,
+      "evictions": 127.0,
+      "recomputations": 1.0,
+      "profile_transitions": 0.0,
+      "pressure_state": "hard",
+      "resident_bytes": 1184768,
+      "profile_counts": {
+        "tq_safe": 2,
+        "tq_aggr": 138
+      },
+      "attention_path": {
+        "n_execution_segments": 37,
+        "n_tq_safe_segments": 2,
+        "n_tq_aggr_segments": 35,
+        "segment_token_counts": [
+          8,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          16,
+          7
+        ],
+        "visible_spans": [
+          [
+            0,
+            8
+          ],
+          [
+            8,
+            40
+          ],
+          [
+            40,
+            72
+          ],
+          [
+            72,
+            104
+          ],
+          [
+            104,
+            136
+          ],
+          [
+            136,
+            168
+          ],
+          [
+            168,
+            200
+          ],
+          [
+            200,
+            232
+          ],
+          [
+            232,
+            264
+          ],
+          [
+            264,
+            296
+          ],
+          [
+            296,
+            328
+          ],
+          [
+            328,
+            360
+          ],
+          [
+            360,
+            392
+          ],
+          [
+            392,
+            424
+          ],
+          [
+            424,
+            456
+          ],
+          [
+            456,
+            488
+          ],
+          [
+            488,
+            520
+          ],
+          [
+            520,
+            552
+          ],
+          [
+            552,
+            584
+          ],
+          [
+            584,
+            616
+          ],
+          [
+            616,
+            648
+          ],
+          [
+            648,
+            680
+          ],
+          [
+            680,
+            712
+          ],
+          [
+            712,
+            744
+          ],
+          [
+            744,
+            776
+          ],
+          [
+            776,
+            808
+          ],
+          [
+            808,
+            840
+          ],
+          [
+            840,
+            872
+          ],
+          [
+            872,
+            904
+          ],
+          [
+            904,
+            936
+          ],
+          [
+            936,
+            968
+          ],
+          [
+            968,
+            1000
+          ],
+          [
+            1000,
+            1032
+          ],
+          [
+            1032,
+            1064
+          ],
+          [
+            1064,
+            1096
+          ],
+          [
+            1096,
+            1112
+          ],
+          [
+            1112,
+            1119
+          ]
+        ]
+      }
+    }
+  ]
+}

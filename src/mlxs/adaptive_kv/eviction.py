@@ -1,14 +1,14 @@
-"""Adaptive COMPRESSED -> EVICTED policy."""
+"""Adaptive TQ_AGGR -> EVICTED policy."""
 
 from __future__ import annotations
 
-from mlxs.adaptive_kv.block_types import BlockRecord, BlockTier, PinState, PressureState
+from mlxs.adaptive_kv.block_types import BlockRecord, PinState, PressureState, ResidentProfile
 from mlxs.adaptive_kv.config import AdaptiveKVConfig
 from mlxs.adaptive_kv.ghost import AdaptiveGhostStore
 
 
 class AdaptiveEvictionEngine:
-    """Ranks compressed blocks for budget-aware eviction."""
+    """Ranks aggressively profiled blocks for budget-aware eviction."""
 
     def __init__(self, config: AdaptiveKVConfig, ghost_store: AdaptiveGhostStore) -> None:
         self._config = config
@@ -28,7 +28,7 @@ class AdaptiveEvictionEngine:
         candidates = [
             block
             for block in blocks
-            if block.tier is BlockTier.COMPRESSED
+            if block.profile is ResidentProfile.TQ_AGGR
             and block.pin_state is PinState.NORMAL
             and block.block_id not in recent_tail
             and block.block_id not in avoid

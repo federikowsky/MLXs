@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from mlxs.adaptive_kv.block_types import ResidentProfile
 from mlxs.adaptive_kv.families import (
     FullAttentionKVAdaptiveLayerCache,
     FullAttentionKVReplayBackend,
@@ -12,11 +13,13 @@ from mlxs.adaptive_kv.families import (
 )
 from mlxs.adaptive_kv.families.full_kv import FULL_KV_FAMILY
 from mlxs.adaptive_kv.families.windowed_kv import WINDOWED_KV_FAMILY
+from mlxs.adaptive_kv.resident import ResidentExecutionMode
 from mlxs.adaptive_kv.runtime import (
     AdapterCapabilities,
     AdaptiveKVCapabilityProvider,
     CapabilityStatus,
     ComposedAdaptiveKVRuntimeAdapter,
+    FamilyProfileCapability,
     RuntimeFamily,
 )
 from mlxs.cache.kv import KVCache
@@ -29,14 +32,30 @@ def _capabilities(
     overall: CapabilityStatus,
     num_layers: int = 0,
 ) -> AdapterCapabilities:
+    profile_capabilities = (
+        FamilyProfileCapability(
+            profile=ResidentProfile.TQ_SAFE,
+            status=overall,
+            execution_modes=(ResidentExecutionMode.DEQUANTIZE_ON_READ,),
+        ),
+        FamilyProfileCapability(
+            profile=ResidentProfile.TQ_AGGR,
+            status=overall,
+            execution_modes=(ResidentExecutionMode.DEQUANTIZE_ON_READ,),
+        ),
+        FamilyProfileCapability(
+            profile=ResidentProfile.EVICTED,
+            status=CapabilityStatus.full(),
+        ),
+    )
     return AdapterCapabilities(
         adapter_name=adapter_name,
         runtime_family=runtime_family,
         overall=overall,
         baseline_cache=overall,
         resident_attention=overall,
-        compressed_tier=overall,
         replay_recovery=overall,
+        profile_capabilities=profile_capabilities,
         num_layers=num_layers,
     )
 
@@ -63,8 +82,8 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.UNKNOWN,
                 overall=CapabilityStatus.unsupported(
-                    "adaptive_kv_v1 supports model_type='llama' only through the "
-                    "dedicated llama adapter"
+                    "adaptive_kv_turboquant supports model_type='llama' only through "
+                    "the dedicated llama adapter"
                 ),
             )
         if compile_decode:
@@ -72,7 +91,7 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 does not support compile_decode=True"
+                    "adaptive_kv_turboquant does not support compile_decode=True"
                 ),
             )
         if quantized_kv_start > 0:
@@ -80,7 +99,7 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 does not support legacy quantized_kv_start flow"
+                    "adaptive_kv_turboquant does not support legacy quantized_kv_start flow"
                 ),
             )
         if cache is not None:
@@ -88,7 +107,7 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 does not support external cache reuse"
+                    "adaptive_kv_turboquant does not support external cache reuse"
                 ),
             )
         if input_embeddings_present:
@@ -96,7 +115,7 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 does not support multimodal/input_embeddings requests"
+                    "adaptive_kv_turboquant does not support multimodal/input_embeddings requests"
                 ),
             )
         if not callable(getattr(model, "make_cache", None)):
@@ -104,7 +123,8 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 requires model.make_cache() for the supported llama baseline"
+                    "adaptive_kv_turboquant requires model.make_cache() for the "
+                    "supported llama baseline"
                 ),
             )
 
@@ -117,7 +137,8 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.WINDOWED_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 supports the standard full-attention llama baseline only; "
+                    "adaptive_kv_turboquant supports the standard full-attention "
+                    "llama baseline only; "
                     f"{WINDOWED_KV_FAMILY.display_name.lower()} layer_types are unsupported"
                 ),
             )
@@ -129,7 +150,8 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.WINDOWED_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 supports the standard full-attention llama baseline only; "
+                    "adaptive_kv_turboquant supports the standard full-attention "
+                    "llama baseline only; "
                     "sliding-window llama layers fall into the windowed-KV runtime family "
                     "and remain unsupported"
                 ),
@@ -143,12 +165,13 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 head_dim = hidden_size // num_attention_heads
             if head_dim is not None and head_dim % 32 != 0:
                 return _capabilities(
-                    adapter_name=self.name,
-                    runtime_family=RuntimeFamily.FULL_KV,
-                    overall=CapabilityStatus.partial(
-                        "adaptive_kv_v1 compressed tier requires llama head_dim divisible by 32"
-                    ),
-                )
+                adapter_name=self.name,
+                runtime_family=RuntimeFamily.FULL_KV,
+                overall=CapabilityStatus.partial(
+                    "adaptive_kv_turboquant requires llama head_dim divisible by 32 "
+                    "for TurboQuant resident profiles"
+                ),
+            )
 
         baseline = model.make_cache()
         if not isinstance(baseline, list) or not baseline:
@@ -156,7 +179,7 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.FULL_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 requires a non-empty per-layer cache list"
+                    "adaptive_kv_turboquant requires a non-empty per-layer cache list"
                 ),
             )
         if any(type(layer) is not KVCache for layer in baseline):
@@ -164,7 +187,7 @@ class LlamaCapabilityProvider(AdaptiveKVCapabilityProvider):
                 adapter_name=self.name,
                 runtime_family=RuntimeFamily.WINDOWED_KV,
                 overall=CapabilityStatus.partial(
-                    "adaptive_kv_v1 requires a homogeneous list[KVCache] baseline"
+                    "adaptive_kv_turboquant requires a homogeneous list[KVCache] baseline"
                 ),
             )
         return _capabilities(

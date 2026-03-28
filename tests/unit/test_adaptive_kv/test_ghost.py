@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mlxs.adaptive_kv.block_types import BlockRecord, BlockTier, PinState
+from mlxs.adaptive_kv.block_types import BlockRecord, PinState, ResidentProfile
 from mlxs.adaptive_kv.ghost import AdaptiveGhostStore
 
 
@@ -13,7 +13,7 @@ def _block() -> BlockRecord:
         source_end=4,
         segment_id=0,
         pin_state=PinState.NORMAL,
-        tier=BlockTier.COMPRESSED,
+        profile=ResidentProfile.TQ_AGGR,
         created_step=0,
         structural_prior=0.0,
     )
@@ -27,6 +27,7 @@ def test_ghost_record_creation() -> None:
 
     assert ghost.block_id == 7
     assert ghost.last_evicted_step == 3
+    assert ghost.last_profile is ResidentProfile.TQ_AGGR
     assert store.has(7) is True
 
 
@@ -45,4 +46,3 @@ def test_mark_reactivated_sets_anti_thrash_flag() -> None:
 
     assert store.get(7) is not None
     assert store.get(7).recently_reactivated is True  # type: ignore[union-attr]
-

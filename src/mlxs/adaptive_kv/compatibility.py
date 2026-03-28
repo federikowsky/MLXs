@@ -1,4 +1,4 @@
-"""Compatibility gates and adapter selection for Adaptive KV V1."""
+"""Compatibility gates and adapter selection for the TurboQuant-first branch."""
 
 from __future__ import annotations
 
@@ -6,10 +6,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from mlxs.adaptive_kv.adapters import resolve_generation_adapter
+from mlxs.adaptive_kv.block_types import ResidentProfile
+from mlxs.adaptive_kv.resident import ResidentExecutionMode
 from mlxs.adaptive_kv.runtime import (
     AdapterCapabilities,
     AdapterSelection,
     CapabilityStatus,
+    FamilyProfileCapability,
     RuntimeFamily,
     SupportLevel,
 )
@@ -39,8 +42,23 @@ def _unsupported_capabilities(
         overall=unsupported,
         baseline_cache=unsupported,
         resident_attention=unsupported,
-        compressed_tier=unsupported,
         replay_recovery=unsupported,
+        profile_capabilities=(
+            FamilyProfileCapability(
+                profile=ResidentProfile.TQ_SAFE,
+                status=unsupported,
+                execution_modes=(ResidentExecutionMode.DEQUANTIZE_ON_READ,),
+            ),
+            FamilyProfileCapability(
+                profile=ResidentProfile.TQ_AGGR,
+                status=unsupported,
+                execution_modes=(ResidentExecutionMode.DEQUANTIZE_ON_READ,),
+            ),
+            FamilyProfileCapability(
+                profile=ResidentProfile.EVICTED,
+                status=CapabilityStatus.full(),
+            ),
+        ),
         num_layers=0,
     )
 
@@ -59,7 +77,7 @@ def select_generation_adapter(
         capabilities = _unsupported_capabilities(
             adapter_name=model_type,
             reason=(
-                "adaptive_kv_v1 has no registered exact adapter for "
+                "adaptive_kv_turboquant has no registered exact adapter for "
                 f"model_type={model_type!r}"
             ),
         )
@@ -80,7 +98,7 @@ def select_generation_adapter(
                 adapter_name=capabilities.adapter_name,
                 runtime_family=capabilities.runtime_family,
                 reason=(
-                    "adaptive_kv_v1 adapter bindings are incomplete for runtime_family="
+                    "adaptive_kv_turboquant adapter bindings are incomplete for runtime_family="
                     f"{capabilities.runtime_family.value!r}"
                 ),
             )
@@ -100,7 +118,7 @@ def assess_generation_compatibility(
     quantized_kv_start: int,
     input_embeddings_present: bool = False,
 ) -> CompatibilityResult:
-    """Return whether adaptive KV V1 supports this generation request."""
+    """Return whether the TurboQuant-first branch supports this generation request."""
     selection = select_generation_adapter(
         model,
         cache=cache,

@@ -1,4 +1,4 @@
-"""Adaptive KV configuration."""
+"""Adaptive KV TurboQuant-first configuration."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class AdaptiveKVConfig(BaseModel):
-    """Config surface for the adaptive KV subsystem."""
+    """Config surface for the TurboQuant-first Adaptive KV branch."""
 
     model_config = {"frozen": True, "extra": "forbid"}
 
@@ -19,7 +19,7 @@ class AdaptiveKVConfig(BaseModel):
     update_window_steps: int = Field(
         default=16,
         ge=1,
-        description="Decode steps between control-path policy updates.",
+        description="Decode steps between control-path profile updates.",
     )
     soft_budget_bytes: int | None = Field(
         default=None,
@@ -34,7 +34,7 @@ class AdaptiveKVConfig(BaseModel):
     recent_tail_protect_blocks: int = Field(
         default=2,
         ge=0,
-        description="Most recent blocks protected from ordinary eviction.",
+        description="Most recent blocks protected from ordinary degradation/eviction.",
     )
     usage_alpha: float = Field(
         default=0.5,
@@ -73,43 +73,55 @@ class AdaptiveKVConfig(BaseModel):
         description="Structural-prior score weight.",
     )
     w_age: float = Field(default=0.1, ge=0.0, le=1.0, description="Age-penalty score weight.")
-    t_full_promote: float = Field(
+    t_tq_safe_restore: float = Field(
         default=0.7,
         ge=0.0,
         le=1.0,
-        description="Promotion threshold for COMPRESSED -> FULL.",
+        description="Threshold for TQ_AGGR -> TQ_SAFE restoration.",
     )
-    t_full_demote: float = Field(
+    t_tq_safe_degrade: float = Field(
         default=0.35,
         ge=0.0,
         le=1.0,
-        description="Demotion threshold for FULL -> COMPRESSED.",
+        description="Threshold for TQ_SAFE -> TQ_AGGR degradation.",
     )
     t_evict_candidate: float = Field(
         default=0.15,
         ge=0.0,
         le=1.0,
-        description="Candidate threshold for COMPRESSED -> EVICTED.",
+        description="Candidate threshold for TQ_AGGR -> EVICTED.",
     )
-    min_dwell_full: int = Field(
+    min_dwell_safe: int = Field(
         default=1,
         ge=0,
-        description="Minimum control windows to remain FULL before demotion.",
+        description="Minimum control windows to remain TQ_SAFE before degradation.",
     )
-    min_dwell_compressed: int = Field(
+    min_dwell_aggr: int = Field(
         default=1,
         ge=0,
-        description="Minimum control windows to remain COMPRESSED before promotion/eviction.",
+        description="Minimum control windows to remain TQ_AGGR before restore/eviction.",
     )
-    promote_cooldown: int = Field(
+    restore_cooldown: int = Field(
         default=1,
         ge=0,
-        description="Control windows to wait after a promotion.",
+        description="Control windows to wait after a TQ_SAFE -> TQ_AGGR degradation.",
     )
-    demote_cooldown: int = Field(
+    degrade_cooldown: int = Field(
         default=1,
         ge=0,
-        description="Control windows to wait after a demotion.",
+        description="Control windows to wait after a TQ_AGGR -> TQ_SAFE restore.",
+    )
+    tq_safe_bits: int = Field(
+        default=8,
+        ge=1,
+        le=8,
+        description="TurboQuant bitwidth for the TQ_SAFE resident profile.",
+    )
+    tq_aggr_bits: int = Field(
+        default=4,
+        ge=1,
+        le=8,
+        description="TurboQuant bitwidth for the TQ_AGGR resident profile.",
     )
     diagnostics_enabled: bool = Field(
         default=True,
@@ -131,6 +143,10 @@ class AdaptiveKVConfig(BaseModel):
         weight_sum = self.w_hot + self.w_persist + self.w_struct + self.w_age
         if weight_sum <= 0:
             raise ValueError("Adaptive KV score weights must sum to a positive value")
-        if self.t_full_promote <= self.t_full_demote:
-            raise ValueError("t_full_promote must be > t_full_demote for hysteresis")
+        if self.t_tq_safe_restore <= self.t_tq_safe_degrade:
+            raise ValueError(
+                "t_tq_safe_restore must be > t_tq_safe_degrade for profile hysteresis"
+            )
+        if self.tq_safe_bits < self.tq_aggr_bits:
+            raise ValueError("tq_safe_bits must be >= tq_aggr_bits")
         return self

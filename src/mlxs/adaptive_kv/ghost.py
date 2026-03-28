@@ -23,6 +23,7 @@ class AdaptiveGhostStore:
                 segment_id=block.segment_id,
                 last_evicted_step=step,
                 last_score=block.score.composite,
+                last_profile=block.profile,
             )
         else:
             ghost = replace(
@@ -30,6 +31,7 @@ class AdaptiveGhostStore:
                 last_evicted_step=step,
                 evict_count=ghost.evict_count + 1,
                 last_score=block.score.composite,
+                last_profile=block.profile,
                 recently_reactivated=False,
             )
         self._ghosts[block.block_id] = ghost
@@ -49,4 +51,3 @@ class AdaptiveGhostStore:
 
     def snapshot(self) -> dict[int, GhostRecord]:
         return dict(self._ghosts)
-

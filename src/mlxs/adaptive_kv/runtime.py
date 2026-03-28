@@ -8,6 +8,9 @@ from typing import Any, Protocol, runtime_checkable
 
 import mlx.core as mx
 
+from mlxs.adaptive_kv.block_types import ResidentProfile
+from mlxs.adaptive_kv.resident import ResidentExecutionMode
+
 
 class SupportLevel(StrEnum):
     FULL = "full"
@@ -45,14 +48,21 @@ class CapabilityStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class FamilyProfileCapability:
+    profile: ResidentProfile
+    status: CapabilityStatus
+    execution_modes: tuple[ResidentExecutionMode, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class AdapterCapabilities:
     adapter_name: str
     runtime_family: RuntimeFamily
     overall: CapabilityStatus
     baseline_cache: CapabilityStatus
     resident_attention: CapabilityStatus
-    compressed_tier: CapabilityStatus
     replay_recovery: CapabilityStatus
+    profile_capabilities: tuple[FamilyProfileCapability, ...]
     num_layers: int = 0
 
     @property
@@ -102,29 +112,22 @@ class AdaptiveKVLayerRuntime(Protocol):
 
     def remove_token_range(self, start: int, end: int) -> None: ...
 
-    def demote_block(self, block_id: int) -> None: ...
+    def degrade_block(self, block_id: int) -> None: ...
 
-    def promote_block(self, block_id: int) -> None: ...
+    def restore_block(self, block_id: int) -> None: ...
 
     def evict_block(self, block_id: int) -> None: ...
-
-    def recover_block(self, block_id: int, keys: mx.array, values: mx.array) -> None: ...
-
-    def recover_blocks(
-        self,
-        blocks: tuple[Any, ...],
-        keys: mx.array,
-        values: mx.array,
-    ) -> None: ...
 
     def recover_blocks_from_scratch(
         self,
         blocks: tuple[Any, ...],
         replay_layer: Any,
         replay_backend: AdaptiveKVReplayBackend,
+        *,
+        recovery_profile: ResidentProfile,
     ) -> None: ...
 
-    def resident_state_for_attention(self) -> Any: ...
+    def resident_state_for_execution(self, *, query_tokens: int = 1) -> Any: ...
 
     def make_mask(
         self,
@@ -139,6 +142,8 @@ class AdaptiveKVLayerRuntime(Protocol):
     def trim(self, n: int) -> int: ...
 
     def should_sample_usage(self) -> bool: ...
+
+    def required_history_start(self, history_tokens: int) -> int: ...
 
     def record_usage_from_attention(
         self,
@@ -198,6 +203,41 @@ class RuntimeFamilyBindings:
     runtime_substrate: AdaptiveKVRuntimeSubstrate
     replay_backend: AdaptiveKVReplayBackend
     layer_runtime_type: type[Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AdapterSelection:
+    adapter: Any
+    capabilities: AdapterCapabilities
+    family_bindings: RuntimeFamilyBindings | None
+
+    @property
+    def platform(self) -> Any:
+        return self.adapter
+
+    @property
+    def num_layers(self) -> int:
+        return self.capabilities.num_layers
+
+    @property
+    def runtime_substrate(self) -> AdaptiveKVRuntimeSubstrate | None:
+        return None if self.family_bindings is None else self.family_bindings.runtime_substrate
+
+    @property
+    def replay_backend(self) -> AdaptiveKVReplayBackend | None:
+        return None if self.family_bindings is None else self.family_bindings.replay_backend
+
+    @property
+    def layer_runtime_type(self) -> type[Any] | None:
+        return None if self.family_bindings is None else self.family_bindings.layer_runtime_type
+
+    @property
+    def runtime_family(self) -> RuntimeFamily:
+        return self.capabilities.runtime_family
+
+    @property
+    def support_level(self) -> SupportLevel:
+        return self.capabilities.overall.level
 
 
 @runtime_checkable
@@ -300,78 +340,3 @@ class ComposedAdaptiveKVRuntimeAdapter:
         family: RuntimeFamily,
     ) -> RuntimeFamilyBindings | None:
         return self.family_bindings.get(family)
-
-    def make_layer_runtime(self, manager: Any, layer_index: int) -> AdaptiveKVLayerRuntime:
-        return self.runtime_substrate.make_layer_runtime(manager, layer_index)
-
-    def ensure_scratch_replay_prefix(
-        self,
-        *,
-        model: Any,
-        num_layers: int,
-        scratch_cache: list[Any] | None,
-        replayed_tokens: int,
-        materialized: bool,
-        source_tokens: list[int],
-        total_tokens: int,
-        prefill_step_size: int,
-    ) -> ScratchReplayState:
-        return self.replay_backend.ensure_scratch_replay_prefix(
-            model=model,
-            num_layers=num_layers,
-            scratch_cache=scratch_cache,
-            replayed_tokens=replayed_tokens,
-            materialized=materialized,
-            source_tokens=source_tokens,
-            total_tokens=total_tokens,
-            prefill_step_size=prefill_step_size,
-        )
-
-    def copy_replay_token_range(
-        self,
-        replay_layer: Any,
-        start_token: int,
-        end_token: int,
-    ) -> tuple[mx.array, mx.array]:
-        return self.replay_backend.copy_replay_token_range(
-            replay_layer,
-            start_token,
-            end_token,
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class AdapterSelection:
-    adapter: AdaptiveKVRuntimeAdapter | None
-    capabilities: AdapterCapabilities
-    family_bindings: RuntimeFamilyBindings | None = None
-
-    @property
-    def platform(self) -> AdaptiveKVRuntimeAdapter | None:
-        return self.adapter
-
-    @property
-    def runtime_family(self) -> RuntimeFamily:
-        return self.capabilities.runtime_family
-
-    @property
-    def num_layers(self) -> int:
-        return self.capabilities.num_layers
-
-    @property
-    def runtime_substrate(self) -> AdaptiveKVRuntimeSubstrate | None:
-        if self.family_bindings is None:
-            return None
-        return self.family_bindings.runtime_substrate
-
-    @property
-    def replay_backend(self) -> AdaptiveKVReplayBackend | None:
-        if self.family_bindings is None:
-            return None
-        return self.family_bindings.replay_backend
-
-    @property
-    def layer_runtime_type(self) -> type[Any] | None:
-        if self.family_bindings is None:
-            return None
-        return self.family_bindings.layer_runtime_type
