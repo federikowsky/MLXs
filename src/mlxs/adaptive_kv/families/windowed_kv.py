@@ -18,7 +18,7 @@ from mlxs.adaptive_kv.runtime import (
     RuntimeFamilyDescriptor,
     ScratchReplayState,
 )
-from mlxs.adaptive_kv.storage import ResidentAttentionSegment, ResidentStateView
+from mlxs.adaptive_kv.storage import ResidentStateView
 from mlxs.cache.attention_mask import create_causal_mask
 from mlxs.cache.kv import KVCache
 
@@ -95,66 +95,30 @@ class WindowedKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
         return create_causal_mask(n, offset=visible_offset, window_size=effective_window)
 
     def resident_state_for_execution(self, *, query_tokens: int = 1) -> ResidentStateView:
-        state = super().resident_state_for_execution(query_tokens=query_tokens)
         window_size = self._configured_window_size()
-        if window_size is None or not state.segments:
-            return state
-        visible_start = max(
-            0,
-            self._logical_offset - query_tokens - max(0, window_size - 1),
+        if window_size is None:
+            return super().resident_state_for_execution(query_tokens=query_tokens)
+        if (
+            self._resident_state is not None
+            and self._resident_view_topology_epoch == self._topology_epoch
+            and self._resident_view_tail_epoch == self._tail_epoch
+        ):
+            return self._resident_state
+        ordered = tuple(self._ordered_handles(self._logical_offset))
+        if self._resident_view_topology_epoch != self._topology_epoch:
+            self._execution_view_topology_rebuilds_total += 1
+        self._resident_state = self._backend.query_window_view(
+            ordered,
+            logical_offset=self._logical_offset,
+            query_tokens=query_tokens,
+            window_size=window_size,
+            topology_epoch=self._topology_epoch,
+            tail_epoch=self._tail_epoch,
+            execution_view_topology_rebuilds_total=self._execution_view_topology_rebuilds_total,
         )
-        segments: list[ResidentAttentionSegment] = []
-        resident_cursor = 0
-        for segment in state.segments:
-            seg_start, seg_end = segment.logical_span
-            local_start = max(0, visible_start - seg_start)
-            local_end = segment.token_count
-            if local_start >= local_end:
-                continue
-            q_keys = segment.q_keys if local_start == 0 else tuple(
-                tensor[..., local_start:local_end, :] for tensor in segment.q_keys
-            )
-            q_values = segment.q_values if local_start == 0 else tuple(
-                tensor[..., local_start:local_end, :] for tensor in segment.q_values
-            )
-            block_slices = []
-            segment_cursor = 0
-            for block_id, block_start, block_end in segment.block_slices:
-                clipped_start = max(block_start, local_start)
-                clipped_end = min(block_end, local_end)
-                if clipped_start >= clipped_end:
-                    continue
-                block_slices.append(
-                    (
-                        block_id,
-                        segment_cursor,
-                        segment_cursor + (clipped_end - clipped_start),
-                    )
-                )
-                segment_cursor += clipped_end - clipped_start
-            if not block_slices:
-                continue
-            token_count = local_end - local_start
-            logical_start = seg_start + local_start
-            logical_end = seg_start + local_end
-            segments.append(
-                ResidentAttentionSegment(
-                    profile=segment.profile,
-                    token_count=token_count,
-                    logical_span=(seg_start, seg_end),
-                    visible_span=(logical_start, logical_end),
-                    block_slices=tuple(block_slices),
-                    resident_slice=(resident_cursor, resident_cursor + token_count),
-                    q_keys=q_keys,
-                    q_values=q_values,
-                    group_size=segment.group_size,
-                    bits=segment.bits,
-                    storage_kind=segment.storage_kind,
-                    execution_mode=segment.execution_mode,
-                )
-            )
-            resident_cursor += token_count
-        return ResidentStateView(total_tokens=resident_cursor, segments=tuple(segments))
+        self._resident_view_topology_epoch = self._topology_epoch
+        self._resident_view_tail_epoch = self._tail_epoch
+        return self._resident_state
 
 
 class WindowedKVRuntimeSubstrate(FullAttentionKVRuntimeSubstrate):

@@ -15,10 +15,14 @@ from mlxs.adaptive_kv.exceptions import (
 )
 from mlxs.adaptive_kv.manager import AdaptiveKVManager
 from mlxs.adaptive_kv.resident import (
+    ExecutionFragment,
+    ExecutionSlab,
     ResidentBackend,
     ResidentBlockHandle,
+    ResidentExecutionFabric,
     ResidentExecutionMode,
     ResidentProfileDescriptor,
+    SlabBlockRange,
     TurboQuantResidentBackend,
 )
 from mlxs.adaptive_kv.runtime import (
@@ -35,7 +39,7 @@ from mlxs.adaptive_kv.runtime import (
     RuntimeFamilyDescriptor,
     SupportLevel,
 )
-from mlxs.adaptive_kv.storage import ResidentAttentionSegment, ResidentStateView
+from mlxs.adaptive_kv.storage import ExecutionSliceRef, ResidentStateView
 
 __all__ = [
     "AdapterCapabilities",
@@ -52,10 +56,13 @@ __all__ = [
     "CapabilityStatus",
     "CompatibilityResult",
     "ComposedAdaptiveKVRuntimeAdapter",
+    "ExecutionFragment",
+    "ExecutionSlab",
+    "ExecutionSliceRef",
     "FamilyProfileCapability",
-    "ResidentAttentionSegment",
     "ResidentBackend",
     "ResidentBlockHandle",
+    "ResidentExecutionFabric",
     "ResidentExecutionMode",
     "ResidentProfile",
     "ResidentProfileDescriptor",
@@ -63,6 +70,7 @@ __all__ = [
     "RuntimeFamily",
     "RuntimeFamilyBindings",
     "RuntimeFamilyDescriptor",
+    "SlabBlockRange",
     "SupportLevel",
     "TurboQuantResidentBackend",
     "assess_generation_compatibility",

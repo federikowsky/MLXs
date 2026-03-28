@@ -352,7 +352,7 @@ def test_hard_pressure_degrades_even_when_cooldown_would_normally_block() -> Non
     assert manager.registry.get(1).profile is ResidentProfile.TQ_AGGR
 
 
-def test_adjacent_tq_aggr_blocks_coalesce_into_one_resident_segment() -> None:
+def test_adjacent_tq_aggr_blocks_coalesce_into_one_visible_slice() -> None:
     manager = _make_manager(
         prompt_tokens=[1, 2, 3, 4, 5, 6],
         recent_tail_protect_blocks=0,
@@ -361,15 +361,15 @@ def test_adjacent_tq_aggr_blocks_coalesce_into_one_resident_segment() -> None:
     manager._degrade_block(manager.registry.get(1), reason="test_degrade")
     manager._degrade_block(manager.registry.get(2), reason="test_degrade")
 
-    segments = manager.caches()[0].resident_state_for_execution().segments
-    aggr = [segment for segment in segments if segment.profile is ResidentProfile.TQ_AGGR]
+    slices = manager.caches()[0].resident_state_for_execution().slices
+    aggr = [slice_ref for slice_ref in slices if slice_ref.profile is ResidentProfile.TQ_AGGR]
 
     assert len(aggr) == 1
     assert aggr[0].token_count == 4
     assert aggr[0].block_slices == ((1, 0, 2), (2, 2, 4))
 
 
-def test_restoring_middle_block_splits_tq_aggr_run() -> None:
+def test_restoring_middle_block_splits_tq_aggr_visible_slices() -> None:
     manager = _make_manager(
         prompt_tokens=[1, 2, 3, 4, 5, 6, 7, 8],
         recent_tail_protect_blocks=0,
@@ -380,8 +380,8 @@ def test_restoring_middle_block_splits_tq_aggr_run() -> None:
     manager._degrade_block(manager.registry.get(3), reason="test_degrade")
     manager._restore_block(manager.registry.get(2), reason="test_restore")
 
-    segments = manager.caches()[0].resident_state_for_execution().segments
-    aggr = [segment for segment in segments if segment.profile is ResidentProfile.TQ_AGGR]
+    slices = manager.caches()[0].resident_state_for_execution().slices
+    aggr = [slice_ref for slice_ref in slices if slice_ref.profile is ResidentProfile.TQ_AGGR]
 
     assert len(aggr) == 2
     assert [segment.block_slices for segment in aggr] == [
@@ -446,7 +446,7 @@ def test_single_token_resident_attention_matches_reference_and_usage() -> None:
 
     assert assembled_keys is not None
     assert assembled_values is not None
-    assert len(resident_state.segments) == 3
+    assert len(resident_state.slices) == 3
 
     out, usage_by_token = adaptive_scaled_dot_product_attention(
         queries,

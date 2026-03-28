@@ -352,8 +352,8 @@ def test_standard_ministral3_long_resident_profiles_preserve_generation(
 
     assert adaptive == baseline
     assert final_state
-    attention_path = final_state[0]["attention_path"]
-    assert attention_path["n_tq_aggr_segments"] > 0
+    blocks = final_state[0]["blocks"]
+    assert any(block["profile"] == "tq_aggr" for block in blocks)
     if pressure_mode == "hard":
         assert final_state[0]["pressure_state"] in {"soft", "hard"}
 
@@ -424,7 +424,7 @@ def test_standard_qwen35_long_resident_profiles_preserve_generation(
 
     assert adaptive == baseline
     assert final_state
-    attention_path = final_state[0]["attention_path"]
-    assert attention_path["n_tq_aggr_segments"] > 0
+    blocks = final_state[0]["blocks"]
+    assert any(block["profile"] == "tq_aggr" for block in blocks)
     if pressure_mode == "hard":
         assert final_state[0]["pressure_state"] in {"soft", "hard"}

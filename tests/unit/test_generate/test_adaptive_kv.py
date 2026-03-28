@@ -209,7 +209,8 @@ def test_adaptive_enabled_standard_qwen35_hybrid_runtime_preserves_generation() 
 
     assert adaptive == baseline
     assert final_state
-    assert "n_execution_segments" in final_state[0]["attention_path"]
+    assert "n_execution_slabs" in final_state[0]["attention_path"]
+    assert "n_visible_slices" in final_state[0]["attention_path"]
     assert metrics.get_counter("adaptive_kv_evictions_total") > 0
     assert metrics.get_counter("adaptive_kv_recomputations_total") > 0
 

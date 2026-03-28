@@ -199,14 +199,13 @@ class AdaptiveKVManager:
                 last_error = str(exc)
         if rs is None:
             return {"error": last_error or "no attention-bearing adaptive layer is available"}
-        n_safe = sum(1 for s in rs.segments if s.profile is ResidentProfile.TQ_SAFE)
-        n_aggr = sum(1 for s in rs.segments if s.profile is ResidentProfile.TQ_AGGR)
         return {
-            "n_execution_segments": len(rs.segments),
-            "n_tq_safe_segments": n_safe,
-            "n_tq_aggr_segments": n_aggr,
-            "segment_token_counts": [segment.token_count for segment in rs.segments],
-            "visible_spans": [segment.visible_span for segment in rs.segments],
+            "n_execution_slabs": rs.n_execution_slabs,
+            "n_visible_slices": len(rs.slices),
+            "slab_token_counts": list(rs.slab_token_counts),
+            "visible_spans": [slice_ref.visible_span for slice_ref in rs.slices],
+            "fabric_compactions_total": rs.fabric_compactions_total,
+            "execution_view_topology_rebuilds_total": rs.execution_view_topology_rebuilds_total,
         }
 
     def debug_snapshot(self) -> dict[str, Any]:

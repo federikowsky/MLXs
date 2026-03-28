@@ -10,7 +10,6 @@ from mlxs.adaptive_kv.block_types import BlockRecord, ResidentProfile
 from mlxs.adaptive_kv.exceptions import AdaptiveKVError
 from mlxs.adaptive_kv.resident import (
     ResidentBlockHandle,
-    ResidentEncodedState,
     ResidentExecutionMode,
     TurboQuantResidentBackend,
 )
@@ -22,7 +21,7 @@ from mlxs.adaptive_kv.runtime import (
     RuntimeFamilyDescriptor,
     ScratchReplayState,
 )
-from mlxs.adaptive_kv.storage import ResidentAttentionSegment, ResidentStateView
+from mlxs.adaptive_kv.storage import ResidentStateView
 from mlxs.cache.attention_mask import _mask_from_length
 from mlxs.cache.kv import KVCache
 
@@ -39,15 +38,6 @@ FULL_KV_FAMILY = RuntimeFamilyDescriptor(
     ),
     token_addressable=True,
 )
-
-
-def _concat_quantized_states(states: tuple[ResidentEncodedState, ...]) -> ResidentEncodedState:
-    if len(states) == 1:
-        return states[0]
-    parts = list(zip(*states, strict=True))
-    return tuple(  # type: ignore[return-value]
-        mx.concatenate(list(component), axis=-2) for component in parts
-    )
 
 
 class FullAttentionKVRuntimeSubstrate(AdaptiveKVRuntimeSubstrate):
@@ -171,7 +161,11 @@ class FullAttentionKVAdaptiveLayerCache:
         self._logical_offset = 0
         self._handles: dict[int, ResidentBlockHandle] = {}
         self._resident_state: ResidentStateView | None = None
-        self._resident_state_version = -1
+        self._topology_epoch = 0
+        self._tail_epoch = 0
+        self._resident_view_topology_epoch = -1
+        self._resident_view_tail_epoch = -1
+        self._execution_view_topology_rebuilds_total = 0
         self._dtype: Any = None
 
     @property
@@ -194,8 +188,12 @@ class FullAttentionKVAdaptiveLayerCache:
         if not ordered:
             return None
         tensors: list[Any] = []
-        for handle in ordered:
-            tensors.extend((handle.q_keys, handle.q_values))
+        seen: set[int] = set()
+        for slab in self._backend.fabric.slabs_for_handles(tuple(ordered)):
+            if slab.slab_id in seen:
+                continue
+            seen.add(slab.slab_id)
+            tensors.extend((slab.keys, slab.values))
         return tuple(tensors)
 
     @property
@@ -214,11 +212,15 @@ class FullAttentionKVAdaptiveLayerCache:
                 raise AdaptiveKVError(
                     f"Cannot append into evicted block {block.block_id} without recovery"
                 )
-            self._append_to_block(
+            tail_only = self._append_to_block(
                 block,
                 keys[..., local_start:local_end, :],
                 values[..., local_start:local_end, :],
             )
+            if tail_only:
+                self._tail_epoch += 1
+            else:
+                self._topology_epoch += 1
         self._logical_offset = end
         self._manager.bump_resident_version()
         resident_state = self.resident_state_for_execution(query_tokens=keys.shape[2])
@@ -233,8 +235,11 @@ class FullAttentionKVAdaptiveLayerCache:
             if block.resident and not (block.end_token <= start or block.start_token >= end)
         ]
         for block_id in removals:
-            self._handles.pop(block_id, None)
+            handle = self._handles.pop(block_id, None)
+            if handle is not None:
+                self._backend.evict_handle(handle)
         if removals:
+            self._topology_epoch += 1
             self._manager.bump_resident_version()
 
     def degrade_block(self, block_id: int) -> None:
@@ -246,6 +251,7 @@ class FullAttentionKVAdaptiveLayerCache:
             profile=ResidentProfile.TQ_AGGR,
             dtype=self._effective_dtype(),
         )
+        self._topology_epoch += 1
         self._manager.bump_resident_version()
 
     def restore_block(self, block_id: int) -> None:
@@ -257,10 +263,14 @@ class FullAttentionKVAdaptiveLayerCache:
             profile=ResidentProfile.TQ_SAFE,
             dtype=self._effective_dtype(),
         )
+        self._topology_epoch += 1
         self._manager.bump_resident_version()
 
     def evict_block(self, block_id: int) -> None:
-        self._handles.pop(block_id, None)
+        handle = self._handles.pop(block_id, None)
+        if handle is not None:
+            self._backend.evict_handle(handle)
+            self._topology_epoch += 1
         self._manager.bump_resident_version()
 
     def recover_blocks_from_scratch(
@@ -285,50 +295,29 @@ class FullAttentionKVAdaptiveLayerCache:
                 keys=keys.astype(dtype),
                 values=values.astype(dtype),
             )
+            self._topology_epoch += 1
         self._manager.bump_resident_version()
 
     def resident_state_for_execution(self, *, query_tokens: int = 1) -> ResidentStateView:
         del query_tokens
-        if self._resident_state_version == self._manager.resident_version and self._resident_state:
+        if (
+            self._resident_state is not None
+            and self._resident_view_topology_epoch == self._topology_epoch
+            and self._resident_view_tail_epoch == self._tail_epoch
+        ):
             return self._resident_state
 
-        ordered = self._ordered_handles(self._logical_offset)
-        segments: list[ResidentAttentionSegment] = []
-        resident_cursor = 0
-        for handles in self._bounded_execution_groups(ordered):
-            first = handles[0]
-            token_count = sum(handle.token_count for handle in handles)
-            block_slices: list[tuple[int, int, int]] = []
-            block_cursor = 0
-            for handle in handles:
-                next_cursor = block_cursor + handle.token_count
-                block_slices.append((handle.block_id, block_cursor, next_cursor))
-                block_cursor = next_cursor
-            segments.append(
-                ResidentAttentionSegment(
-                    profile=first.profile,
-                    token_count=token_count,
-                    logical_span=(handles[0].logical_span[0], handles[-1].logical_span[1]),
-                    visible_span=(handles[0].logical_span[0], handles[-1].logical_span[1]),
-                    block_slices=tuple(block_slices),
-                    resident_slice=(resident_cursor, resident_cursor + token_count),
-                    q_keys=_concat_quantized_states(tuple(handle.q_keys for handle in handles)),
-                    q_values=_concat_quantized_states(
-                        tuple(handle.q_values for handle in handles)
-                    ),
-                    group_size=first.group_size,
-                    bits=first.bits,
-                    storage_kind=first.storage_kind,
-                    execution_mode=first.execution_mode,
-                )
-            )
-            resident_cursor += token_count
-
-        self._resident_state = ResidentStateView(
-            total_tokens=resident_cursor,
-            segments=tuple(segments),
+        ordered = tuple(self._ordered_handles(self._logical_offset))
+        if self._resident_view_topology_epoch != self._topology_epoch:
+            self._execution_view_topology_rebuilds_total += 1
+        self._resident_state = self._backend.query_full_view(
+            ordered,
+            topology_epoch=self._topology_epoch,
+            tail_epoch=self._tail_epoch,
+            execution_view_topology_rebuilds_total=self._execution_view_topology_rebuilds_total,
         )
-        self._resident_state_version = self._manager.resident_version
+        self._resident_view_topology_epoch = self._topology_epoch
+        self._resident_view_tail_epoch = self._tail_epoch
         return self._resident_state
 
     def make_mask(
@@ -345,19 +334,27 @@ class FullAttentionKVAdaptiveLayerCache:
         self._logical_offset = 0
         self._handles = {}
         self._resident_state = None
-        self._resident_state_version = -1
+        self._backend.reset()
+        self._topology_epoch = 0
+        self._tail_epoch = 0
+        self._resident_view_topology_epoch = -1
+        self._resident_view_tail_epoch = -1
+        self._execution_view_topology_rebuilds_total = 0
 
     def trim(self, n: int) -> int:
         if n <= 0:
             return 0
         new_offset = max(0, self._logical_offset - n)
-        self._handles = {
-            block_id: handle
-            for block_id, handle in self._handles.items()
-            if handle.logical_span[0] < new_offset
-        }
+        retained: dict[int, ResidentBlockHandle] = {}
+        for block_id, handle in self._handles.items():
+            if handle.logical_span[0] < new_offset:
+                retained[block_id] = handle
+            else:
+                self._backend.evict_handle(handle)
+        self._handles = retained
         trimmed = self._logical_offset - new_offset
         self._logical_offset = new_offset
+        self._topology_epoch += 1
         self._manager.bump_resident_version()
         return trimmed
 
@@ -373,12 +370,12 @@ class FullAttentionKVAdaptiveLayerCache:
         resident_state: ResidentStateView,
         usage_by_token: mx.array,
     ) -> None:
-        for segment in resident_state.segments:
-            seg_start, seg_end = segment.resident_slice
+        for slice_ref in resident_state.slices:
+            seg_start, seg_end = slice_ref.resident_slice
             segment_usage = usage_by_token[seg_start:seg_end]
             values: list[mx.array] = []
             block_ids: list[int] = []
-            for block_id, local_start, local_end in segment.block_slices:
+            for block_id, local_start, local_end in slice_ref.block_slices:
                 block_ids.append(block_id)
                 values.append(segment_usage[local_start:local_end].mean(keepdims=True))
             if values:
@@ -396,7 +393,7 @@ class FullAttentionKVAdaptiveLayerCache:
         block: BlockRecord,
         keys: mx.array,
         values: mx.array,
-    ) -> None:
+    ) -> bool:
         handle = self._handles.get(block.block_id)
         if handle is None:
             self._handles[block.block_id] = self._backend.create_handle(
@@ -406,19 +403,38 @@ class FullAttentionKVAdaptiveLayerCache:
                 keys=keys,
                 values=values,
             )
-            return
+            return False
+        converted = False
         if handle.profile is not block.profile:
             handle = self._backend.convert_profile(
                 handle,
                 profile=block.profile,
                 dtype=self._effective_dtype(),
             )
+            self._handles[block.block_id] = handle
+            converted = True
+        old_fragments = handle.fragments
         self._handles[block.block_id] = self._backend.append_tokens(
             handle,
             logical_span=(block.start_token, block.end_token),
             keys=keys,
             values=values,
             dtype=self._effective_dtype(),
+        )
+        new_handle = self._handles[block.block_id]
+        if converted:
+            return False
+        if len(old_fragments) != len(new_handle.fragments):
+            return False
+        if not old_fragments:
+            return False
+        for prev, curr in zip(old_fragments[:-1], new_handle.fragments[:-1], strict=True):
+            if prev != curr:
+                return False
+        return (
+            old_fragments[-1].slab_id == new_handle.fragments[-1].slab_id
+            and old_fragments[-1].local_start == new_handle.fragments[-1].local_start
+            and old_fragments[-1].local_end <= new_handle.fragments[-1].local_end
         )
 
     def _ordered_handles(self, history_tokens: int) -> list[ResidentBlockHandle]:
@@ -432,34 +448,6 @@ class FullAttentionKVAdaptiveLayerCache:
             ordered.append(handle)
         return ordered
 
-    def _bounded_execution_groups(
-        self,
-        ordered: list[ResidentBlockHandle],
-    ) -> tuple[tuple[ResidentBlockHandle, ...], ...]:
-        if not ordered:
-            return ()
-        groups: list[list[ResidentBlockHandle]] = [[ordered[0]]]
-        current_tokens = ordered[0].token_count
-        for handle in ordered[1:]:
-            prev = groups[-1][-1]
-            contiguous = prev.logical_span[1] == handle.logical_span[0]
-            compatible = (
-                prev.profile is handle.profile
-                and prev.bits == handle.bits
-                and prev.group_size == handle.group_size
-                and prev.execution_mode is handle.execution_mode
-                and prev.storage_kind is handle.storage_kind
-                and prev.execution_chunk_tokens == handle.execution_chunk_tokens
-                and contiguous
-            )
-            if compatible and current_tokens + handle.token_count <= prev.execution_chunk_tokens:
-                groups[-1].append(handle)
-                current_tokens += handle.token_count
-            else:
-                groups.append([handle])
-                current_tokens = handle.token_count
-        return tuple(tuple(group) for group in groups)
-
     def _effective_dtype(self) -> mx.Dtype:
         return self._dtype if self._dtype is not None else mx.float32
 
@@ -467,19 +455,7 @@ class FullAttentionKVAdaptiveLayerCache:
         ordered = self._ordered_handles(self._logical_offset)
         if not ordered:
             return None, None
-        keys_list: list[mx.array] = []
-        values_list: list[mx.array] = []
-        for handle in ordered:
-            keys, values = self._backend.materialize(handle)
-            keys_list.append(keys)
-            values_list.append(values)
-        keys = keys_list[0] if len(keys_list) == 1 else mx.concatenate(keys_list, axis=2)
-        values = (
-            values_list[0]
-            if len(values_list) == 1
-            else mx.concatenate(values_list, axis=2)
-        )
-        return keys, values
+        return self._backend.debug_materialize(tuple(ordered))
 
 
 def make_full_kv_family_bindings() -> RuntimeFamilyBindings:
