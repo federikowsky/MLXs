@@ -1,0 +1,32 @@
+[
+  {
+    "name": "llama_short_soft",
+    "baseline": 277.82480542080975,
+    "adaptive_median": 263.655501105125,
+    "all_match": true,
+    "packs": 1,
+    "pressure": [
+      "soft"
+    ]
+  },
+  {
+    "name": "ministral3_short_soft_window",
+    "baseline": 189.70410605426278,
+    "adaptive_median": 211.14319009106404,
+    "all_match": true,
+    "packs": 1,
+    "pressure": [
+      "soft"
+    ]
+  },
+  {
+    "name": "qwen35_short_soft_hybrid",
+    "baseline": 178.8690438966362,
+    "adaptive_median": 220.32333498257682,
+    "all_match": true,
+    "packs": 1,
+    "pressure": [
+      "soft"
+    ]
+  }
+]

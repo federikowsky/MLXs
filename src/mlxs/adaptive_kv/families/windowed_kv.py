@@ -19,7 +19,7 @@ from mlxs.adaptive_kv.runtime import (
     RuntimeFamilyDescriptor,
     ScratchReplayState,
 )
-from mlxs.adaptive_kv.storage import ResidentStateView
+from mlxs.adaptive_kv.storage import ResidentSliceView
 from mlxs.cache.attention_mask import create_causal_mask
 from mlxs.cache.kv import KVCache
 
@@ -126,19 +126,8 @@ class WindowedKVAdaptiveLayerCache(FullAttentionKVAdaptiveLayerCache):
         ordered: tuple[Any, ...],
         *,
         query_tokens: int,
-    ) -> ResidentStateView:
-        window_size = self._configured_window_size()
-        if window_size is None:
-            return super()._query_resident_state(ordered, query_tokens=query_tokens)
-        return self._backend.query_window_view(
-            ordered,
-            logical_offset=self._logical_offset,
-            query_tokens=query_tokens,
-            window_size=window_size,
-            topology_epoch=self._topology_epoch,
-            tail_epoch=self._tail_epoch,
-            execution_view_topology_rebuilds_total=self._execution_view_topology_rebuilds_total,
-        )
+    ) -> ResidentSliceView:
+        return super()._query_resident_state(ordered, query_tokens=query_tokens)
 
 
 class WindowedKVRuntimeSubstrate(FullAttentionKVRuntimeSubstrate):

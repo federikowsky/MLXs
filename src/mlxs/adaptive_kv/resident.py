@@ -474,7 +474,7 @@ class ResidentExecutionFabric:
         tail_epoch: int,
         execution_view_topology_rebuilds_total: int,
     ) -> Any:
-        from mlxs.adaptive_kv.storage import ExecutionSliceRef, ResidentStateView
+        from mlxs.adaptive_kv.storage import ExecutionSliceRef, ResidentSliceView
 
         query_started_ns = time.perf_counter_ns()
         pieces_started_ns = query_started_ns
@@ -514,7 +514,7 @@ class ResidentExecutionFabric:
             )
             self._increment_perf("fabric.slice_ref_count")
 
-        view = ResidentStateView(
+        view = ResidentSliceView(
             total_tokens=resident_cursor,
             slices=tuple(slices),
             topology_epoch=topology_epoch,

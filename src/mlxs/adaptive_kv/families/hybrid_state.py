@@ -146,6 +146,9 @@ class HybridStateArraysLayerCache:
     def end_cold_mutation_batch(self) -> None:
         return None
 
+    def flush_usage_observer(self) -> None:
+        return None
+
     def prepare(self, lengths: list[int] | None = None, **kwargs: Any) -> None:
         self._cache.prepare(lengths=lengths, **kwargs)
 
@@ -327,6 +330,11 @@ class HybridStateAdaptiveLayerCache:
         end = getattr(self._resolve_delegate(), "end_cold_mutation_batch", None)
         if end is not None:
             end()
+
+    def flush_usage_observer(self) -> None:
+        flush = getattr(self._resolve_delegate(), "flush_usage_observer", None)
+        if flush is not None:
+            flush()
 
     def prepare(self, lengths: list[int] | None = None, **kwargs: Any) -> None:
         delegate = self._resolve_delegate()

@@ -22,7 +22,12 @@ from mlxs.adaptive_kv.runtime import (
     RuntimeFamilyDescriptor,
     ScratchReplayState,
 )
-from mlxs.adaptive_kv.storage import ResidentStateView
+from mlxs.adaptive_kv.storage import (
+    ExecutionPack,
+    ExecutionPackView,
+    ResidentSliceView,
+    ResidentStateView,
+)
 from mlxs.cache.attention_mask import _mask_from_length
 from mlxs.cache.kv import KVCache
 
@@ -39,6 +44,8 @@ FULL_KV_FAMILY = RuntimeFamilyDescriptor(
     ),
     token_addressable=True,
 )
+
+_EXECUTION_PACK_TARGET_TOKENS = 512
 
 
 class FullAttentionKVRuntimeSubstrate(AdaptiveKVRuntimeSubstrate):
@@ -163,6 +170,12 @@ class FullAttentionKVAdaptiveLayerCache:
         self._logical_offset = 0
         self._handles: dict[int, ResidentBlockHandle] = {}
         self._resident_state: ResidentStateView | None = None
+        self._execution_packs: tuple[ExecutionPack, ...] = ()
+        self._execution_pack_epoch = 0
+        self._execution_packs_built_epoch = 0
+        self._execution_pack_next_id = 0
+        self._execution_pack_slab_count = 0
+        self._execution_pack_slab_token_counts: tuple[int, ...] = ()
         self._topology_epoch = 0
         self._tail_epoch = 0
         self._resident_view_topology_epoch = -1
@@ -170,9 +183,12 @@ class FullAttentionKVAdaptiveLayerCache:
         self._resident_view_query_key: Any = None
         self._resident_view_visible_start = 0
         self._execution_view_topology_rebuilds_total = 0
+        self._observer_flushes_total = 0
+        self._pending_usage_by_block: dict[int, mx.array] = {}
         self._dtype: Any = None
         self._cold_batch_depth = 0
         self._cold_topology_dirty = False
+        self._cold_execution_dirty = False
 
     @property
     def offset(self) -> int:
@@ -214,31 +230,34 @@ class FullAttentionKVAdaptiveLayerCache:
             self._dtype = keys.dtype
         self._manager.ensure_block_coverage(end)
         append_started_ns = time.perf_counter_ns()
-        tail_epoch_changed = False
-        append_only_topology_changed = False
+        append_to_execution_packs = (
+            self._execution_packs_built_epoch == self._execution_pack_epoch
+        )
         for block_id, local_start, local_end in self._manager.registry.token_slices(start, end):
             block = self._manager.registry.get(block_id)
             if block.profile is ResidentProfile.EVICTED:
                 raise AdaptiveKVError(
                     f"Cannot append into evicted block {block.block_id} without recovery"
                 )
-            tail_only = self._append_to_block(
+            slice_keys = keys[..., local_start:local_end, :]
+            slice_values = values[..., local_start:local_end, :]
+            self._append_to_block(
                 block,
-                keys[..., local_start:local_end, :],
-                values[..., local_start:local_end, :],
+                slice_keys,
+                slice_values,
             )
-            if tail_only:
-                tail_epoch_changed = True
-            else:
-                append_only_topology_changed = True
+            if append_to_execution_packs:
+                self._append_execution_segment(
+                    block.block_id,
+                    logical_span=(start + local_start, start + local_end),
+                    keys=slice_keys,
+                    values=slice_values,
+                )
         self.record_perf_ns(
             "cache.update_and_fetch_append_ns",
             time.perf_counter_ns() - append_started_ns,
         )
-        if append_only_topology_changed:
-            self._topology_epoch += 1
-        if tail_epoch_changed:
-            self._tail_epoch += 1
+        self._tail_epoch += 1
         self._logical_offset = end
         self._manager.bump_resident_version()
         resident_state = self.resident_state_for_execution(query_tokens=keys.shape[2])
@@ -266,6 +285,7 @@ class FullAttentionKVAdaptiveLayerCache:
             self.end_cold_mutation_batch()
         if removals:
             self._mark_topology_change()
+            self._mark_execution_structure_change()
             self._manager.bump_resident_version()
 
     def degrade_block(self, block_id: int) -> None:
@@ -297,6 +317,7 @@ class FullAttentionKVAdaptiveLayerCache:
         if handle is not None:
             self._backend.evict_handle(handle)
             self._mark_topology_change()
+            self._mark_execution_structure_change()
         self._manager.bump_resident_version()
 
     def recover_blocks_from_scratch(
@@ -329,6 +350,7 @@ class FullAttentionKVAdaptiveLayerCache:
             self.end_cold_mutation_batch()
         if recovered_any:
             self._mark_topology_change()
+            self._mark_execution_structure_change()
         self._manager.bump_resident_version()
 
     def resident_state_for_execution(self, *, query_tokens: int = 1) -> ResidentStateView:
@@ -345,9 +367,15 @@ class FullAttentionKVAdaptiveLayerCache:
             "view.visible_start_ns",
             time.perf_counter_ns() - visible_started_ns,
         )
+        packs_started_ns = time.perf_counter_ns()
+        self._ensure_execution_packs_current()
+        self.record_perf_ns(
+            "view.ensure_execution_packs_ns",
+            time.perf_counter_ns() - packs_started_ns,
+        )
         if (
             self._resident_state is not None
-            and self._resident_view_topology_epoch == self._topology_epoch
+            and self._resident_view_topology_epoch == self._execution_pack_epoch
             and self._resident_view_tail_epoch == self._tail_epoch
             and self._resident_view_query_key == query_key
             and self._resident_view_visible_start == visible_start
@@ -360,27 +388,13 @@ class FullAttentionKVAdaptiveLayerCache:
             return self._resident_state
 
         self.increment_perf("view.cache_miss_count")
-        ordered_started_ns = time.perf_counter_ns()
-        ordered = tuple(self._ordered_handles(self._logical_offset))
-        self.record_perf_ns(
-            "view.ordered_handles_ns",
-            time.perf_counter_ns() - ordered_started_ns,
-        )
-        if self._resident_view_topology_epoch != self._topology_epoch:
-            self._execution_view_topology_rebuilds_total += 1
-        backend_started_ns = time.perf_counter_ns()
-        queried = self._query_resident_state(ordered, query_tokens=query_tokens)
-        self.record_perf_ns(
-            "view.backend_query_ns",
-            time.perf_counter_ns() - backend_started_ns,
-        )
         compose_started_ns = time.perf_counter_ns()
-        self._resident_state = self._compose_resident_state(queried.slices)
+        self._resident_state = self._compose_resident_state(visible_start=visible_start)
         self.record_perf_ns(
             "view.compose_state_ns",
             time.perf_counter_ns() - compose_started_ns,
         )
-        self._resident_view_topology_epoch = self._topology_epoch
+        self._resident_view_topology_epoch = self._execution_pack_epoch
         self._resident_view_tail_epoch = self._tail_epoch
         self._resident_view_query_key = query_key
         self._resident_view_visible_start = visible_start
@@ -403,7 +417,7 @@ class FullAttentionKVAdaptiveLayerCache:
         ordered: tuple[ResidentBlockHandle, ...],
         *,
         query_tokens: int,
-    ) -> ResidentStateView:
+    ) -> ResidentSliceView:
         del query_tokens
         return self._backend.query_full_view(
             ordered,
@@ -412,27 +426,253 @@ class FullAttentionKVAdaptiveLayerCache:
             execution_view_topology_rebuilds_total=self._execution_view_topology_rebuilds_total,
         )
 
+    def _ensure_execution_packs_current(self) -> None:
+        if self._execution_packs_built_epoch == self._execution_pack_epoch:
+            return
+        ordered_started_ns = time.perf_counter_ns()
+        ordered = tuple(self._ordered_handles(self._logical_offset))
+        self.record_perf_ns(
+            "view.ordered_handles_ns",
+            time.perf_counter_ns() - ordered_started_ns,
+        )
+        backend_started_ns = time.perf_counter_ns()
+        resident_slices = self._query_resident_state(ordered, query_tokens=1)
+        self.record_perf_ns(
+            "view.backend_query_ns",
+            time.perf_counter_ns() - backend_started_ns,
+        )
+        rebuild_started_ns = time.perf_counter_ns()
+        self._rebuild_execution_packs(resident_slices)
+        self.record_perf_ns(
+            "view.rebuild_execution_packs_ns",
+            time.perf_counter_ns() - rebuild_started_ns,
+        )
+        self._execution_packs_built_epoch = self._execution_pack_epoch
+        self._execution_view_topology_rebuilds_total += 1
+
+    def _rebuild_execution_packs(self, resident_slices: ResidentSliceView) -> None:
+        if not resident_slices.slices:
+            self._execution_packs = ()
+            self._execution_pack_slab_count = 0
+            self._execution_pack_slab_token_counts = ()
+            return
+
+        packs: list[ExecutionPack] = []
+        keys_parts: list[mx.array] = []
+        values_parts: list[mx.array] = []
+        block_slices: list[tuple[int, int, int]] = []
+        logical_start: int | None = None
+        logical_end = 0
+        pack_tokens = 0
+
+        def append_block_slices(
+            source: tuple[tuple[int, int, int], ...],
+            *,
+            dest_offset: int,
+        ) -> None:
+            for block_id, local_start, local_end in source:
+                start = dest_offset + local_start
+                end = dest_offset + local_end
+                if (
+                    block_slices
+                    and block_slices[-1][0] == block_id
+                    and block_slices[-1][2] == start
+                ):
+                    prev_block_id, prev_start, _ = block_slices[-1]
+                    block_slices[-1] = (prev_block_id, prev_start, end)
+                else:
+                    block_slices.append((block_id, start, end))
+
+        def finalize_pack() -> None:
+            nonlocal keys_parts, values_parts, block_slices
+            nonlocal logical_start, logical_end, pack_tokens
+            if not keys_parts or logical_start is None:
+                return
+            keys_pack = (
+                keys_parts[0]
+                if len(keys_parts) == 1
+                else mx.concatenate(keys_parts, axis=-2)
+            )
+            values_pack = (
+                values_parts[0]
+                if len(values_parts) == 1
+                else mx.concatenate(values_parts, axis=-2)
+            )
+            packs.append(
+                ExecutionPack(
+                    pack_id=self._execution_pack_next_id,
+                    token_count=pack_tokens,
+                    logical_span=(logical_start, logical_end),
+                    block_slices=tuple(block_slices),
+                    keys=keys_pack,
+                    values=values_pack,
+                    execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+                )
+            )
+            self._execution_pack_next_id += 1
+            keys_parts = []
+            values_parts = []
+            block_slices = []
+            logical_start = None
+            logical_end = 0
+            pack_tokens = 0
+
+        for slice_ref in resident_slices.slices:
+            if (
+                pack_tokens > 0
+                and pack_tokens + slice_ref.token_count > _EXECUTION_PACK_TARGET_TOKENS
+            ):
+                finalize_pack()
+            if logical_start is None:
+                logical_start = slice_ref.logical_span[0]
+            append_block_slices(slice_ref.block_slices, dest_offset=pack_tokens)
+            keys_parts.append(slice_ref.keys_view)
+            values_parts.append(slice_ref.values_view)
+            pack_tokens += slice_ref.token_count
+            logical_end = slice_ref.logical_span[1]
+        finalize_pack()
+
+        self._execution_packs = tuple(packs)
+        self._execution_pack_slab_count = resident_slices.n_execution_slabs
+        self._execution_pack_slab_token_counts = resident_slices.slab_token_counts
+
+    def _append_execution_segment(
+        self,
+        block_id: int,
+        *,
+        logical_span: tuple[int, int],
+        keys: mx.array,
+        values: mx.array,
+    ) -> None:
+        if not self._execution_packs:
+            self._execution_packs = (
+                self._new_execution_pack(
+                    logical_span=logical_span,
+                    keys=keys,
+                    values=values,
+                    block_id=block_id,
+                ),
+            )
+            return
+
+        tail = self._execution_packs[-1]
+        if tail.token_count + keys.shape[2] > _EXECUTION_PACK_TARGET_TOKENS:
+            self._execution_packs = (
+                *self._execution_packs,
+                self._new_execution_pack(
+                    logical_span=logical_span,
+                    keys=keys,
+                    values=values,
+                    block_id=block_id,
+                ),
+            )
+            return
+
+        block_slices = list(tail.block_slices)
+        local_start = tail.token_count
+        local_end = local_start + keys.shape[2]
+        if block_slices and block_slices[-1][0] == block_id and block_slices[-1][2] == local_start:
+            prev_block_id, prev_start, _ = block_slices[-1]
+            block_slices[-1] = (prev_block_id, prev_start, local_end)
+        else:
+            block_slices.append((block_id, local_start, local_end))
+        extended = ExecutionPack(
+            pack_id=tail.pack_id,
+            token_count=tail.token_count + keys.shape[2],
+            logical_span=(tail.logical_span[0], logical_span[1]),
+            block_slices=tuple(block_slices),
+            keys=mx.concatenate([tail.keys, keys], axis=-2),
+            values=mx.concatenate([tail.values, values], axis=-2),
+            execution_mode=tail.execution_mode,
+        )
+        self._execution_packs = (*self._execution_packs[:-1], extended)
+
+    def _new_execution_pack(
+        self,
+        *,
+        logical_span: tuple[int, int],
+        keys: mx.array,
+        values: mx.array,
+        block_id: int,
+    ) -> ExecutionPack:
+        pack = ExecutionPack(
+            pack_id=self._execution_pack_next_id,
+            token_count=keys.shape[2],
+            logical_span=logical_span,
+            block_slices=((block_id, 0, keys.shape[2]),),
+            keys=keys,
+            values=values,
+            execution_mode=ResidentExecutionMode.DEQUANTIZE_ON_READ,
+        )
+        self._execution_pack_next_id += 1
+        return pack
+
     def _compose_resident_state(
         self,
-        slices: tuple[Any, ...],
+        *,
+        visible_start: int,
     ) -> ResidentStateView:
-        slab_token_counts: dict[int, int] = {}
-        total_tokens = 0
-        for slice_ref in slices:
-            total_tokens += slice_ref.token_count
-            slab_token_counts[slice_ref.slab_id] = (
-                slab_token_counts.get(slice_ref.slab_id, 0) + slice_ref.token_count
+        packs: list[ExecutionPackView] = []
+        resident_cursor = 0
+        for pack in self._execution_packs:
+            if pack.logical_span[1] <= visible_start:
+                continue
+            local_start = max(0, visible_start - pack.logical_span[0])
+            if local_start >= pack.token_count:
+                continue
+            local_end = pack.token_count
+            if local_start == 0:
+                block_slices = pack.block_slices
+            else:
+                block_slices = self._clip_block_slices(pack.block_slices, local_start, local_end)
+            visible_span = (
+                max(pack.logical_span[0], visible_start),
+                pack.logical_span[1],
             )
+            token_count = local_end - local_start
+            packs.append(
+                ExecutionPackView(
+                    pack_id=pack.pack_id,
+                    token_count=token_count,
+                    logical_span=pack.logical_span,
+                    visible_span=visible_span,
+                    resident_slice=(resident_cursor, resident_cursor + token_count),
+                    block_slices=block_slices,
+                    keys_view=pack.keys[..., local_start:local_end, :],
+                    values_view=pack.values[..., local_start:local_end, :],
+                    execution_mode=pack.execution_mode,
+                )
+            )
+            resident_cursor += token_count
+
         return ResidentStateView(
-            total_tokens=total_tokens,
-            slices=slices,
-            topology_epoch=self._topology_epoch,
+            total_tokens=resident_cursor,
+            packs=tuple(packs),
+            topology_epoch=self._execution_pack_epoch,
             tail_epoch=self._tail_epoch,
-            n_execution_slabs=len(slab_token_counts),
-            slab_token_counts=tuple(slab_token_counts.values()),
+            n_execution_packs=len(packs),
+            pack_token_counts=tuple(pack.token_count for pack in packs),
+            n_execution_slabs=self._execution_pack_slab_count,
+            slab_token_counts=self._execution_pack_slab_token_counts,
             fabric_compactions_total=self._backend.compactions_total,
             execution_view_topology_rebuilds_total=self._execution_view_topology_rebuilds_total,
+            observer_flushes_total=self._observer_flushes_total,
         )
+
+    @staticmethod
+    def _clip_block_slices(
+        block_slices: tuple[tuple[int, int, int], ...],
+        local_start: int,
+        local_end: int,
+    ) -> tuple[tuple[int, int, int], ...]:
+        clipped: list[tuple[int, int, int]] = []
+        for block_id, block_start, block_end in block_slices:
+            start = max(block_start, local_start)
+            end = min(block_end, local_end)
+            if start >= end:
+                continue
+            clipped.append((block_id, start - local_start, end - local_start))
+        return tuple(clipped)
 
     def make_mask(
         self,
@@ -448,6 +688,14 @@ class FullAttentionKVAdaptiveLayerCache:
         self._logical_offset = 0
         self._handles = {}
         self._resident_state = None
+        self._execution_packs = ()
+        self._execution_pack_epoch = 0
+        self._execution_packs_built_epoch = 0
+        self._execution_pack_next_id = 0
+        self._execution_pack_slab_count = 0
+        self._execution_pack_slab_token_counts = ()
+        self._observer_flushes_total = 0
+        self._pending_usage_by_block = {}
         self._backend.reset()
         self._topology_epoch = 0
         self._tail_epoch = 0
@@ -458,6 +706,7 @@ class FullAttentionKVAdaptiveLayerCache:
         self._execution_view_topology_rebuilds_total = 0
         self._cold_batch_depth = 0
         self._cold_topology_dirty = False
+        self._cold_execution_dirty = False
 
     def trim(self, n: int) -> int:
         if n <= 0:
@@ -492,6 +741,9 @@ class FullAttentionKVAdaptiveLayerCache:
         if self._cold_batch_depth == 0 and self._cold_topology_dirty:
             self._topology_epoch += 1
             self._cold_topology_dirty = False
+        if self._cold_batch_depth == 0 and self._cold_execution_dirty:
+            self._execution_pack_epoch += 1
+            self._cold_execution_dirty = False
 
     def should_sample_usage(self) -> bool:
         return True
@@ -507,26 +759,37 @@ class FullAttentionKVAdaptiveLayerCache:
     ) -> None:
         started_ns = time.perf_counter_ns()
         aggregated_by_block: dict[int, mx.array] = {}
-        for slice_ref in resident_state.slices:
-            seg_start, seg_end = slice_ref.resident_slice
+        for pack_ref in resident_state.packs:
+            seg_start, seg_end = pack_ref.resident_slice
             segment_usage = usage_by_token[seg_start:seg_end]
-            if not slice_ref.block_slices:
+            if not pack_ref.block_slices:
                 continue
-            for block_id, local_start, local_end in slice_ref.block_slices:
+            for block_id, local_start, local_end in pack_ref.block_slices:
                 value = segment_usage[local_start:local_end].mean(keepdims=True)
                 existing = aggregated_by_block.get(block_id)
                 aggregated_by_block[block_id] = value if existing is None else existing + value
         if aggregated_by_block:
-            block_ids = tuple(aggregated_by_block.keys())
-            values = tuple(aggregated_by_block[block_id] for block_id in block_ids)
-            self._manager.usage.record_batch(
-                block_ids,
-                values[0] if len(values) == 1 else mx.concatenate(values, axis=0),
-            )
+            for block_id, value in aggregated_by_block.items():
+                existing = self._pending_usage_by_block.get(block_id)
+                self._pending_usage_by_block[block_id] = (
+                    value if existing is None else existing + value
+                )
         self.record_perf_ns(
             "usage.record_from_attention_ns",
             time.perf_counter_ns() - started_ns,
         )
+
+    def flush_usage_observer(self) -> None:
+        if not self._pending_usage_by_block:
+            return
+        block_ids = tuple(self._pending_usage_by_block.keys())
+        values = tuple(self._pending_usage_by_block[block_id] for block_id in block_ids)
+        self._manager.usage.record_batch(
+            block_ids,
+            values[0] if len(values) == 1 else mx.concatenate(values, axis=0),
+        )
+        self._pending_usage_by_block = {}
+        self._observer_flushes_total += 1
 
     def block_live_bytes(self, block_id: int) -> int:
         handle = self._handles.get(block_id)
@@ -606,6 +869,12 @@ class FullAttentionKVAdaptiveLayerCache:
             self._cold_topology_dirty = True
             return
         self._topology_epoch += 1
+
+    def _mark_execution_structure_change(self) -> None:
+        if self._cold_batch_depth > 0:
+            self._cold_execution_dirty = True
+            return
+        self._execution_pack_epoch += 1
 
     def record_perf_ns(self, name: str, elapsed_ns: int) -> None:
         self._manager.record_perf_ns(name, elapsed_ns)

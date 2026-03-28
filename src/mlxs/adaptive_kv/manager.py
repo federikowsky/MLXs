@@ -185,6 +185,7 @@ class AdaptiveKVManager:
         if self.decode_steps % self.config.update_window_steps != 0:
             return
         started = time.perf_counter()
+        self._flush_usage_observers()
         prev_eval_ns = 0
         prev_host_ns = 0
         if self._adaptive_usage_timing_acc is not None:
@@ -247,11 +248,14 @@ class AdaptiveKVManager:
             return {"error": last_error or "no attention-bearing adaptive layer is available"}
         return {
             "n_execution_slabs": rs.n_execution_slabs,
-            "n_visible_slices": len(rs.slices),
+            "n_execution_packs": rs.n_execution_packs,
+            "pack_token_counts": list(rs.pack_token_counts),
+            "n_visible_slices": len(rs.packs),
             "slab_token_counts": list(rs.slab_token_counts),
-            "visible_spans": [slice_ref.visible_span for slice_ref in rs.slices],
+            "visible_spans": [pack_ref.visible_span for pack_ref in rs.packs],
             "fabric_compactions_total": rs.fabric_compactions_total,
             "execution_view_topology_rebuilds_total": rs.execution_view_topology_rebuilds_total,
+            "observer_flushes_total": rs.observer_flushes_total,
         }
 
     def debug_snapshot(self) -> dict[str, Any]:
@@ -520,6 +524,12 @@ class AdaptiveKVManager:
             end = getattr(cache, "end_cold_mutation_batch", None)
             if end is not None:
                 end()
+
+    def _flush_usage_observers(self) -> None:
+        for cache in self._layer_caches:
+            flush = getattr(cache, "flush_usage_observer", None)
+            if flush is not None:
+                flush()
 
     def _ensure_scratch_replay_prefix(self, total_tokens: int) -> list[Any]:
         previous_replayed_tokens = self._scratch_replayed_tokens

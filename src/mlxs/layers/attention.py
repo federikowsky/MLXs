@@ -13,7 +13,7 @@ from mlx.utils import tree_map
 
 from mlxs.adaptive_kv.resident import ResidentExecutionMode
 
-_ADAPTIVE_DENSE_FAST_SLICE_LIMIT = 4
+_ADAPTIVE_DENSE_FAST_PACK_LIMIT = 4
 
 
 def quantized_scaled_dot_product_attention(
@@ -191,38 +191,38 @@ def _slice_attention_mask(
     return mask[..., start:end]
 
 
-def _slice_scores(
+def _pack_scores(
     queries: mx.array,
-    slice_ref: Any,
+    pack_ref: Any,
     *,
     scale: float,
 ) -> mx.array:
-    if slice_ref.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
+    if pack_ref.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
         raise ValueError(
             "Family-specific adaptive attention execution must be resolved by the "
             "runtime before reaching the generic attention path"
         )
-    return _full_segment_scores(queries, slice_ref.keys_view, scale=scale)
+    return _full_segment_scores(queries, pack_ref.keys_view, scale=scale)
 
 
-def _slice_output(weights: mx.array, slice_ref: Any) -> mx.array:
-    if slice_ref.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
+def _pack_output(weights: mx.array, pack_ref: Any) -> mx.array:
+    if pack_ref.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
         raise ValueError(
             "Family-specific adaptive attention execution must be resolved by the "
             "runtime before reaching the generic attention path"
         )
-    return _full_segment_output(weights, slice_ref.values_view)
+    return _full_segment_output(weights, pack_ref.values_view)
 
 
-def _concatenate_resident_slices(
+def _concatenate_resident_packs(
     resident_state: Any,
 ) -> tuple[mx.array, mx.array]:
-    if len(resident_state.slices) == 1:
-        slice_ref = resident_state.slices[0]
-        return slice_ref.keys_view, slice_ref.values_view
+    if len(resident_state.packs) == 1:
+        pack_ref = resident_state.packs[0]
+        return pack_ref.keys_view, pack_ref.values_view
     return (
-        mx.concatenate([slice_ref.keys_view for slice_ref in resident_state.slices], axis=-2),
-        mx.concatenate([slice_ref.values_view for slice_ref in resident_state.slices], axis=-2),
+        mx.concatenate([pack_ref.keys_view for pack_ref in resident_state.packs], axis=-2),
+        mx.concatenate([pack_ref.values_view for pack_ref in resident_state.packs], axis=-2),
     )
 
 
@@ -238,13 +238,13 @@ def _adaptive_dense_concat_attention(
     trace = getattr(cache, "record_perf_ns", None)
     sync_enabled = bool(getattr(cache, "perf_sync_enabled", lambda: False)())
     total_started_ns = time.perf_counter_ns()
-    for slice_ref in resident_state.slices:
-        if slice_ref.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
+    for pack_ref in resident_state.packs:
+        if pack_ref.execution_mode is ResidentExecutionMode.FAMILY_SPECIFIC:
             raise ValueError(
                 "Family-specific adaptive attention execution must be resolved by the "
                 "runtime before reaching the generic attention path"
             )
-    keys, values = _concatenate_resident_slices(resident_state)
+    keys, values = _concatenate_resident_packs(resident_state)
     if not sample_usage:
         out = mx.fast.scaled_dot_product_attention(
             queries,
@@ -285,8 +285,8 @@ def _adaptive_segmented_reference_attention(
     sample_usage: bool,
     cache: Any | None = None,
 ) -> mx.array | tuple[mx.array, mx.array]:
-    if not resident_state.slices:
-        raise ValueError("Adaptive attention requires at least one resident slice")
+    if not resident_state.packs:
+        raise ValueError("Adaptive attention requires at least one resident pack")
 
     trace = getattr(cache, "record_perf_ns", None)
     sync_enabled = bool(getattr(cache, "perf_sync_enabled", lambda: False)())
@@ -295,12 +295,12 @@ def _adaptive_segmented_reference_attention(
     global_max: mx.array | None = None
     exp_sum: mx.array | None = None
     query_tokens = queries.shape[-2]
-    for slice_ref in resident_state.slices:
-        local_scores = _slice_scores(queries, slice_ref, scale=scale)
+    for pack_ref in resident_state.packs:
+        local_scores = _pack_scores(queries, pack_ref, scale=scale)
         local_mask = _slice_attention_mask(
             mask,
             resident_total_tokens=resident_state.total_tokens,
-            resident_slice=slice_ref.resident_slice,
+            resident_slice=pack_ref.resident_slice,
             query_tokens=query_tokens,
         )
         local_scores, _ = _apply_attention_mask(local_scores, local_mask)
@@ -326,19 +326,19 @@ def _adaptive_segmented_reference_attention(
     pass2_started_ns = time.perf_counter_ns()
     out: mx.array | None = None
     usage_parts: list[mx.array] | None = [] if sample_usage else None
-    for slice_ref in resident_state.slices:
-        local_scores = _slice_scores(queries, slice_ref, scale=scale)
+    for pack_ref in resident_state.packs:
+        local_scores = _pack_scores(queries, pack_ref, scale=scale)
         local_mask = _slice_attention_mask(
             mask,
             resident_total_tokens=resident_state.total_tokens,
-            resident_slice=slice_ref.resident_slice,
+            resident_slice=pack_ref.resident_slice,
             query_tokens=query_tokens,
         )
         local_scores, _ = _apply_attention_mask(local_scores, local_mask)
         local_weights = mx.exp(local_scores - global_max[..., None]) / exp_sum[..., None]
         if usage_parts is not None:
             usage_parts.append(_usage_by_token(local_weights))
-        local_out = _slice_output(local_weights, slice_ref)
+        local_out = _pack_output(local_weights, pack_ref)
         out = local_out if out is None else out + local_out
 
     if out is None:
@@ -370,7 +370,7 @@ def adaptive_scaled_dot_product_attention(
     sample_usage: bool,
     cache: Any | None = None,
 ) -> mx.array | tuple[mx.array, mx.array]:
-    if len(resident_state.slices) <= _ADAPTIVE_DENSE_FAST_SLICE_LIMIT:
+    if len(resident_state.packs) <= _ADAPTIVE_DENSE_FAST_PACK_LIMIT:
         return _adaptive_dense_concat_attention(
             queries,
             resident_state,

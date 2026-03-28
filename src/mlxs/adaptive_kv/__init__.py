@@ -39,7 +39,13 @@ from mlxs.adaptive_kv.runtime import (
     RuntimeFamilyDescriptor,
     SupportLevel,
 )
-from mlxs.adaptive_kv.storage import ExecutionSliceRef, ResidentStateView
+from mlxs.adaptive_kv.storage import (
+    ExecutionPack,
+    ExecutionPackView,
+    ExecutionSliceRef,
+    ResidentSliceView,
+    ResidentStateView,
+)
 
 __all__ = [
     "AdapterCapabilities",
@@ -57,6 +63,8 @@ __all__ = [
     "CompatibilityResult",
     "ComposedAdaptiveKVRuntimeAdapter",
     "ExecutionFragment",
+    "ExecutionPack",
+    "ExecutionPackView",
     "ExecutionSlab",
     "ExecutionSliceRef",
     "FamilyProfileCapability",
@@ -66,6 +74,7 @@ __all__ = [
     "ResidentExecutionMode",
     "ResidentProfile",
     "ResidentProfileDescriptor",
+    "ResidentSliceView",
     "ResidentStateView",
     "RuntimeFamily",
     "RuntimeFamilyBindings",
