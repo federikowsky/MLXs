@@ -1,0 +1,132 @@
+{
+  "sweeps": [
+    [
+      {
+        "name": "llama_short_hard",
+        "adaptive_tok_s": 220.16,
+        "adaptive_elapsed_s": 0.0727,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      },
+      {
+        "name": "ministral3_short",
+        "adaptive_tok_s": 193.03,
+        "adaptive_elapsed_s": 0.0829,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      },
+      {
+        "name": "qwen35_short_hybrid",
+        "adaptive_tok_s": 159.73,
+        "adaptive_elapsed_s": 0.1002,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      },
+      {
+        "name": "qwen35_long_soft_96",
+        "adaptive_tok_s": 66.15,
+        "adaptive_elapsed_s": 1.4513,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      }
+    ],
+    [
+      {
+        "name": "llama_short_hard",
+        "adaptive_tok_s": 220.69,
+        "adaptive_elapsed_s": 0.0725,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      },
+      {
+        "name": "ministral3_short",
+        "adaptive_tok_s": 187.96,
+        "adaptive_elapsed_s": 0.0851,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      },
+      {
+        "name": "qwen35_short_hybrid",
+        "adaptive_tok_s": 159.99,
+        "adaptive_elapsed_s": 0.1,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      },
+      {
+        "name": "qwen35_long_soft_96",
+        "adaptive_tok_s": 65.57,
+        "adaptive_elapsed_s": 1.4641,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      }
+    ],
+    [
+      {
+        "name": "llama_short_hard",
+        "adaptive_tok_s": 218.01,
+        "adaptive_elapsed_s": 0.0734,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      },
+      {
+        "name": "ministral3_short",
+        "adaptive_tok_s": 227.2,
+        "adaptive_elapsed_s": 0.0704,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      },
+      {
+        "name": "qwen35_short_hybrid",
+        "adaptive_tok_s": 158.49,
+        "adaptive_elapsed_s": 0.101,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      },
+      {
+        "name": "qwen35_long_soft_96",
+        "adaptive_tok_s": 68.49,
+        "adaptive_elapsed_s": 1.4017,
+        "reference_token_match": true,
+        "first_mismatch_token": null
+      }
+    ]
+  ],
+  "summary": {
+    "llama_short_hard": {
+      "tok_s_values": [
+        220.16,
+        220.69,
+        218.01
+      ],
+      "median_tok_s": 220.16,
+      "mean_tok_s": 219.62
+    },
+    "ministral3_short": {
+      "tok_s_values": [
+        193.03,
+        187.96,
+        227.2
+      ],
+      "median_tok_s": 193.03,
+      "mean_tok_s": 202.73
+    },
+    "qwen35_short_hybrid": {
+      "tok_s_values": [
+        159.73,
+        159.99,
+        158.49
+      ],
+      "median_tok_s": 159.73,
+      "mean_tok_s": 159.4
+    },
+    "qwen35_long_soft_96": {
+      "tok_s_values": [
+        66.15,
+        65.57,
+        68.49
+      ],
+      "median_tok_s": 66.15,
+      "mean_tok_s": 66.74
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "qwen35_short_hybrid": [
+    {
+      "label": "current",
+      "adaptive_tok_s": 84.21,
+      "adaptive_elapsed_s": 0.19,
+      "reference_token_match": true
+    },
+    {
+      "label": "patched_segmented_small_gqa",
+      "adaptive_tok_s": 107.17,
+      "adaptive_elapsed_s": 0.1493,
+      "reference_token_match": true
+    }
+  ],
+  "qwen35_long_soft_96": [
+    {
+      "label": "current",
+      "adaptive_tok_s": 39.92,
+      "adaptive_elapsed_s": 2.4049,
+      "reference_token_match": true
+    },
+    {
+      "label": "patched_segmented_small_gqa",
+      "adaptive_tok_s": 36.67,
+      "adaptive_elapsed_s": 2.6177,
+      "reference_token_match": true
+    }
+  ]
+}
