@@ -7,28 +7,24 @@ and yields a stream of TokenEvent objects.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import mlx.core as mx
-import mlx.nn as nn
 
 from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
-from mlxs.cache.kv import KVCache
-from mlxs.generate.decode import decode_loop
-from mlxs.generate.logits import make_logits_processors
+from mlxs.generate.decode import decode_loop, prepare_decode_plan
 from mlxs.generate.prefill import chunked_prefill
-from mlxs.generate.sampling import make_sampler
-from mlxs.generate.stop import StopCondition
 from mlxs.protocols.generate import TokenizerProtocol
 
 
 def generate(
-    model: nn.Module,
+    model: Any,
     tokenizer: TokenizerProtocol,
     prompt: str | list[int],
     options: GenerateOptions | None = None,
     *,
-    cache: list[KVCache] | None = None,
+    cache: list[Any] | None = None,
     input_embeddings: mx.array | None = None,
     prefill_step_size: int = 2048,
     compile_decode: bool = False,
@@ -36,7 +32,7 @@ def generate(
     quantized_kv_start: int = 0,
     kv_bits: int | None = None,
     kv_group_size: int = 64,
-    final_cache_out: list[list[KVCache]] | None = None,
+    final_cache_out: list[list[Any]] | None = None,
 ) -> Iterator[TokenEvent]:
     """Generate tokens from a prompt (§6.1, FR3).
 
@@ -102,39 +98,6 @@ def generate(
     if cache is None:
         cache = model.make_cache()
 
-    # Build sampler (resolved once, not per token — O2)
-    sampler = make_sampler(
-        temperature=options.temperature,
-        top_p=options.top_p,
-        top_k=options.top_k,
-        min_p=options.min_p,
-    )
-
-    # Build logits processors (resolved once)
-    logits_processors = make_logits_processors(
-        repetition_penalty=options.repetition_penalty,
-    )
-
-    # Build stop condition (resolved once)
-    stop = StopCondition(
-        eos_token_id=tokenizer.eos_token_id,
-        max_tokens=options.max_tokens,
-        stop_sequences=options.stop_sequences,
-        extra_eos_token_ids=options.extra_eos_token_ids,
-    )
-
-    # Build compiled forward if requested (§6.8, AC12 fallback-safe).
-    # Cache must be closed over — mx.compile cannot take KVCache as an argument.
-    forward_fn = None
-    if compile_decode:
-        try:
-            from mlxs.generate.compile import make_compiled_step
-
-            forward_fn = make_compiled_step(model, cache)
-        except Exception:
-            # Fallback to uncompiled (AC12)
-            forward_fn = None
-
     # Prefill: process prompt through model
     first_logits = chunked_prefill(
         model,
@@ -144,19 +107,22 @@ def generate(
         input_embeddings=input_embeddings,
     )
 
+    plan = prepare_decode_plan(
+        model,
+        cache,
+        options=options,
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=prompt_token_count,
+        compile_decode=compile_decode,
+    )
+
     def _gen() -> Iterator[TokenEvent]:
         try:
             yield from decode_loop(
-                model,
                 cache,
                 first_logits,
-                sampler=sampler,
-                stop=stop,
-                decoder=tokenizer.decode,
-                logits_processors=logits_processors or None,
-                options=options,
-                prompt_token_count=prompt_token_count,
-                forward_fn=forward_fn,
+                plan=plan,
                 clear_cache_interval=clear_cache_interval,
                 quantized_kv_start=quantized_kv_start,
                 kv_bits=kv_bits,

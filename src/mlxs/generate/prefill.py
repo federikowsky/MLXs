@@ -7,16 +7,15 @@ intermediate buffers.
 
 from __future__ import annotations
 
-import mlx.core as mx
-import mlx.nn as nn
+from typing import Any, cast
 
-from mlxs.cache.kv import KVCache
+import mlx.core as mx
 
 
 def chunked_prefill(
-    model: nn.Module,
+    model: Any,
     prompt_tokens: mx.array,
-    cache: list[KVCache],
+    cache: list[Any],
     *,
     prefill_step_size: int = 2048,
     input_embeddings: mx.array | None = None,
@@ -58,7 +57,10 @@ def chunked_prefill(
     last_token = prompt_tokens[offset:]
     if input_embeddings is not None:
         last_embed = input_embeddings[offset:]
-        logits = model(last_token[None], cache=cache, input_embeddings=last_embed[None])
+        logits = cast(
+            mx.array,
+            model(last_token[None], cache=cache, input_embeddings=last_embed[None]),
+        )
     else:
-        logits = model(last_token[None], cache=cache)
+        logits = cast(mx.array, model(last_token[None], cache=cache))
     return logits[:, -1, :]

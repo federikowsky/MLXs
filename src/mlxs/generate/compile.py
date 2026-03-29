@@ -11,17 +11,20 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from functools import partial
+from typing import Any, cast
 
 import mlx.core as mx
-import mlx.nn as nn
 
 logger = logging.getLogger(__name__)
 
+DecodeStep = Callable[[mx.array], mx.array]
+
 
 def make_compiled_step(
-    model: nn.Module,
-    cache: list,
-) -> Callable[[mx.array], mx.array]:
+    model: Any,
+    cache: list[Any],
+) -> DecodeStep:
     """Create a compiled single-token decode step.
 
     ``mx.compile`` only accepts array trees as *formal* arguments; ``KVCache``
@@ -41,14 +44,81 @@ def make_compiled_step(
 
     @mx.compile
     def compiled_step(input_ids: mx.array) -> mx.array:
-        return model(input_ids, cache=cache)
+        return cast(mx.array, model(input_ids, cache=cache))
 
     return compiled_step
 
 
+class DecodeForwardRuntime:
+    """Decode-time forward runtime with explicit cache rebinding."""
+
+    __slots__ = ("_cache", "_compile_decode", "_compiled", "_model", "_step")
+
+    def __init__(
+        self,
+        model: Any,
+        cache: list[Any],
+        *,
+        compile_decode: bool,
+    ) -> None:
+        self._model = model
+        self._cache = cache
+        self._compile_decode = compile_decode
+        self._compiled = False
+        self._step: DecodeStep = self._make_uncompiled_step(cache)
+        self.on_cache_replaced(cache)
+
+    @property
+    def compiled(self) -> bool:
+        return self._compiled
+
+    def forward(self, input_ids: mx.array) -> mx.array:
+        if not self._compiled:
+            return self._step(input_ids)
+
+        try:
+            return self._step(input_ids)
+        except Exception:
+            logger.warning("Compiled decode step failed; falling back to uncompiled forward.")
+            self._step = self._make_uncompiled_step(self._cache)
+            self._compiled = False
+            return self._step(input_ids)
+
+    def on_cache_replaced(self, cache: list[Any]) -> None:
+        self._cache = cache
+        if not self._compile_decode:
+            self._step = self._make_uncompiled_step(cache)
+            self._compiled = False
+            return
+
+        try:
+            self._step = make_compiled_step(self._model, cache)
+            self._compiled = True
+        except Exception:
+            logger.warning(
+                "Compiled decode setup failed; using uncompiled forward for this cache."
+            )
+            self._step = self._make_uncompiled_step(cache)
+            self._compiled = False
+
+    def _make_uncompiled_step(self, cache: list[Any]) -> DecodeStep:
+        return partial(self._model, cache=cache)
+
+
+def make_decode_forward_runtime(
+    model: Any,
+    cache: list[Any],
+    *,
+    compile_decode: bool,
+) -> DecodeForwardRuntime:
+    """Create the decode forward runtime for a single request."""
+
+    return DecodeForwardRuntime(model, cache, compile_decode=compile_decode)
+
+
 def warmup(
-    model: nn.Module,
-    cache_factory: callable,
+    model: Any,
+    cache_factory: Callable[[], list[Any]],
     *,
     vocab_size: int = 32000,
 ) -> None:
