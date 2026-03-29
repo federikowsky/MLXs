@@ -10,6 +10,7 @@ to the baseline (AC12).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -19,24 +20,30 @@ logger = logging.getLogger(__name__)
 
 def make_compiled_step(
     model: nn.Module,
-) -> callable:
+    cache: list,
+) -> Callable[[mx.array], mx.array]:
     """Create a compiled single-token decode step.
 
-    Compiles only the model forward pass (not cache update or sampling)
-    to avoid recompilation from shape changes (Plan §A4).
+    ``mx.compile`` only accepts array trees as *formal* arguments; ``KVCache``
+    objects are not traceable, so the active cache list is **closed over** here
+    and the compiled function takes only ``input_ids`` (§6.8, AC12).
+
+    ``decode_loop`` should call the result as ``step(input_ids)`` — same as an
+    uncompiled ``functools.partial(model, cache=cache)``.
 
     Args:
         model: The model to compile.
+        cache: KV cache list for this generation (same instance as decode_loop).
 
     Returns:
-        A compiled function with signature (input_ids, cache) -> logits.
+        ``(input_ids) -> logits``; only ``input_ids`` participates in compilation.
     """
 
     @mx.compile
-    def _compiled_forward(input_ids: mx.array, cache: list) -> mx.array:
+    def compiled_step(input_ids: mx.array) -> mx.array:
         return model(input_ids, cache=cache)
 
-    return _compiled_forward
+    return compiled_step
 
 
 def warmup(

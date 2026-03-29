@@ -123,13 +123,14 @@ def generate(
         extra_eos_token_ids=options.extra_eos_token_ids,
     )
 
-    # Build compiled forward if requested (§6.8, AC12 fallback-safe)
+    # Build compiled forward if requested (§6.8, AC12 fallback-safe).
+    # Cache must be closed over — mx.compile cannot take KVCache as an argument.
     forward_fn = None
     if compile_decode:
         try:
             from mlxs.generate.compile import make_compiled_step
 
-            forward_fn = make_compiled_step(model)
+            forward_fn = make_compiled_step(model, cache)
         except Exception:
             # Fallback to uncompiled (AC12)
             forward_fn = None

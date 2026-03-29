@@ -9,6 +9,7 @@ The hottest path in the library. Design principles:
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from functools import partial
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -30,7 +31,7 @@ def decode_loop(
     logits_processors: list[LogitsProcessor] | None = None,
     options: GenerateOptions,
     prompt_token_count: int,
-    forward_fn: Callable[..., mx.array] | None = None,
+    forward_fn: Callable[[mx.array], mx.array] | None = None,
     clear_cache_interval: int = 256,
     quantized_kv_start: int = 0,
     kv_bits: int | None = None,
@@ -48,8 +49,8 @@ def decode_loop(
         logits_processors: Optional logits processors.
         options: Generation options (for logprobs config).
         prompt_token_count: Number of prompt tokens (for TokenEvent metadata).
-        forward_fn: Optional compiled forward function. Falls back to model()
-            if None (AC12 fallback-safe).
+        forward_fn: Optional compiled forward ``(input_ids) -> logits``. If
+            None, uses ``partial(model, cache=cache)`` (AC12 fallback-safe).
         clear_cache_interval: Steps between mx.clear_cache() calls (§6.8).
             0 = disabled. Default: 256.
         quantized_kv_start: Convert cache to quantized after this many decode
@@ -60,8 +61,10 @@ def decode_loop(
     Yields:
         TokenEvent for each generated token.
     """
-    # Resolve forward function once (O2 — no per-token dispatch)
-    _forward = forward_fn if forward_fn is not None else model
+    # Resolve forward once (O2): same call shape with or without compile
+    _forward: Callable[[mx.array], mx.array] = (
+        forward_fn if forward_fn is not None else partial(model, cache=cache)
+    )
 
     # Resolve logprobs config once (O2)
     emit_logprobs = options.logprobs
@@ -125,22 +128,18 @@ def decode_loop(
         if quantized_kv_start > 0 and kv_bits is not None and n == quantized_kv_start:
             from mlxs.cache import convert_to_quantized
 
-            cache[:] = convert_to_quantized(
-                cache, kv_bits=kv_bits, kv_group_size=kv_group_size
-            )
+            cache[:] = convert_to_quantized(cache, kv_bits=kv_bits, kv_group_size=kv_group_size)
 
         n += 1
 
         # Compute next token (§6.1 — mx.eval, not mx.async_eval)
-        next_logits = _forward(y[None], cache=cache)
+        next_logits = _forward(y[None])
         next_logits = next_logits[:, -1, :]
 
         # Apply logits processors if any
         if logits_processors:
             all_tokens = (
-                mx.array(tokens_generated)
-                if tokens_generated
-                else mx.array([], dtype=mx.int32)
+                mx.array(tokens_generated) if tokens_generated else mx.array([], dtype=mx.int32)
             )
             for processor in logits_processors:
                 next_logits = processor(all_tokens, next_logits)
