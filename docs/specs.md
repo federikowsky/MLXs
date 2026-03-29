@@ -362,6 +362,7 @@ No circular dependencies. **Server** and **CLI** are the only composition roots 
 - mlx_lm: `generate.py`, `server.py`, `models/cache.py`, `utils.py`. For memory monitoring and trim-on-ceiling behavior: `server.py` (`_process_rss_gb`, `_memory_pressure_level`, `_trim_cache_if_rss_over_ceiling`, `trim_to`, `--prompt-cache-max-rss`, `--prompt-cache-max-pressure`, `--prompt-cache-trim-keep`, `--prompt-cache-trim-step`, `--prompt-cache-target-rss-ratio`).
 - MLX: `mx.stream`, `mx.new_stream`, `mx.eval`, `mx.async_eval` (experimental), `mx.synchronize`, `mx.clear_cache`, `mx.set_wired_limit`, `mx.compile`, `mx.device_info`, `mx.get_peak_memory`. Wired limit is effective on macOS 15+ with Metal.
 - Project doc: `docs/kv-cache-and-prompt-cache.md` (prompt cache and KV options).
+- Adaptive KV (exact execution-pack frozen baseline, track archival, repo map): `docs/adaptive_kv_execution_pack_track_archival.md`, `docs/adaptive_kv_turboquant_first.spec.md`, `docs/dev/repo_mapping_kv_cache.md`. Historical V1 report package: `docs/adaptive_kv_report/`.
 
 ---
 

@@ -1,20 +1,26 @@
-# Adaptive KV TurboQuant-First Resident Architecture Specification
+# Exact Adaptive KV — Execution-Pack Retained Baseline (Archived Track Specification)
+
+**Document status:** This specification is the canonical **technical freeze** for the **exact adaptive execution-pack** baseline implemented in-tree. The **active engineering track** that pursued retainable throughput parity vs the non-adaptive baseline in comfortable/long regimes is **archived**; strategy pivots to pragmatic `FULL` / `COMPRESSED` / `EVICTED` (see [adaptive_kv_execution_pack_track_archival.md](./adaptive_kv_execution_pack_track_archival.md)).
+
+**Companion:** [adaptive_kv_execution_pack_track_archival.md](./adaptive_kv_execution_pack_track_archival.md) — archival decision record (outcomes, limits, rejected closure attempts, next direction).
 
 ## 1. Scope and Intent
 
-This document is the canonical source of truth for the **completed TurboQuant-first** Adaptive KV branch in MLXs.
+This document describes the **frozen retained** exact adaptive serving architecture in MLXs: what the code implements, what was validated, and what is **not** claimed for product defaults.
 
-It records the final retained architecture, validation stance, and archival position for the branch that replaced the earlier operational tier model:
+Under this program, the earlier operational vocabulary:
 
 - `FULL`
 - `COMPRESSED`
 - `EVICTED`
 
-with a resident-profile model:
+was **superseded in implementation** by resident-profile outcomes:
 
 - `TQ_SAFE`
 - `TQ_AGGR`
 - `EVICTED`
+
+A **follow-on** mainline program may reintroduce pragmatic `FULL` / `COMPRESSED` / `EVICTED` tiering; that migration is **out of scope** here and is recorded only at intent level in the archival ADR.
 
 The retained implementation is grounded in the current repository structure:
 
@@ -23,8 +29,6 @@ The retained implementation is grounded in the current repository structure:
 - model-specific adapters under `src/mlxs/adaptive_kv/adapters/`,
 - generation orchestration under `src/mlxs/generate/`,
 - family-aware support gating through runtime capabilities and adapter selection.
-
-This specification does not define a compatibility-preserving migration from the older `FULL / COMPRESSED / EVICTED` baseline. It defines the replacement architecture that was implemented and retained for this branch.
 
 The redesign preserves the following principles:
 
@@ -49,18 +53,18 @@ The final retained implementation adds:
 - exact pack-native streaming attention,
 - cold-batch / deferred-compaction mutation handling,
 - delayed observer flushes at policy boundaries,
-- executor and usage-sync improvements that materially strengthened the serving path while preserving exactness.
+- executor and usage-sync changes retained on the serving path where they preserved exactness (further redesign as a definitive throughput closure was investigated and rejected; see §16.7).
 
 
 ## 2. Design Goals
 
 The branch implementation defined by this specification must satisfy all of the following goals.
 
-### 2.1 TurboQuant-first resident design
+### 2.1 Resident profiles and exact execution substrate
 
-TurboQuant remains the primary resident backend contract and naming surface for this branch. In the retained implementation, however, TurboQuant-first means **resident-profile planning plus a backend-owned execution substrate**, not a retained lossy resident-compression path.
+Operational resident outcomes are named `TQ_SAFE`, `TQ_AGGR`, and `EVICTED`. Implementation types may still use a `TurboQuant*` module or backend name; that is **legacy naming**, not a claim that **lossy TurboQuant resident compression** is the centerpiece of the retained baseline.
 
-Resident KV state is managed as profiled resident execution slabs and slice views. The earlier lossy resident backend direction was rejected because it could not satisfy oracle fidelity honestly.
+The frozen baseline is defined by **exact** persistent execution slabs, execution packs, pack-native streaming attention, and oracle validation—not by a retainable lossy resident-compression core. A TurboQuant-first direction as the **throughput closure** centerpiece was investigated and rejected (see §16.1 and §16.7).
 
 ### 2.2 No `FULL` operational resident tier
 
@@ -98,11 +102,11 @@ The design must not collapse those families into one pseudo-generic substrate.
 
 ## 3. Non-Goals
 
-The following are explicitly out of scope for this branch specification.
+The following are explicitly out of scope for **this** specification (the execution-pack frozen baseline).
 
-- Backward compatibility with the retained `FULL / COMPRESSED / EVICTED` runtime model.
-- Gradual migration layers, compatibility shims, or dual-mode runtime operation.
-- An operational fallback that silently reintroduces `FULL` resident runtime state.
+- Definition of a compatibility-preserving migration from this frozen baseline to the follow-on pragmatic `FULL / COMPRESSED / EVICTED` program (separate planning).
+- Gradual migration layers, compatibility shims, or dual-mode runtime operation **as specified here**—follow-on work may define them elsewhere.
+- An operational fallback that **silently** reintroduces a dense `FULL` resident tier **inside this exact baseline** without a deliberate new program and re-validation.
 - Support for unsupported generation surfaces such as `compile_decode`, legacy `quantized_kv_start`, or external cache reuse.
 - A promise of support for every future model family merely because the architecture is generic.
 - A learned controller, RL policy, semantic retrieval layer, or topic-aware retrieval module.
@@ -260,18 +264,15 @@ The retained implementation realizes that separation through:
 
 The backend therefore exposes execution views separately from logical block ownership and replay provenance, even though the retained hot path is exact and execution-native.
 
-### 6.5 TurboQuant as the primary backend
+### 6.5 Resident backend naming vs normative semantics
 
-TurboQuant is the required resident backend for this branch.
+The repository may expose a resident backend whose **type name** includes `TurboQuant`. **Normative semantics** for this frozen specification are:
 
-For this branch, TurboQuant is defined as:
+- exact slab-backed residency and execution-pack serving,
+- backend-owned materialization and family-correct execution views,
+- no claimed support path that relies on **lossy** resident compression without fresh oracle closure.
 
-- a new MLX-aligned resident backend architecture,
-- not identical to the earlier `COMPRESSED` tier implementation,
-- not merely a rename of `AdaptiveCompressedRunStore`,
-- and, in the retained branch, concretely implemented as a persistent exact execution fabric.
-
-The retained backend keeps the resident-profile architecture and backend-owned contracts, but the branch’s final excellence bar was achieved through the exact slab/slice execution-substrate direction rather than through a retained lossy TurboQuant resident compression path.
+That is **not** the earlier `COMPRESSED` tier design under another label, and not merely a rename of historical compressed-run storage. The frozen substrate is the **exact** slab/pack fabric described in §6.6.
 
 ### 6.6 Final retained backend shape
 
@@ -342,7 +343,7 @@ Family A remains the simplest runtime family and the first implementation target
 Normative properties:
 
 - token-addressable resident history,
-- TurboQuant-backed resident profiles for every resident block,
+- resident profiles (`TQ_SAFE` / `TQ_AGGR`) realized on the exact slab/pack substrate for every resident block,
 - exact replay from authoritative source token spans,
 - resident execution defined against the family's contiguous full-history baseline,
 - no operational dense resident fallback.
@@ -376,7 +377,7 @@ The branch implementation must define the following Family B concepts explicitly
 Normative Family B rules:
 
 - Family B remains token-addressable, but execution and recovery are windowed.
-- Profile support is valid only when TurboQuant-backed resident state can execute exactly under windowed visibility semantics.
+- Profile support is valid only when resident state on the exact slab/pack substrate can execute exactly under windowed visibility semantics.
 - Recovery must rebuild family-correct windowed runtime state.
 - Family B replay must not be specified as trivial Family A replay plus mask substitution.
 
@@ -740,15 +741,19 @@ Family invariants:
 
 ### 14.2 Forbidden regressions and future validation obligations
 
-Future changes must not reintroduce:
+Future changes that **continue this exact execution-pack architecture** must not reintroduce:
 
-- an operational `FULL` resident tier,
-- a hidden dense runtime fallback,
+- an operational `FULL` resident tier **within this baseline** without a deliberate new program,
+- a hidden dense runtime fallback that violates stated exact-pack semantics,
 - a retained lossy resident backend path without new oracle closure,
 - transient grouped-segment execution as the normative hot path,
 - benchmark-negative view-repair/composition paths or grouped-query fallbacks merely because they look architecturally elegant.
 
-Future changes that touch policy hot paths, resident execution, or replay behavior must rerun:
+### 14.3 Scope of these invariants
+
+These rules constrain **iteration on this frozen exact adaptive execution-pack design**. A **separate** follow-on program may introduce pragmatic `FULL` / `COMPRESSED` / `EVICTED` defaults; it must not silently break exactness where exactness is promised and must re-validate contracts.
+
+Future changes that touch policy hot paths, resident execution, or replay behavior on **this** baseline must rerun:
 
 - per-family short/long validation,
 - soft/hard budget validation,
@@ -756,21 +761,36 @@ Future changes that touch policy hot paths, resident execution, or replay behavi
 - budget-edge and churn/pathology checks,
 - chunk-size sensitivity checks when prefill/decode cadence changes materially.
 
-## 15. Final Closure Status
+## 15. Track archival status (frozen retained baseline)
 
-The branch is complete and retained because all of the following are now true.
+This section states the **closing position** of the exact adaptive execution-pack engineering track. It is **not** a claim that every original throughput objective was met.
 
-- No operational `FULL` resident tier remains in runtime design.
-- `TQ_SAFE`, `TQ_AGGR`, and `EVICTED` are the only operational resident outcomes.
+**Strengths of the frozen baseline**
+
+- Exact adaptive **serving architecture**: family-aware operation, replay/recovery-aware behavior, explicit pressure management, cadence/dormancy/wake redesign, execution-pack substrate with oracle-backed exactness within the support envelope.
+- **Operational** value: honest gating, diagnostics, stable correctness on the broadened validation matrices in §12.4, bounded behavior under stress in product-style runs.
+
+**Not closed**
+
+- **Throughput:** Retainable parity vs the ordinary non-adaptive baseline in **comfortable / long** regimes was **not** achieved.
+- **Residual locus:** Evidence isolated the remaining gap to the **exact adaptive attention compute path on split (multi-)pack** resident views—not to unbounded generic architectural ambiguity across the repo.
+
+**Archival decision (summary)**
+
+- Further closure would lean toward **low-level compute / backend / operator** work outside the pragmatic scope chosen for mainline MLXs now. Full rationale and rejected attempts: [adaptive_kv_execution_pack_track_archival.md](./adaptive_kv_execution_pack_track_archival.md).
+
+The following remains **true of this frozen in-tree baseline**:
+
+- No operational `FULL` resident tier exists **in this** runtime design (a follow-on program may add pragmatic tiers separately).
+- `TQ_SAFE`, `TQ_AGGR`, and `EVICTED` are the operational resident outcomes for this baseline.
 - The semantic core remains representation-agnostic and family-aware.
-- Family A, Family B, and Family C support are oracle-validated within the retained support envelope.
-- Family B semantics are implemented with explicit resident logical span, effective visible span, window-local replay semantics, and window-visible slice execution.
+- Family A, Family B, and Family C support areas described in §15.1 are oracle-validated within the retained envelope.
+- Family B semantics use explicit resident logical span, effective visible span, window-local replay semantics, and window-visible slice execution.
 - Family C recurrent/state-array layers remain outside resident-profile planning, degradation, and transitions.
 - Replay and recovery remain explicit and exact.
-- Fidelity is closed.
-- The long path improved materially over earlier retained baselines.
-- The execution-pack serving path above the slab memory substrate is the current retained serving baseline.
-- Product-level evaluation supports Adaptive KV primarily as an operational serving architecture rather than a guaranteed conversational-quality improver.
+- Fidelity is closed within the stated support matrix.
+- The execution-pack serving path above the slab memory substrate is the **frozen** serving baseline for this track.
+- Product-level evaluation supports this baseline primarily as **pressure-managed exact serving**, not as a demonstrated default for best comfortable-regime throughput or guaranteed conversational-quality improvement.
 - A narrow Family C short-hard hybrid sampled-serving caveat remains.
 
 ### 15.1 Support and capability freeze
@@ -882,22 +902,38 @@ Final retained handling:
 
 ### 16.6 Truthfulness requirement
 
-Final archival caveat:
-- the branch achieved excellence through the retained slab/slice execution-substrate direction, not through a retained lossy TurboQuant resident compression path.
-- future work must not overclaim compression benefits that are not actually retained.
+Archival caveat:
+
+- Public statements must **not** describe **lossy TurboQuant resident compression** as the retained core when the frozen path is **exact** slab/pack execution.
+- Do **not** claim this baseline as the **universal default** for best comfortable-regime throughput vs ordinary baseline inference.
+- Do **not** understate the **real** comfortable/long throughput gap.
+
+### 16.7 Throughput- and substrate-closure attempts (rejected)
+
+The following were tried with evidence and **not** retained as closure for the comfortable/long throughput gap. Listed for archival clarity only:
+
+- TurboQuant-first resident direction as the retainable throughput core (lossy path rejected; exact slab/pack substrate retained).
+- Dense or exact resident backends proposed as **final** universal closure without residual split-pack compute cost.
+- Targeted data-plane redesigns aimed primarily at the split-pack attention residual.
+- Cold-path and topology-churn work beyond diminishing returns.
+- Local repair / view-query elimination where results were negative or negligible.
+- Executor / usage-sync redesign treated as **definitive** throughput closure.
+- Family C local closure passes beyond the retained caveat boundary.
+- Dual-lane execution architecture.
+- Dormant unsampled dense mirror.
+- Dormant segmented exact decode.
+- Dense-prefix cache for split-pack compute (see `results/bench_adaptive/tq_exact_split_pack_attention_compute_2026-03-29/summary.md`).
+- Similar “final closure” compute shortcuts benchmarked and rejected.
+
+These rejections do **not** negate the correctness or operational usefulness of the **frozen** baseline; they bound what this track could close without leaving pragmatic MLXs scope.
 
 
-## 17. Final Recommendation
+## 17. Archival recommendation and next direction
 
-This document is the canonical source of truth for the completed TurboQuant-first Adaptive KV branch in MLXs.
+This document remains the canonical **technical** description of the **frozen** exact adaptive execution-pack baseline in the repository.
 
-Future work, if any, should build from this retained baseline:
+**Engineering position:** The **track is archived**. The retained implementation is a **valid** exact, pressure-managed reference path. It is **not** positioned as the default universal choice when baseline-like throughput in comfortable regimes is the priority.
 
-- resident profiles `TQ_SAFE / TQ_AGGR / EVICTED`,
-- persistent exact execution slabs as the memory substrate,
-- persistent execution packs and execution-pack views as the retained serving substrate,
-- exact pack-native streaming attention,
-- explicit replay/recovery,
-- Family A / B / C runtime-family separation.
+**Follow-on branch direction (intentional pivot):** Pragmatic **`FULL` / `COMPRESSED` / `EVICTED`** with **`FULL`** as the natural baseline-like default, **`COMPRESSED`** as a simple useful tier, and **`EVICTED`** as the last resort—emphasizing simplicity, throughput, and pragmatic runtime behavior. Detailed specification is **out of scope** here; see [adaptive_kv_execution_pack_track_archival.md](./adaptive_kv_execution_pack_track_archival.md).
 
-Old `FULL / COMPRESSED / EVICTED` operational assumptions are superseded and should not be reopened. Product-level claims for this retained baseline must stay honest: its strongest evidence is as an exact, pressure-managed serving architecture, not as a universal guarantee of visibly better conversational quality under stress.
+Product-level claims for the frozen baseline must remain limited to **exactness within the support matrix**, **pressure management**, and **operational diagnostics**, not universal throughput superiority or conversational-quality guarantees.

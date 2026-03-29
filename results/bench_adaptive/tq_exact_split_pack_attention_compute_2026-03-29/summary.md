@@ -39,4 +39,4 @@ Conclusion:
 
 - the split-pack residual is not being driven by Python-side pack concatenation alone
 - a cached dense prefix is not a valid retained compute-path closure
-- the branch should stay on the current retained baseline
+- this direction was rejected; the exact adaptive execution-pack track was subsequently **archived** as a mainline strategy (see `docs/adaptive_kv_execution_pack_track_archival.md`), with follow-on work pivoting to pragmatic `FULL` / `COMPRESSED` / `EVICTED`

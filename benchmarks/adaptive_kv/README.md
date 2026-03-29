@@ -1,6 +1,6 @@
 # Adaptive KV benchmark harness
 
-Single-request benchmarks for **adaptive KV v1** using the real [`generate()`](../../src/mlxs/generate/__init__.py) entry point. Compatibility is decided by `assess_generation_compatibility`; the **documented** synthetic and real-workload tables in [`docs/adaptive_kv_report/`](../../docs/adaptive_kv_report/) use **Llama** full-attention. Retained **ministral3** (Family B) and text-only **qwen3_5** (Family C) runs are supported when the gate passes—use `--preflight` before large sweeps.
+Single-request benchmarks using the real [`generate()`](../../src/mlxs/generate/__init__.py) entry point. Compatibility is decided by `assess_generation_compatibility`. Published tables in [`docs/adaptive_kv_report/`](../../docs/adaptive_kv_report/) are **V1-era** historical material. Current **frozen** adaptive baseline, track archival, and throughput positioning are documented in [`docs/adaptive_kv_execution_pack_track_archival.md`](../../docs/adaptive_kv_execution_pack_track_archival.md) and [`docs/adaptive_kv_turboquant_first.spec.md`](../../docs/adaptive_kv_turboquant_first.spec.md). Retained **ministral3** (Family B) and text-only **qwen3_5** (Family C) runs are supported when the gate passes—use `--preflight` before large sweeps.
 
 ## Requirements
 

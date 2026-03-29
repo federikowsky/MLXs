@@ -1,10 +1,10 @@
 # Adaptive KV for MLXs: Exact Adaptive KV-Cache Management for Single-Request Text Decoder Inference
 
-> Archival note
+> **Archival note**
 >
-> This report package is retained as historical source material for the earlier Adaptive KV V1 / `FULL`-`COMPRESSED`-`EVICTED` evaluation baseline. It is not the canonical architecture source of truth for the completed TurboQuant-first branch.
+> This report is historical source material for Adaptive KV **V1** / `FULL`-`COMPRESSED`-`EVICTED` evaluation-era benchmarks and conclusions. It does not describe the later **exact adaptive execution-pack** frozen baseline, and it does not define the current **mainline pivot** toward pragmatic `FULL` / `COMPRESSED` / `EVICTED`.
 >
-> For the final retained branch architecture, validation stance, and archival position, use [../adaptive_kv_turboquant_first.spec.md](../adaptive_kv_turboquant_first.spec.md) and [../dev/repo_mapping_kv_cache.md](../dev/repo_mapping_kv_cache.md).
+> For the execution-pack baseline (technical freeze, track archival, throughput limits, next direction), use [../adaptive_kv_execution_pack_track_archival.md](../adaptive_kv_execution_pack_track_archival.md), [../adaptive_kv_turboquant_first.spec.md](../adaptive_kv_turboquant_first.spec.md), and [../dev/repo_mapping_kv_cache.md](../dev/repo_mapping_kv_cache.md).
 
 ## Abstract
 

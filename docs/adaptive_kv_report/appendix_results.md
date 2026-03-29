@@ -1,8 +1,6 @@
 # Appendix B. Results Tables
 
-> Archival note
->
-> This appendix documents the earlier Adaptive KV V1 / `FULL`-`COMPRESSED`-`EVICTED` report baseline. It is retained as historical source material and should not be read as the canonical architecture description for the completed TurboQuant-first branch.
+> **Archival note:** This appendix belongs to the Adaptive KV **V1** / `FULL`-`COMPRESSED`-`EVICTED` evaluation-era report. It is historical source material. For the **frozen** exact adaptive execution-pack baseline and archived track status, see [`../adaptive_kv_turboquant_first.spec.md`](../adaptive_kv_turboquant_first.spec.md) and [`../adaptive_kv_execution_pack_track_archival.md`](../adaptive_kv_execution_pack_track_archival.md).
 
 ## B.1 Final Repeated Synthetic Rerun: SOFT Regime
 
