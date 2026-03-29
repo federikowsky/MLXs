@@ -13,7 +13,13 @@ import mlx.core as mx
 
 from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
-from mlxs.generate.decode import decode_loop, prepare_decode_plan
+from mlxs.generate.decode import (
+    decode_async_eval_enabled,
+    decode_loop,
+    decode_profile_enabled,
+    emit_decode_profile_report,
+    prepare_decode_plan,
+)
 from mlxs.generate.prefill import chunked_prefill
 from mlxs.protocols.generate import TokenizerProtocol
 
@@ -107,6 +113,7 @@ def generate(
         input_embeddings=input_embeddings,
     )
 
+    async_eval = decode_async_eval_enabled()
     plan = prepare_decode_plan(
         model,
         cache,
@@ -115,7 +122,22 @@ def generate(
         eos_token_id=tokenizer.eos_token_id,
         prompt_token_count=prompt_token_count,
         compile_decode=compile_decode,
+        async_eval=async_eval,
     )
+
+    profile: dict[str, Any] | None = None
+    if decode_profile_enabled():
+        profile = {
+            "forward_decode_s": 0.0,
+            "logits_sample_prep_s": 0.0,
+            "mx_async_eval_s": 0.0,
+            "mx_eval_s": 0.0,
+            "materialize_s": 0.0,
+            "mutation_s": 0.0,
+            "n_forward_decode": 0,
+            "forward_wall_samples": [],
+            "step_wall_samples": [],
+        }
 
     def _gen() -> Iterator[TokenEvent]:
         try:
@@ -127,10 +149,17 @@ def generate(
                 quantized_kv_start=quantized_kv_start,
                 kv_bits=kv_bits,
                 kv_group_size=kv_group_size,
+                profile=profile,
             )
         finally:
             if final_cache_out is not None:
                 final_cache_out.append(cache)
+            if profile is not None:
+                emit_decode_profile_report(
+                    profile,
+                    compile_decode=compile_decode,
+                    async_eval=async_eval,
+                )
 
     return _gen()
 
