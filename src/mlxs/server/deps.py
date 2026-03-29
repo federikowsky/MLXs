@@ -72,7 +72,12 @@ def create_dependencies(config: AppConfig) -> Dependencies:
 
     # Warmup if configured
     if config.generate.warmup_after_load:
-        warmup(model, model.make_cache, vocab_size=model.vocab_size)
+        warmup(
+            model,
+            model.make_cache,
+            compile_decode=config.generate.compile_decode,
+            vocab_size=model.vocab_size,
+        )
 
     # Create prompt cache
     prompt_cache = PromptCache(config.prompt_cache)

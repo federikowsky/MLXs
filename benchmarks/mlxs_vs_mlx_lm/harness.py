@@ -101,7 +101,20 @@ _FLOAT_METRIC_FIELDS = (
 _INT_METRIC_FIELDS = (
     "rss_bytes_after_generate",
     "mlx_peak_memory_bytes",
+    "generated_tokens",
 )
+
+
+def _median_generated_tokens_comparable(mlx_median: float, xs_median: float) -> bool:
+    """True when median output lengths are close enough for e2e tok/s ratio to be meaningful."""
+    if not math.isfinite(mlx_median) or not math.isfinite(xs_median):
+        return False
+    a = float(mlx_median)
+    b = float(xs_median)
+    diff = abs(a - b)
+    ref = max(abs(a), abs(b), 1.0)
+    # Allow ≤2 tokens or ≤2% relative difference (whichever is looser in absolute terms).
+    return diff <= max(2.0, 0.02 * ref)
 
 
 def _metrics_dict(m: GenerationMetrics) -> dict[str, Any]:
@@ -300,7 +313,6 @@ def run_harness(
                     for key in (
                         "decode_tok_per_s",
                         "prefill_effective_tok_per_s",
-                        "end_to_end_tok_per_s",
                     ):
                         mlx_s = row["mlx_lm"]["stats"].get(key)
                         xs_s = row["mlxs"]["stats"].get(key)
@@ -312,7 +324,60 @@ def run_harness(
                             r = numer / denom
                             if math.isfinite(r):
                                 ratios[f"mlxs_over_mlx_lm_{key}_median_ratio"] = r
-                    row["comparison"] = {"median_ratios": ratios}
+
+                    gt_mlx = row["mlx_lm"]["stats"].get("generated_tokens")
+                    gt_xs = row["mlxs"]["stats"].get("generated_tokens")
+                    mlx_gt_med = gt_mlx["median"] if gt_mlx else None
+                    xs_gt_med = gt_xs["median"] if gt_xs else None
+                    e2e_key = "end_to_end_tok_per_s"
+                    mlx_f = (
+                        float(mlx_gt_med)
+                        if isinstance(mlx_gt_med, (int, float))
+                        else float("nan")
+                    )
+                    xs_f = (
+                        float(xs_gt_med)
+                        if isinstance(xs_gt_med, (int, float))
+                        else float("nan")
+                    )
+                    e2e_comparable = (
+                        math.isfinite(mlx_f)
+                        and math.isfinite(xs_f)
+                        and _median_generated_tokens_comparable(mlx_f, xs_f)
+                    )
+                    e2e_suppressed: str | None = None
+                    if e2e_comparable:
+                        mlx_s = row["mlx_lm"]["stats"].get(e2e_key)
+                        xs_s = row["mlxs"]["stats"].get(e2e_key)
+                        if mlx_s and xs_s:
+                            denom = float(mlx_s["median"])
+                            numer = float(xs_s["median"])
+                            if denom > 0 and math.isfinite(denom) and math.isfinite(numer):
+                                r = numer / denom
+                                if math.isfinite(r):
+                                    ratios[f"mlxs_over_mlx_lm_{e2e_key}_median_ratio"] = r
+                    else:
+                        if math.isfinite(mlx_f) and math.isfinite(xs_f):
+                            e2e_suppressed = (
+                                "end_to_end_tok_per_s_ratio_omitted: median "
+                                "generated_tokens differ (not comparable; e.g. early EOS vs "
+                                "max_tokens)."
+                            )
+                        else:
+                            e2e_suppressed = (
+                                "end_to_end_tok_per_s_ratio_omitted: missing median "
+                                "generated_tokens for one or both backends."
+                            )
+
+                    row["comparison"] = {
+                        "median_ratios": ratios,
+                        "generated_tokens_median": {
+                            "mlx_lm": mlx_gt_med,
+                            "mlxs": xs_gt_med,
+                        },
+                        "end_to_end_tok_per_s_median_ratio_comparable": e2e_comparable,
+                        "end_to_end_tok_per_s_median_ratio_suppressed_reason": e2e_suppressed,
+                    }
                 results.append(row)
 
     return {

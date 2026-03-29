@@ -168,6 +168,36 @@ def test_generate_compile_on_off_have_same_output(monkeypatch: pytest.MonkeyPatc
     assert compile_builds == ["full"]
 
 
+def test_generate_compile_step_is_lazy_when_no_decode_forward_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = _FakeTokenizer({0: "<eos>", 9: "P"})
+    model = _TableModel(_transition_row_fn({9: 0}, vocab_size=10))
+    compile_builds: list[str] = []
+
+    def fake_make_compiled_step(
+        model: Any,
+        cache: list[_FakeCache],
+    ) -> Callable[[mx.array], mx.array]:
+        compile_builds.append(cache[0].kind)
+        return lambda input_ids: model(input_ids, cache=cache)
+
+    monkeypatch.setattr(compile_mod, "make_compiled_step", fake_make_compiled_step)
+
+    events = list(
+        generate(
+            model,
+            cast(TokenizerProtocol, tokenizer),
+            [9],
+            GenerateOptions(max_tokens=1, temperature=0),
+            compile_decode=True,
+        )
+    )
+
+    assert _event_summary(events) == [(0, "<eos>", FinishReason.STOP)]
+    assert compile_builds == []
+
+
 def test_repetition_penalty_uses_bounded_recent_history() -> None:
     vocab_size = 24
     token_text = {0: "<eos>", **{token_id: str(token_id) for token_id in range(1, vocab_size)}}
@@ -275,7 +305,7 @@ def test_generate_emits_logprobs_and_top_logprobs() -> None:
     assert event.logprobs.token_logprob == pytest.approx(expected)
 
 
-def test_quantized_kv_start_rebuilds_forward_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_quantized_kv_start_downgrades_compiled_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     tokenizer = _FakeTokenizer({0: "<eos>", 1: "A", 2: "B", 3: "C", 9: "P"})
     model = _TableModel(_transition_row_fn({9: 1, 1: 2, 2: 3, 3: 0}, vocab_size=10))
     compile_builds: list[str] = []
@@ -284,6 +314,8 @@ def test_quantized_kv_start_rebuilds_forward_runtime(monkeypatch: pytest.MonkeyP
         model: Any,
         cache: list[_FakeCache],
     ) -> Callable[[mx.array], mx.array]:
+        if cache[0].kind == "quantized":
+            raise AssertionError("Delayed quantized KV should not rebuild a compiled step.")
         compile_builds.append(cache[0].kind)
         return lambda input_ids: model(input_ids, cache=cache)
 
@@ -319,7 +351,72 @@ def test_quantized_kv_start_rebuilds_forward_runtime(monkeypatch: pytest.MonkeyP
         (3, "C", None),
         (0, "<eos>", FinishReason.STOP),
     ]
-    assert compile_builds == ["full", "quantized"]
+    assert compile_builds == ["full"]
+    assert "quantized" in model.cache_kinds_seen
+
+
+def test_warmup_uses_request_local_decode_runtime_when_compile_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _TableModel(_transition_row_fn({0: 1}, vocab_size=10))
+    compile_builds: list[str] = []
+
+    def fake_make_compiled_step(
+        model: Any,
+        cache: list[_FakeCache],
+    ) -> Callable[[mx.array], mx.array]:
+        compile_builds.append(cache[0].kind)
+        return lambda input_ids: model(input_ids, cache=cache)
+
+    monkeypatch.setattr(compile_mod, "make_compiled_step", fake_make_compiled_step)
+
+    compile_mod.warmup(
+        model,
+        model.make_cache,
+        compile_decode=True,
+        vocab_size=10,
+    )
+
+    assert compile_builds == ["full"]
+
+
+def test_uncompiled_quantized_kv_start_continues_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = _FakeTokenizer({0: "<eos>", 1: "A", 2: "B", 3: "C", 9: "P"})
+    model = _TableModel(_transition_row_fn({9: 1, 1: 2, 2: 3, 3: 0}, vocab_size=10))
+
+    def fake_convert_to_quantized(
+        cache: list[_FakeCache],
+        *,
+        kv_bits: int = 8,
+        kv_group_size: int = 64,
+    ) -> list[_FakeCache]:
+        assert kv_bits == 4
+        assert kv_group_size == 16
+        return [_FakeCache(kind="quantized", offset=cache[0].offset)]
+
+    monkeypatch.setattr(decode_mod, "convert_to_quantized", fake_convert_to_quantized)
+
+    events = list(
+        generate(
+            model,
+            cast(TokenizerProtocol, tokenizer),
+            [9],
+            GenerateOptions(max_tokens=8, temperature=0),
+            compile_decode=False,
+            quantized_kv_start=1,
+            kv_bits=4,
+            kv_group_size=16,
+        )
+    )
+
+    assert _event_summary(events) == [
+        (1, "A", None),
+        (2, "B", None),
+        (3, "C", None),
+        (0, "<eos>", FinishReason.STOP),
+    ]
     assert "quantized" in model.cache_kinds_seen
 
 

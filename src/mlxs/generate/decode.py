@@ -205,7 +205,9 @@ def _apply_mutation_boundary(
 
     if quantized_kv_start > 0 and kv_bits is not None and step_index == quantized_kv_start:
         cache[:] = convert_to_quantized(cache, kv_bits=kv_bits, kv_group_size=kv_group_size)
-        forward.on_cache_replaced(cache)
+        # Delayed KV quantization replaces the cache object type and internal
+        # state layout, which is not a stable boundary for mx.compile.
+        forward.downgrade_to_uncompiled(cache)
 
 
 def decode_loop(

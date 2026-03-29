@@ -29,7 +29,8 @@ def make_compiled_step(
 
     ``mx.compile`` only accepts array trees as *formal* arguments; ``KVCache``
     objects are not traceable, so the active cache list is **closed over** here
-    and the compiled function takes only ``input_ids`` (§6.8, AC12).
+    and the compiled function takes only ``input_ids`` (§6.8, AC12). That makes
+    the compiled step request-local: it is tied to one active cache object graph.
 
     ``decode_loop`` should call the result as ``step(input_ids)`` — same as an
     uncompiled ``functools.partial(model, cache=cache)``.
@@ -66,13 +67,15 @@ class DecodeForwardRuntime:
         self._compile_decode = compile_decode
         self._compiled = False
         self._step: DecodeStep = self._make_uncompiled_step(cache)
-        self.on_cache_replaced(cache)
 
     @property
     def compiled(self) -> bool:
         return self._compiled
 
     def forward(self, input_ids: mx.array) -> mx.array:
+        if self._compile_decode and not self._compiled:
+            self._try_enable_compiled()
+
         if not self._compiled:
             return self._step(input_ids)
 
@@ -80,26 +83,33 @@ class DecodeForwardRuntime:
             return self._step(input_ids)
         except Exception:
             logger.warning("Compiled decode step failed; falling back to uncompiled forward.")
-            self._step = self._make_uncompiled_step(self._cache)
-            self._compiled = False
+            self._compile_decode = False
+            self._reset_uncompiled_step(self._cache)
             return self._step(input_ids)
 
     def on_cache_replaced(self, cache: list[Any]) -> None:
         self._cache = cache
-        if not self._compile_decode:
-            self._step = self._make_uncompiled_step(cache)
-            self._compiled = False
-            return
+        self._reset_uncompiled_step(cache)
 
+    def downgrade_to_uncompiled(self, cache: list[Any]) -> None:
+        """Explicitly drop to uncompiled forward for the current request."""
+
+        self._cache = cache
+        self._compile_decode = False
+        self._reset_uncompiled_step(cache)
+
+    def _try_enable_compiled(self) -> None:
         try:
-            self._step = make_compiled_step(self._model, cache)
+            self._step = make_compiled_step(self._model, self._cache)
             self._compiled = True
         except Exception:
-            logger.warning(
-                "Compiled decode setup failed; using uncompiled forward for this cache."
-            )
-            self._step = self._make_uncompiled_step(cache)
-            self._compiled = False
+            logger.warning("Compiled decode setup failed; using uncompiled forward.")
+            self._compile_decode = False
+            self._reset_uncompiled_step(self._cache)
+
+    def _reset_uncompiled_step(self, cache: list[Any]) -> None:
+        self._step = self._make_uncompiled_step(cache)
+        self._compiled = False
 
     def _make_uncompiled_step(self, cache: list[Any]) -> DecodeStep:
         return partial(self._model, cache=cache)
@@ -120,16 +130,19 @@ def warmup(
     model: Any,
     cache_factory: Callable[[], list[Any]],
     *,
+    compile_decode: bool = False,
     vocab_size: int = 32000,
 ) -> None:
     """Run a dummy forward pass to trigger JIT compilation (§6.8).
 
-    This forces MLX to compile the model graph before actual inference,
-    avoiding cold-start latency on the first real request.
+    When ``compile_decode`` is enabled, this exercises the same request-local
+    decode runtime seam used by ``generate()``. It does not create a reusable
+    cross-request compiled step; those steps close over request-local caches.
 
     Args:
         model: The model to warm up.
         cache_factory: Callable that returns a fresh cache list (e.g. model.make_cache).
+        compile_decode: Whether to warm the request-local compiled decode seam.
         vocab_size: Vocab size for dummy input.
     """
     logger.info("Running warmup forward pass...")
@@ -137,7 +150,11 @@ def warmup(
 
     # Single dummy token — minimal computation
     dummy_input = mx.array([[0]])
-    logits = model(dummy_input, cache=cache)
+    if compile_decode:
+        runtime = make_decode_forward_runtime(model, cache, compile_decode=True)
+        logits = runtime.forward(dummy_input)
+    else:
+        logits = model(dummy_input, cache=cache)
     mx.eval(logits)
 
     # Clean up warmup state

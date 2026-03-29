@@ -67,12 +67,19 @@ def _print_text_summary(payload: dict[str, Any]) -> None:
                     if isinstance(pm, (int, float)) and math.isfinite(float(pm))
                     else ""
                 )
+                g = s.get("generated_tokens", {})
+                gm = g.get("median")
+                gen_part = (
+                    f"  gen_tok~{float(gm):.0f}"
+                    if isinstance(gm, (int, float)) and math.isfinite(float(gm))
+                    else ""
+                )
                 print(
                     f"  mlx_lm: load {sess.get('load_wall_s', 0):.2f}s  "
                     f"decode {d.get('median', float('nan')):.2f} tok/s  "
                     f"prefill_eff {p.get('median', float('nan')):.2f} tok/s  "
                     f"TTFT {t.get('median', float('nan')) * 1000:.2f} ms  "
-                    f"RSS~{rss.get('median', 0) / 1e6:.0f} MB{peak_s}"
+                    f"RSS~{rss.get('median', 0) / 1e6:.0f} MB{gen_part}{peak_s}"
                 )
         if "mlxs" in row:
             sess = row["mlxs"].get("session", {})
@@ -92,15 +99,32 @@ def _print_text_summary(payload: dict[str, Any]) -> None:
                     if isinstance(pm, (int, float)) and math.isfinite(float(pm))
                     else ""
                 )
+                g = s.get("generated_tokens", {})
+                gm = g.get("median")
+                gen_part = (
+                    f"  gen_tok~{float(gm):.0f}"
+                    if isinstance(gm, (int, float)) and math.isfinite(float(gm))
+                    else ""
+                )
                 print(
                     f"  mlxs:   load {sess.get('load_wall_s', 0):.2f}s  "
                     f"decode {d.get('median', float('nan')):.2f} tok/s  "
                     f"prefill_eff {p.get('median', float('nan')):.2f} tok/s  "
                     f"TTFT {t.get('median', float('nan')) * 1000:.2f} ms  "
-                    f"RSS~{rss.get('median', 0) / 1e6:.0f} MB{peak_s}"
+                    f"RSS~{rss.get('median', 0) / 1e6:.0f} MB{gen_part}{peak_s}"
                 )
         if "comparison" in row:
-            for k, v in row["comparison"]["median_ratios"].items():
+            comp = row["comparison"]
+            gt = comp.get("generated_tokens_median") or {}
+            mlx_g, xs_g = gt.get("mlx_lm"), gt.get("mlxs")
+            if mlx_g is not None or xs_g is not None:
+                print(
+                    f"  gen_tok median (for ratio honesty): mlx_lm={mlx_g}  mlxs={xs_g}"
+                )
+            note = comp.get("end_to_end_tok_per_s_median_ratio_suppressed_reason")
+            if note:
+                print(f"  note: {note}")
+            for k, v in comp.get("median_ratios", {}).items():
                 print(f"  ratio {k}: {v:.4f} (>1 means MLXs faster on that metric)")
 
 
