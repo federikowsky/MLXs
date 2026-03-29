@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
+from typing import Any
 
 from benchmarks.mlxs_vs_mlx_lm.discovery import discover_local_models, parse_explicit_model_paths
 from benchmarks.mlxs_vs_mlx_lm.harness import HarnessConfig, resolve_models, run_harness
 from benchmarks.mlxs_vs_mlx_lm.json_util import sanitize_for_json
+from benchmarks.mlxs_vs_mlx_lm.scenarios import (
+    BUILTIN_SCENARIOS,
+    SCENARIO_ALL_ORDER,
+    resolve_scenarios,
+)
 
 
 def _parse_targets(s: str) -> tuple[int, ...]:
@@ -32,7 +39,7 @@ def _parse_backends(s: str) -> frozenset[str]:
     return frozenset(raw)
 
 
-def _print_text_summary(payload: dict) -> None:
+def _print_text_summary(payload: dict[str, Any]) -> None:
     print("\n=== MLXs vs mlx-lm — summary (median over timed runs) ===\n")
     for row in payload.get("results", []):
         if row.get("skipped"):
@@ -40,7 +47,8 @@ def _print_text_summary(payload: dict) -> None:
             continue
         mid = row["model_hub_id"]
         pt = row["prompt_target_tokens"]
-        print(f"\n{mid}  |  prompt≈{pt} tok  |  {row['model_type']}")
+        sid = row.get("scenario_id", "")
+        print(f"\n{mid}  |  scenario={sid}  |  prompt≈{pt} tok  |  {row['model_type']}")
         if "mlx_lm" in row:
             sess = row["mlx_lm"].get("session", {})
             le = sess.get("load_error")
@@ -52,12 +60,19 @@ def _print_text_summary(payload: dict) -> None:
                 p = s.get("prefill_effective_tok_per_s", {})
                 t = s.get("ttft_s", {})
                 rss = s.get("rss_bytes_after_generate", {})
+                peak = s.get("mlx_peak_memory_bytes") or {}
+                pm = peak.get("median")
+                peak_s = (
+                    f"  MLXpeak~{float(pm) / 1e6:.0f} MB"
+                    if isinstance(pm, (int, float)) and math.isfinite(float(pm))
+                    else ""
+                )
                 print(
                     f"  mlx_lm: load {sess.get('load_wall_s', 0):.2f}s  "
                     f"decode {d.get('median', float('nan')):.2f} tok/s  "
                     f"prefill_eff {p.get('median', float('nan')):.2f} tok/s  "
                     f"TTFT {t.get('median', float('nan')) * 1000:.2f} ms  "
-                    f"RSS~{rss.get('median', 0) / 1e6:.0f} MB"
+                    f"RSS~{rss.get('median', 0) / 1e6:.0f} MB{peak_s}"
                 )
         if "mlxs" in row:
             sess = row["mlxs"].get("session", {})
@@ -70,12 +85,19 @@ def _print_text_summary(payload: dict) -> None:
                 p = s.get("prefill_effective_tok_per_s", {})
                 t = s.get("ttft_s", {})
                 rss = s.get("rss_bytes_after_generate", {})
+                peak = s.get("mlx_peak_memory_bytes") or {}
+                pm = peak.get("median")
+                peak_s = (
+                    f"  MLXpeak~{float(pm) / 1e6:.0f} MB"
+                    if isinstance(pm, (int, float)) and math.isfinite(float(pm))
+                    else ""
+                )
                 print(
                     f"  mlxs:   load {sess.get('load_wall_s', 0):.2f}s  "
                     f"decode {d.get('median', float('nan')):.2f} tok/s  "
                     f"prefill_eff {p.get('median', float('nan')):.2f} tok/s  "
                     f"TTFT {t.get('median', float('nan')) * 1000:.2f} ms  "
-                    f"RSS~{rss.get('median', 0) / 1e6:.0f} MB"
+                    f"RSS~{rss.get('median', 0) / 1e6:.0f} MB{peak_s}"
                 )
         if "comparison" in row:
             for k, v in row["comparison"]["median_ratios"].items():
@@ -85,9 +107,13 @@ def _print_text_summary(payload: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=(
-            "Professional greedy-decoding benchmark: MLXs vs mlx-lm on local HF caches. "
-            "Adaptive KV is not used. Default MLXs: compile_decode on, prefill_step 2048 "
-            "(matches mlx-lm generate_step default). Requires: pip install mlx-lm."
+            "MLXs vs mlx-lm benchmark on local HF caches. "
+            "Metrics: TTFT, decode tok/s, end-to-end wall time, RSS after generate, "
+            "MLX peak memory (per trial), median over repeated runs. "
+            "Named scenarios (--scenarios) cover greedy/sampling, repetition penalty, "
+            "logprobs, compile_decode, and quantized KV (where supported). "
+            "mlx-lm has no compile_decode flag (documented per-row in JSON). "
+            "Requires: pip install mlx-lm."
         ),
     )
     p.add_argument(
@@ -119,7 +145,15 @@ def main(argv: list[str] | None = None) -> int:
         default="256,2048",
         help="Comma-separated target prompt lengths (tokenizer tokens).",
     )
-    p.add_argument("--max-tokens", type=int, default=128, help="Generated tokens per trial.")
+    p.add_argument(
+        "--max-tokens",
+        type=int,
+        default=128,
+        help=(
+            "Generated tokens for cli_default scenario (empty --scenarios). "
+            "Ignored for built-in scenarios."
+        ),
+    )
     p.add_argument(
         "--warmup",
         type=int,
@@ -137,7 +171,24 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--no-compile-decode",
         action="store_true",
-        help="Disable MLXs mx.compile on decode forward (default: compile enabled).",
+        help=(
+            "cli_default only: disable MLXs mx.compile on decode (default: compile on)."
+        ),
+    )
+    p.add_argument(
+        "--scenarios",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated scenario ids, or 'all'. Built-ins: "
+            + ", ".join(SCENARIO_ALL_ORDER)
+            + ". Also cli_default. Empty: cli_default from --max-tokens and --no-compile-decode."
+        ),
+    )
+    p.add_argument(
+        "--list-scenarios",
+        action="store_true",
+        help="Print built-in scenario ids and parameters, then exit.",
     )
     p.add_argument(
         "--trust-remote-code",
@@ -164,6 +215,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = p.parse_args(argv)
 
+    if args.list_scenarios:
+        print("Built-in scenario ids (use with --scenarios or --scenarios all):\n")
+        for sid in SCENARIO_ALL_ORDER:
+            sp = BUILTIN_SCENARIOS[sid]
+            print(f"  {sid}: {sp.to_json_dict()}")
+        print("\nSpecial: cli_default — uses --max-tokens and --no-compile-decode.")
+        print("Special: all — runs every built-in in SCENARIO_ALL_ORDER.")
+        return 0
+
     if args.list_models:
         found = discover_local_models(args.hub_root, max_models=None)
         for m in found:
@@ -189,16 +249,25 @@ def main(argv: list[str] | None = None) -> int:
             print("mlx_lm backend requested but mlx-lm is not installed.", file=sys.stderr)
             return 3
 
+    try:
+        scenarios = resolve_scenarios(
+            args.scenarios,
+            max_tokens=max(1, args.max_tokens),
+            compile_decode=not args.no_compile_decode,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 4
+
     cfg = HarnessConfig(
         warmup_runs=max(0, args.warmup),
         timed_runs=max(1, args.runs),
-        max_tokens=max(1, args.max_tokens),
         seed=args.seed,
         prefill_step_size=max(1, args.prefill_step),
-        compile_decode=not args.no_compile_decode,
         trust_remote_code=args.trust_remote_code,
         prompt_targets=args.prompt_targets,
         backends=args.backends,
+        scenarios=scenarios,
     )
 
     payload = run_harness(models, cfg)

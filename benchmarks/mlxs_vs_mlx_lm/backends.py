@@ -17,6 +17,7 @@ from typing import Any
 import mlx.core as mx
 
 from benchmarks.mlxs_vs_mlx_lm.memory import rss_bytes_self
+from benchmarks.mlxs_vs_mlx_lm.scenarios import ScenarioSpec
 
 
 @dataclass(slots=True)
@@ -114,10 +115,9 @@ def generate_mlxs_loaded(
     session: LoadSession,
     prompt_text: str,
     *,
-    max_tokens: int,
+    spec: ScenarioSpec,
     seed: int,
     prefill_step_size: int,
-    compile_decode: bool,
 ) -> GenerationMetrics:
     from mlxs._types import GenerateOptions
     from mlxs.generate import generate
@@ -143,11 +143,14 @@ def generate_mlxs_loaded(
     tokenizer = session.tokenizer
 
     opts = GenerateOptions(
-        max_tokens=max_tokens,
-        temperature=0.0,
-        top_p=1.0,
-        top_k=0,
+        max_tokens=spec.max_tokens,
+        temperature=spec.temperature,
+        top_p=spec.top_p,
+        top_k=spec.top_k,
         seed=seed,
+        repetition_penalty=spec.repetition_penalty,
+        logprobs=spec.logprobs,
+        top_logprobs=spec.top_logprobs,
     )
     mx.random.seed(seed)
 
@@ -165,8 +168,11 @@ def generate_mlxs_loaded(
             prompt_text,
             opts,
             prefill_step_size=prefill_step_size,
-            compile_decode=compile_decode,
+            compile_decode=spec.compile_decode,
             clear_cache_interval=0,
+            quantized_kv_start=spec.quantized_kv_start,
+            kv_bits=spec.kv_bits,
+            kv_group_size=spec.kv_group_size,
         )
         for ev in gen:
             now = time.perf_counter()
@@ -237,11 +243,13 @@ def load_mlx_lm(
     _reset_mlx_memory_stats()
     t0 = time.perf_counter()
     try:
-        model, tokenizer = load(
+        loaded = load(
             str(model_path),
             tokenizer_config={"trust_remote_code": trust_remote_code},
             lazy=False,
         )
+        model = loaded[0]
+        tokenizer = loaded[1]
     except Exception as exc:
         return LoadSession(
             backend="mlx_lm",
@@ -267,11 +275,12 @@ def generate_mlx_lm_loaded(
     session: LoadSession,
     prompt_text: str,
     *,
-    max_tokens: int,
+    spec: ScenarioSpec,
     seed: int | None,
     prefill_step_size: int,
 ) -> GenerationMetrics:
     from mlx_lm.generate import stream_generate
+    from mlx_lm.sample_utils import make_logits_processors, make_sampler
 
     if session.error or session.model is None:
         return GenerationMetrics(
@@ -296,18 +305,44 @@ def generate_mlx_lm_loaded(
     if seed is not None:
         mx.random.seed(seed)
 
+    temp = spec.temperature
+    top_p_kw = spec.top_p if 0.0 < spec.top_p < 1.0 else 0.0
+    sampler = make_sampler(
+        temp=temp,
+        top_p=top_p_kw,
+        top_k=spec.top_k,
+    )
+    logits_processors = None
+    if spec.repetition_penalty != 1.0:
+        logits_processors = make_logits_processors(
+            repetition_penalty=spec.repetition_penalty,
+            repetition_context_size=20,
+        )
+
+    stream_kw: dict[str, Any] = {
+        "prefill_step_size": prefill_step_size,
+        "sampler": sampler,
+    }
+    if logits_processors is not None:
+        stream_kw["logits_processors"] = logits_processors
+    if spec.kv_bits is not None:
+        stream_kw["kv_bits"] = spec.kv_bits
+        stream_kw["kv_group_size"] = spec.kv_group_size
+        stream_kw["quantized_kv_start"] = spec.quantized_kv_start
+
     last = None
     t_e2e0 = time.perf_counter()
     try:
-        # mlx-lm >=0.31: sampling kwargs are not forwarded to generate_step; greedy
-        # uses the default argmax sampler inside generate_step.
         for resp in stream_generate(
             model,
             tokenizer,
             prompt_text,
-            max_tokens=max_tokens,
-            prefill_step_size=prefill_step_size,
+            max_tokens=spec.max_tokens,
+            **stream_kw,
         ):
+            if spec.materialize_logprobs_mlx_lm:
+                with contextlib.suppress(Exception):
+                    mx.eval(resp.logprobs)
             last = resp
     except Exception as exc:
         return GenerationMetrics(

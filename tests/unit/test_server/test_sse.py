@@ -7,13 +7,54 @@ corner cases, negative path.
 from __future__ import annotations
 
 import json
+import time
+
+import pytest
 
 from mlxs._types import FinishReason, TokenEvent, TokenLogprobs, TopLogprob
-from mlxs.server.sse import build_completion_response, token_events_to_sse
+from mlxs.server.sse import (
+    build_completion_response,
+    format_token_event_sse_line,
+    token_event_to_openai_stream_json,
+    token_events_to_sse,
+)
 
 # =============================================================================
 # token_events_to_sse — streaming
 # =============================================================================
+
+
+class TestFormatTokenEventSseLine:
+    def test_payload_matches_token_events_to_sse_first_line(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(time, "time", lambda: 100.0)
+        ev = TokenEvent(token_id=1, text="Hello")
+        rid = "chatcmpl-fixed"
+        first = next(token_events_to_sse(iter([ev]), model_id="test", request_id=rid))
+        line = format_token_event_sse_line(
+            ev, model_id="test", request_id=rid, created=100
+        )
+        assert first == line
+
+    def test_opensai_chunk_object_type(self) -> None:
+        ev = TokenEvent(token_id=1, text="x", finish_reason=FinishReason.STOP)
+        line = format_token_event_sse_line(
+            ev, model_id="m", request_id="r", created=1
+        )
+        data = json.loads(line.removeprefix("data: ").strip())
+        assert data["object"] == "chat.completion.chunk"
+        assert data["choices"][0]["finish_reason"] == "stop"
+
+    def test_stream_json_matches_embedded_json_in_sse_line(self) -> None:
+        ev = TokenEvent(token_id=1, text="z", finish_reason=FinishReason.STOP)
+        inner = token_event_to_openai_stream_json(
+            ev, model_id="m", request_id="r", created=9
+        )
+        outer = format_token_event_sse_line(
+            ev, model_id="m", request_id="r", created=9
+        )
+        assert outer == f"data: {inner}\n\n"
 
 
 class TestSSEStreamHappyPath:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,6 +12,7 @@ from transformers import AutoTokenizer
 
 from benchmarks.mlxs_vs_mlx_lm.backends import (
     GenerationMetrics,
+    LoadSession,
     close_session,
     generate_mlx_lm_loaded,
     generate_mlxs_loaded,
@@ -23,6 +24,7 @@ from benchmarks.mlxs_vs_mlx_lm.discovery import (
     discover_local_models,
     infer_hub_repo_id,
 )
+from benchmarks.mlxs_vs_mlx_lm.scenarios import ScenarioSpec
 from benchmarks.mlxs_vs_mlx_lm.stats import TrialStats, summarize_trials
 from benchmarks.mlxs_vs_mlx_lm.system_info import collect_fingerprint
 
@@ -31,13 +33,12 @@ from benchmarks.mlxs_vs_mlx_lm.system_info import collect_fingerprint
 class HarnessConfig:
     warmup_runs: int
     timed_runs: int
-    max_tokens: int
     seed: int
     prefill_step_size: int
-    compile_decode: bool
     trust_remote_code: bool
     prompt_targets: tuple[int, ...]
     backends: frozenset[str]
+    scenarios: tuple[ScenarioSpec, ...]
 
 
 def local_model_from_path(path: Path) -> LocalModelInfo | None:
@@ -138,19 +139,8 @@ def _summarize_field(trials: list[GenerationMetrics], field: str) -> TrialStats 
     return None
 
 
-def _run_backend_session(
-    backend: Literal["mlxs", "mlx_lm"],
-    model_path: Path,
-    prompt_text: str,
-    cfg: HarnessConfig,
-) -> tuple[dict[str, Any], list[GenerationMetrics]]:
-    """Load once, warmup, timed trials, unload. Returns session header + trials."""
-    if backend == "mlxs":
-        session = load_mlxs(model_path, trust_remote_code=cfg.trust_remote_code)
-    else:
-        session = load_mlx_lm(model_path, trust_remote_code=cfg.trust_remote_code)
-
-    header: dict[str, Any] = {
+def _session_header(session: LoadSession, backend: str) -> dict[str, Any]:
+    return {
         "backend": backend,
         "load_wall_s": session.load_wall_s,
         "rss_bytes_before_load": session.rss_bytes_before_load,
@@ -158,28 +148,36 @@ def _run_backend_session(
         "load_error": session.error,
     }
 
+
+def _trials_on_loaded_session(
+    session: LoadSession,
+    backend: Literal["mlxs", "mlx_lm"],
+    prompt_text: str,
+    cfg: HarnessConfig,
+    spec: ScenarioSpec,
+) -> list[GenerationMetrics]:
+    """Warmup + timed runs; model must already be loaded (no load/unload)."""
     trials: list[GenerationMetrics] = []
     if session.error:
-        close_session(session)
-        return header, trials
+        return trials
 
     warm = max(0, cfg.warmup_runs)
-    warm_tokens = max(1, min(16, cfg.max_tokens))
+    warm_tokens = max(1, min(16, spec.max_tokens))
+    warm_spec = replace(spec, id=f"{spec.id}__warmup", max_tokens=warm_tokens)
     for _ in range(warm):
         if backend == "mlxs":
             generate_mlxs_loaded(
                 session,
                 prompt_text,
-                max_tokens=warm_tokens,
+                spec=warm_spec,
                 seed=cfg.seed,
                 prefill_step_size=cfg.prefill_step_size,
-                compile_decode=cfg.compile_decode,
             )
         else:
             generate_mlx_lm_loaded(
                 session,
                 prompt_text,
-                max_tokens=warm_tokens,
+                spec=warm_spec,
                 seed=cfg.seed,
                 prefill_step_size=cfg.prefill_step_size,
             )
@@ -190,23 +188,20 @@ def _run_backend_session(
             m = generate_mlxs_loaded(
                 session,
                 prompt_text,
-                max_tokens=cfg.max_tokens,
+                spec=spec,
                 seed=seed,
                 prefill_step_size=cfg.prefill_step_size,
-                compile_decode=cfg.compile_decode,
             )
         else:
             m = generate_mlx_lm_loaded(
                 session,
                 prompt_text,
-                max_tokens=cfg.max_tokens,
+                spec=spec,
                 seed=seed,
                 prefill_step_size=cfg.prefill_step_size,
             )
         trials.append(m)
-
-    close_session(session)
-    return header, trials
+    return trials
 
 
 def run_harness(
@@ -235,74 +230,103 @@ def run_harness(
             )
             continue
 
+        prompt_by_target: dict[int, tuple[str, int]] = {}
         for target in cfg.prompt_targets:
-            prompt_text, enc_len = _build_prompt_text(tokenizer, target)
-            row: dict[str, Any] = {
-                "model_hub_id": mi.hub_repo_id,
-                "model_path": str(mi.path),
-                "model_type": mi.model_type,
-                "weight_bytes": mi.weight_bytes,
-                "prompt_target_tokens": target,
-                "prompt_encoded_tokens_reference": enc_len,
-                "skipped": False,
-            }
+            prompt_by_target[target] = _build_prompt_text(tokenizer, target)
 
-            if "mlx_lm" in cfg.backends:
-                mlx_head, mlx_trials = _run_backend_session("mlx_lm", mi.path, prompt_text, cfg)
-                row["mlx_lm"] = {
-                    "session": mlx_head,
-                    "trials": [_metrics_dict(t) for t in mlx_trials],
-                    "stats": {
-                        f: _stats_dict(s)
-                        for f in (*_FLOAT_METRIC_FIELDS, *_INT_METRIC_FIELDS)
-                        if (s := _summarize_field(mlx_trials, f)) is not None
-                    },
-                }
-            if "mlxs" in cfg.backends:
-                xs_head, xs_trials = _run_backend_session("mlxs", mi.path, prompt_text, cfg)
-                row["mlxs"] = {
-                    "session": xs_head,
-                    "trials": [_metrics_dict(t) for t in xs_trials],
-                    "stats": {
-                        f: _stats_dict(s)
-                        for f in (*_FLOAT_METRIC_FIELDS, *_INT_METRIC_FIELDS)
-                        if (s := _summarize_field(xs_trials, f)) is not None
-                    },
+        # (scenario_id, prompt_target) -> partial row without backend blocks
+        keyed: dict[tuple[str, int], dict[str, Any]] = {}
+        for spec in cfg.scenarios:
+            for target in cfg.prompt_targets:
+                _pt, enc_len = prompt_by_target[target]
+                keyed[(spec.id, target)] = {
+                    "scenario_id": spec.id,
+                    "scenario": spec.to_json_dict(),
+                    "model_hub_id": mi.hub_repo_id,
+                    "model_path": str(mi.path),
+                    "model_type": mi.model_type,
+                    "weight_bytes": mi.weight_bytes,
+                    "prompt_target_tokens": target,
+                    "prompt_encoded_tokens_reference": enc_len,
+                    "skipped": False,
                 }
 
-            if "mlx_lm" in cfg.backends and "mlxs" in cfg.backends:
-                ratios: dict[str, float] = {}
-                for key in (
-                    "decode_tok_per_s",
-                    "prefill_effective_tok_per_s",
-                    "end_to_end_tok_per_s",
-                ):
-                    mlx_s = row["mlx_lm"]["stats"].get(key)
-                    xs_s = row["mlxs"]["stats"].get(key)
-                    if not mlx_s or not xs_s:
-                        continue
-                    denom = float(mlx_s["median"])
-                    numer = float(xs_s["median"])
-                    if denom > 0 and math.isfinite(denom) and math.isfinite(numer):
-                        r = numer / denom
-                        if math.isfinite(r):
-                            ratios[f"mlxs_over_mlx_lm_{key}_median_ratio"] = r
-                row["comparison"] = {"median_ratios": ratios}
+        backend_order: tuple[Literal["mlx_lm", "mlxs"], ...] = ("mlx_lm", "mlxs")
+        for backend in backend_order:
+            if backend not in cfg.backends:
+                continue
+            session = (
+                load_mlxs(mi.path, trust_remote_code=cfg.trust_remote_code)
+                if backend == "mlxs"
+                else load_mlx_lm(mi.path, trust_remote_code=cfg.trust_remote_code)
+            )
+            header = _session_header(session, backend)
+            try:
+                if session.error:
+                    for spec in cfg.scenarios:
+                        for target in cfg.prompt_targets:
+                            row = keyed[(spec.id, target)]
+                            row[backend] = {
+                                "session": header,
+                                "trials": [],
+                                "stats": {},
+                            }
+                    continue
 
-            results.append(row)
+                for spec in cfg.scenarios:
+                    for target in cfg.prompt_targets:
+                        prompt_text, _enc = prompt_by_target[target]
+                        trials = _trials_on_loaded_session(
+                            session, backend, prompt_text, cfg, spec
+                        )
+                        row = keyed[(spec.id, target)]
+                        row[backend] = {
+                            "session": header,
+                            "trials": [_metrics_dict(t) for t in trials],
+                            "stats": {
+                                f: _stats_dict(s)
+                                for f in (*_FLOAT_METRIC_FIELDS, *_INT_METRIC_FIELDS)
+                                if (s := _summarize_field(trials, f)) is not None
+                            },
+                        }
+            finally:
+                close_session(session)
+
+        for spec in cfg.scenarios:
+            for target in cfg.prompt_targets:
+                row = keyed[(spec.id, target)]
+                if "mlx_lm" in cfg.backends and "mlxs" in cfg.backends:
+                    ratios: dict[str, float] = {}
+                    for key in (
+                        "decode_tok_per_s",
+                        "prefill_effective_tok_per_s",
+                        "end_to_end_tok_per_s",
+                    ):
+                        mlx_s = row["mlx_lm"]["stats"].get(key)
+                        xs_s = row["mlxs"]["stats"].get(key)
+                        if not mlx_s or not xs_s:
+                            continue
+                        denom = float(mlx_s["median"])
+                        numer = float(xs_s["median"])
+                        if denom > 0 and math.isfinite(denom) and math.isfinite(numer):
+                            r = numer / denom
+                            if math.isfinite(r):
+                                ratios[f"mlxs_over_mlx_lm_{key}_median_ratio"] = r
+                    row["comparison"] = {"median_ratios": ratios}
+                results.append(row)
 
     return {
         "fingerprint": fingerprint.to_json_dict(),
         "config": {
             "warmup_runs": cfg.warmup_runs,
             "timed_runs": cfg.timed_runs,
-            "max_tokens": cfg.max_tokens,
             "base_seed": cfg.seed,
             "prefill_step_size": cfg.prefill_step_size,
-            "compile_decode": cfg.compile_decode,
             "trust_remote_code": cfg.trust_remote_code,
             "prompt_targets": list(cfg.prompt_targets),
             "backends": sorted(cfg.backends),
+            "scenarios": [s.to_json_dict() for s in cfg.scenarios],
+            "load_once_per_backend": True,
         },
         "results": results,
     }

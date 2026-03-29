@@ -15,6 +15,32 @@ from typing import Any
 from mlxs._types import TokenEvent
 
 
+def token_event_to_openai_stream_json(
+    event: TokenEvent,
+    *,
+    model_id: str,
+    request_id: str,
+    created: int,
+) -> str:
+    """JSON for one OpenAI-style chunk; ``EventSourceResponse`` adds the ``data:`` field."""
+    chunk = _build_chunk(event, model_id=model_id, request_id=request_id, created=created)
+    return json.dumps(chunk)
+
+
+def format_token_event_sse_line(
+    event: TokenEvent,
+    *,
+    model_id: str,
+    request_id: str,
+    created: int,
+) -> str:
+    """Format a single TokenEvent as a full SSE fragment (``data:`` + body + blank line)."""
+    inner = token_event_to_openai_stream_json(
+        event, model_id=model_id, request_id=request_id, created=created
+    )
+    return f"data: {inner}\n\n"
+
+
 def token_events_to_sse(
     events: Iterator[TokenEvent],
     *,
@@ -32,8 +58,9 @@ def token_events_to_sse(
     created = int(time.time())
 
     for event in events:
-        chunk = _build_chunk(event, model_id=model_id, request_id=rid, created=created)
-        yield f"data: {json.dumps(chunk)}\n\n"
+        yield format_token_event_sse_line(
+            event, model_id=model_id, request_id=rid, created=created
+        )
 
     yield "data: [DONE]\n\n"
 

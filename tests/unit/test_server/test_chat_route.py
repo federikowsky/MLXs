@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import base64
+import json
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import mlx.core as mx
 from starlette.testclient import TestClient
 
+import mlxs.server.routes.chat as chat_route
 from mlxs._types import FinishReason, TokenEvent
 from mlxs.config.schema import AppConfig
 from mlxs.server.app import create_app
-import mlxs.server.routes.chat as chat_route
 
 
 def _make_data_url(mime_type: str, payload: bytes) -> str:
@@ -88,6 +90,99 @@ def _make_deps(model_type: str = "qwen3_5") -> tuple[SimpleNamespace, list[dict[
         generate_fn=generate_fn,
     )
     return deps, calls
+
+
+def _sse_json_chunks_from_lines(lines: list[str]) -> list[dict[str, object]]:
+    """Parse ``data:`` JSON objects from raw SSE lines (``iter_lines()`` output)."""
+    out: list[dict[str, object]] = []
+    for line in lines:
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].lstrip()
+        if payload == "[DONE]":
+            continue
+        out.append(json.loads(payload))
+    return out
+
+
+def test_chat_completions_streaming_sse_is_incremental() -> None:
+    """First HTTP chunk must arrive before a slow gap between tokens (not full list-buffer)."""
+
+    def generate_fn(model, tokenizer, prompt, options, *, input_embeddings=None, **kwargs):  # type: ignore[no-untyped-def]
+        del model, tokenizer, prompt, options, input_embeddings, kwargs
+        yield TokenEvent(token_id=1, text="a")
+        time.sleep(0.4)
+        yield TokenEvent(token_id=2, text="b")
+        yield TokenEvent(token_id=3, text="", finish_reason=FinishReason.STOP)
+
+    config = AppConfig()
+    deps = SimpleNamespace(
+        config=config,
+        model=SimpleNamespace(model_type="qwen3"),
+        tokenizer=_RouteTokenizer(),
+        prompt_cache=MagicMock(),
+        metrics=MagicMock(),
+        generate_fn=generate_fn,
+    )
+    client = TestClient(create_app(deps))
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "mlxs",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    ) as response:
+        assert response.status_code == 200
+        t0 = time.perf_counter()
+        first_elapsed: float | None = None
+        all_lines: list[str] = []
+        for line in response.iter_lines():
+            if not line:
+                continue
+            if first_elapsed is None:
+                first_elapsed = time.perf_counter() - t0
+            all_lines.append(line)
+        assert first_elapsed is not None
+        assert all_lines[0].startswith("data: ")
+        assert first_elapsed < 0.25
+
+    chunks = _sse_json_chunks_from_lines(all_lines)
+    assert len(chunks) == 3
+    assert chunks[0]["choices"][0]["delta"]["content"] == "a"
+    assert chunks[1]["choices"][0]["delta"]["content"] == "b"
+    assert chunks[2]["choices"][0]["finish_reason"] == "stop"
+
+
+def test_chat_completions_streaming_includes_done_and_finish() -> None:
+    def generate_fn(model, tokenizer, prompt, options, *, input_embeddings=None, **kwargs):  # type: ignore[no-untyped-def]
+        del model, tokenizer, prompt, options, input_embeddings, kwargs
+        yield TokenEvent(token_id=1, text="ok", finish_reason=FinishReason.STOP)
+
+    config = AppConfig()
+    deps = SimpleNamespace(
+        config=config,
+        model=SimpleNamespace(model_type="qwen3"),
+        tokenizer=_RouteTokenizer(),
+        prompt_cache=MagicMock(),
+        metrics=MagicMock(),
+        generate_fn=generate_fn,
+    )
+    client = TestClient(create_app(deps))
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "mlxs",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert response.status_code == 200
+    assert "data: [DONE]" in response.text
+    chunks = _sse_json_chunks_from_lines(response.text.splitlines())
+    assert len(chunks) == 1
+    assert chunks[0]["choices"][0]["finish_reason"] == "stop"
 
 
 def test_chat_completions_routes_images_through_real_handler(
@@ -309,5 +404,6 @@ def test_chat_completions_rejects_mixed_image_and_video_requests() -> None:
     )
 
     assert response.status_code == 400
-    assert "Mixed image and video requests are not supported" in response.json()["error"]["message"]
+    err = response.json()["error"]["message"]
+    assert "Mixed image and video requests are not supported" in err
     assert calls == []

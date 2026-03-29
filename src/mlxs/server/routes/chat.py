@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time
+import uuid
 from typing import Any
 
 from starlette.requests import Request
@@ -22,11 +25,12 @@ from mlxs.server.media import (
     process_media_inputs,
     process_video_inputs,
 )
-from mlxs.server.sse import build_completion_response, token_events_to_sse
+from mlxs.server.sse import build_completion_response, token_event_to_openai_stream_json
 
 logger = logging.getLogger(__name__)
 
 _VIDEO_SERVING_MODEL_TYPES = frozenset({"qwen3_5", "qwen3_5_moe"})
+_STREAM_END = object()
 
 
 async def chat_completions(request: Request) -> Response:
@@ -192,17 +196,45 @@ async def _stream_response(
     from sse_starlette.sse import EventSourceResponse
 
     async def event_generator():
-        loop = asyncio.get_event_loop()
-        events = await loop.run_in_executor(
-            None,
-            lambda: list(deps.generate_fn(
-                deps.model, deps.tokenizer, prompt, options,
-                input_embeddings=input_embeddings,
-            )),
-        )
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[object] = asyncio.Queue()
+        error: list[Exception | None] = [None]
 
-        for sse_chunk in token_events_to_sse(iter(events), model_id=model_id):
-            yield sse_chunk
+        def producer() -> None:
+            try:
+                for event in deps.generate_fn(
+                    deps.model,
+                    deps.tokenizer,
+                    prompt,
+                    options,
+                    input_embeddings=input_embeddings,
+                ):
+                    fut = asyncio.run_coroutine_threadsafe(queue.put(event), loop)
+                    fut.result()
+            except Exception as exc:
+                error[0] = exc
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(_STREAM_END), loop).result()
+
+        threading.Thread(target=producer, daemon=True).start()
+
+        request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        created = int(time.time())
+
+        while True:
+            item = await queue.get()
+            if item is _STREAM_END:
+                if error[0] is not None:
+                    raise error[0]
+                yield "[DONE]"
+                return
+            assert isinstance(item, TokenEvent)
+            yield token_event_to_openai_stream_json(
+                item,
+                model_id=model_id,
+                request_id=request_id,
+                created=created,
+            )
 
     return EventSourceResponse(event_generator(), media_type="text/event-stream")
 
