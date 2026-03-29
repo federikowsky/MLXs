@@ -22,12 +22,192 @@ import mlx.core as mx
 
 from mlxs._types import FinishReason, GenerateOptions, TokenEvent, TokenLogprobs, TopLogprob
 from mlxs.cache import convert_to_quantized
+from mlxs.generate.capabilities import DecodeCapabilities
 from mlxs.generate.compile import DecodeForwardRuntime, make_decode_forward_runtime
 from mlxs.generate.logits import LogitsProcessorPlan, make_logits_processor_plan
 from mlxs.generate.sampling import SamplerFn, make_sampler
 from mlxs.generate.stop import StopCondition
 
 _EMPTY_TOKEN_HISTORY = mx.array([], dtype=mx.int32)
+_Profile = dict[str, Any] | None
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
+
+
+def decode_profile_enabled() -> bool:
+    """True when ``MLXS_DECODE_PROFILE`` is set (decode timing to stderr)."""
+
+    return _env_flag("MLXS_DECODE_PROFILE")
+
+
+def decode_async_eval_enabled() -> bool:
+    """True when ``MLXS_DECODE_ASYNC_EVAL`` is set (experimental overlap path)."""
+
+    return _env_flag("MLXS_DECODE_ASYNC_EVAL")
+
+
+def emit_decode_profile_report(
+    profile: dict[str, Any],
+    *,
+    compile_decode: bool,
+    async_eval: bool,
+) -> None:
+    """Emit one-line summary + breakdown to stderr (dev-only)."""
+
+    n_fwd = int(profile.get("n_forward_decode", 0))
+    lines = [
+        "[MLXS_DECODE_PROFILE] NOTE: MLX defers work to sync boundaries. "
+        "With async_eval disabled, mx_eval_s is synchronous drain time. "
+        "With async_eval enabled, mx_async_eval_s is enqueue time and "
+        "mx_eval_s is explicit wait time before host reads.",
+        f"[MLXS_DECODE_PROFILE] compile_decode={compile_decode} "
+        f"async_eval={async_eval} "
+        f"forward_steps={n_fwd} "
+        f"forward_decode_s={profile.get('forward_decode_s', 0.0):.6f} "
+        f"logits_sample_prep_s={profile.get('logits_sample_prep_s', 0.0):.6f} "
+        f"mx_async_eval_s={profile.get('mx_async_eval_s', 0.0):.6f} "
+        f"mx_eval_s={profile.get('mx_eval_s', 0.0):.6f} "
+        f"materialize_s={profile.get('materialize_s', 0.0):.6f} "
+        f"mutation_s={profile.get('mutation_s', 0.0):.6f}",
+    ]
+    samples: list[float] = profile.get("forward_wall_samples") or []
+    if samples:
+        lines.append(
+            f"[MLXS_DECODE_PROFILE] forward() wall only per decode step: "
+            f"first={samples[0] * 1e3:.3f}ms "
+            f"median={statistics.median(samples) * 1e3:.3f}ms "
+            f"last={samples[-1] * 1e3:.3f}ms "
+            f"max={max(samples) * 1e3:.3f}ms "
+            f"min={min(samples) * 1e3:.3f}ms"
+        )
+    step_tot: list[float] = profile.get("step_wall_samples") or []
+    if step_tot:
+        label = (
+            "decode dispatch (fwd+logits_prep+async_eval enqueue)"
+            if async_eval
+            else "full decode step (fwd+logits_prep+mx_eval)"
+        )
+        lines.append(
+            f"[MLXS_DECODE_PROFILE] {label}: "
+            f"median={statistics.median(step_tot) * 1e3:.3f}ms "
+            f"sum={sum(step_tot):.4f}s over {len(step_tot)} steps"
+        )
+    total = sum(
+        float(profile.get(k, 0.0))
+        for k in (
+            "forward_decode_s",
+            "logits_sample_prep_s",
+            "mx_async_eval_s",
+            "mx_eval_s",
+            "materialize_s",
+            "mutation_s",
+        )
+    )
+    if total > 0:
+        lines.append(
+            "[MLXS_DECODE_PROFILE] fraction of profiled wall time: "
+            f"fwd={profile.get('forward_decode_s', 0) / total:.3f} "
+            f"logits_prep={profile.get('logits_sample_prep_s', 0) / total:.3f} "
+            f"async_enq={profile.get('mx_async_eval_s', 0) / total:.3f} "
+            f"sync_wait={profile.get('mx_eval_s', 0) / total:.3f} "
+            f"materialize={profile.get('materialize_s', 0) / total:.3f} "
+            f"mutation={profile.get('mutation_s', 0) / total:.3f}"
+        )
+    sys.stderr.write("\n".join(lines) + "\n")
+
+
+def _record_profile_time(profile: dict[str, Any] | None, key: str, start: float) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + (time.perf_counter() - start)
+
+
+@dataclass(slots=True)
+class _PendingStep:
+    token: mx.array
+    async_eval: bool = False
+    token_logprob: mx.array | None = None
+    top_token_ids: mx.array | None = None
+    top_token_logprobs: mx.array | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SyncPolicy:
+    """Resolved policy for scheduling and synchronizing pending tensors."""
+
+    async_eval: bool
+    transition_before_emit: bool
+    profile_key: str
+    _enqueue_pending: Callable[[_PendingStep, _Profile], None]
+    _sync_token_for_host: Callable[[_PendingStep, _Profile], None]
+    _sync_for_event: Callable[[_PendingStep, _Profile], None]
+
+    def enqueue(self, pending: _PendingStep, *, profile: _Profile) -> None:
+        pending.async_eval = self.async_eval
+        self._enqueue_pending(pending, profile)
+
+    def sync_token_for_host(self, pending: _PendingStep, *, profile: _Profile) -> None:
+        self._sync_token_for_host(pending, profile)
+
+    def sync_for_event(self, pending: _PendingStep, *, profile: _Profile) -> None:
+        self._sync_for_event(pending, profile)
+
+
+@dataclass(frozen=True, slots=True)
+class _TensorStep:
+    """Device/tensor-side decode step execution."""
+
+    forward: DecodeForwardRuntime
+    logits: LogitsProcessorPlan
+    sampler: SamplerFn
+    emit_logprobs: bool
+    top_logprobs: int
+
+    @property
+    def token_history_size(self) -> int:
+        return int(self.logits.token_history_size)
+
+    def seed(
+        self,
+        logits: mx.array,
+        *,
+        history: _RecentTokenHistory,
+        sync: _SyncPolicy,
+        profile: _Profile = None,
+    ) -> _PendingStep:
+        pending = _build_pending_from_logits(
+            logits,
+            tensor_step=self,
+            history=history,
+            profile=profile,
+        )
+        sync.enqueue(pending, profile=profile)
+        return pending
+
+    def advance(
+        self,
+        token: mx.array,
+        *,
+        history: _RecentTokenHistory,
+        sync: _SyncPolicy,
+        profile: _Profile = None,
+    ) -> _PendingStep:
+        sync0 = float(profile.get(sync.profile_key, 0.0)) if profile is not None else 0.0
+        lp0 = float(profile.get("logits_sample_prep_s", 0.0)) if profile is not None else 0.0
+        t_fwd0 = time.perf_counter()
+        next_logits = self.forward.forward(mx.reshape(token, (1, 1)))
+        dt = time.perf_counter() - t_fwd0
+        if profile is not None:
+            profile["forward_decode_s"] = float(profile.get("forward_decode_s", 0.0)) + dt
+            profile["n_forward_decode"] = int(profile.get("n_forward_decode", 0)) + 1
+            profile.setdefault("forward_wall_samples", []).append(dt)
+        pending = self.seed(next_logits[:, -1, :], history=history, sync=sync, profile=profile)
+        if profile is not None:
+            d_lp = float(profile.get("logits_sample_prep_s", 0.0)) - lp0
+            d_sync = float(profile.get(sync.profile_key, 0.0)) - sync0
+            profile.setdefault("step_wall_samples", []).append(dt + d_lp + d_sync)
+        return pending
 
 
 def _env_flag(name: str) -> bool:
@@ -125,15 +305,13 @@ def _record_profile_time(profile: dict[str, Any] | None, key: str, start: float)
 class DecodePlan:
     """Resolved single-request decode plan."""
 
-    sampler: SamplerFn
     stop: StopCondition
     decoder: Callable[[int | list[int]], str]
-    logits: LogitsProcessorPlan
-    forward: DecodeForwardRuntime
-    emit_logprobs: bool
-    top_logprobs: int
+    tensor_step: _TensorStep
+    sync: _SyncPolicy
     decode_text: bool
     prompt_token_count: int
+<<<<<<< HEAD
     async_eval: bool
 
 
@@ -143,6 +321,9 @@ class _PendingStep:
     token_logprob: mx.array | None = None
     top_token_ids: mx.array | None = None
     top_token_logprobs: mx.array | None = None
+=======
+    capabilities: DecodeCapabilities
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
 
 
 class _RecentTokenHistory:
@@ -171,18 +352,26 @@ def prepare_decode_plan(
     decoder: Callable[[int | list[int]], str],
     eos_token_id: int | None,
     prompt_token_count: int,
+    capabilities: DecodeCapabilities,
     compile_decode: bool = False,
     async_eval: bool = False,
 ) -> DecodePlan:
     """Resolve the staged decode runtime once before token generation."""
 
-    return DecodePlan(
+    sync = _make_sync_policy(async_eval=async_eval)
+    tensor_step = _TensorStep(
+        forward=make_decode_forward_runtime(model, cache, compile_decode=compile_decode),
+        logits=make_logits_processor_plan(repetition_penalty=options.repetition_penalty),
         sampler=make_sampler(
             temperature=options.temperature,
             top_p=options.top_p,
             top_k=options.top_k,
             min_p=options.min_p,
         ),
+        emit_logprobs=options.logprobs,
+        top_logprobs=options.top_logprobs,
+    )
+    return DecodePlan(
         stop=StopCondition(
             eos_token_id=eos_token_id,
             max_tokens=options.max_tokens,
@@ -190,13 +379,15 @@ def prepare_decode_plan(
             extra_eos_token_ids=options.extra_eos_token_ids,
         ),
         decoder=decoder,
-        logits=make_logits_processor_plan(repetition_penalty=options.repetition_penalty),
-        forward=make_decode_forward_runtime(model, cache, compile_decode=compile_decode),
-        emit_logprobs=options.logprobs,
-        top_logprobs=options.top_logprobs,
+        tensor_step=tensor_step,
+        sync=sync,
         decode_text=True,
         prompt_token_count=prompt_token_count,
+<<<<<<< HEAD
         async_eval=async_eval,
+=======
+        capabilities=capabilities,
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
     )
 
 
@@ -222,6 +413,7 @@ def _pending_logprob_tensors(pending: _PendingStep) -> tuple[mx.array, ...]:
     return tuple(arrays)
 
 
+<<<<<<< HEAD
 def _enqueue_pending_eval(
     pending: _PendingStep,
     *,
@@ -240,6 +432,21 @@ def _enqueue_pending_eval(
 
 
 def _sync_arrays(arrays: tuple[mx.array, ...], *, profile: dict[str, Any] | None) -> None:
+=======
+def _enqueue_pending_sync(pending: _PendingStep, profile: _Profile) -> None:
+    t0 = time.perf_counter()
+    mx.eval(*_pending_eval_tensors(pending))
+    _record_profile_time(profile, "mx_eval_s", t0)
+
+
+def _enqueue_pending_async(pending: _PendingStep, profile: _Profile) -> None:
+    t0 = time.perf_counter()
+    cast(Any, mx.async_eval)(*_pending_eval_tensors(pending))
+    _record_profile_time(profile, "mx_async_eval_s", t0)
+
+
+def _sync_arrays(arrays: tuple[mx.array, ...], *, profile: _Profile) -> None:
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
     if not arrays:
         return
     t0 = time.perf_counter()
@@ -247,11 +454,48 @@ def _sync_arrays(arrays: tuple[mx.array, ...], *, profile: dict[str, Any] | None
     _record_profile_time(profile, "mx_eval_s", t0)
 
 
+<<<<<<< HEAD
 def _sample_from_logits(
+=======
+def _sync_pending_noop(pending: _PendingStep, profile: _Profile) -> None:
+    del pending, profile
+
+
+def _sync_pending_token_for_host(pending: _PendingStep, profile: _Profile) -> None:
+    _sync_arrays((pending.token,), profile=profile)
+
+
+def _sync_pending_for_event(pending: _PendingStep, profile: _Profile) -> None:
+    _sync_arrays(_pending_logprob_tensors(pending), profile=profile)
+
+
+def _make_sync_policy(*, async_eval: bool) -> _SyncPolicy:
+    if async_eval:
+        return _SyncPolicy(
+            async_eval=True,
+            transition_before_emit=True,
+            profile_key="mx_async_eval_s",
+            _enqueue_pending=_enqueue_pending_async,
+            _sync_token_for_host=_sync_pending_token_for_host,
+            _sync_for_event=_sync_pending_for_event,
+        )
+    return _SyncPolicy(
+        async_eval=False,
+        transition_before_emit=False,
+        profile_key="mx_eval_s",
+        _enqueue_pending=_enqueue_pending_sync,
+        _sync_token_for_host=_sync_pending_noop,
+        _sync_for_event=_sync_pending_noop,
+    )
+
+
+def _build_pending_from_logits(
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
     logits: mx.array,
     *,
-    plan: DecodePlan,
+    tensor_step: _TensorStep,
     history: _RecentTokenHistory,
+<<<<<<< HEAD
     profile: dict[str, Any] | None = None,
     async_eval: bool = False,
 ) -> _PendingStep:
@@ -259,18 +503,26 @@ def _sample_from_logits(
         t_prep0 = time.perf_counter()
     if plan.logits.enabled:
         logits = plan.logits.apply(history.snapshot(), logits)
+=======
+    profile: _Profile = None,
+) -> _PendingStep:
+    if profile is not None:
+        t_prep0 = time.perf_counter()
+    if tensor_step.logits.enabled:
+        logits = tensor_step.logits.apply(history.snapshot(), logits)
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
 
     logprobs = logits - mx.logsumexp(logits, keepdims=True)
-    token = plan.sampler(logprobs)
+    token = tensor_step.sampler(logprobs)
 
     pending = _PendingStep(token=token)
 
-    if plan.emit_logprobs:
+    if tensor_step.emit_logprobs:
         token_logprob = mx.take_along_axis(logprobs, token[:, None], axis=-1)
         pending.token_logprob = token_logprob
 
-        if plan.top_logprobs > 0:
-            top_count = min(plan.top_logprobs, logprobs.shape[-1])
+        if tensor_step.top_logprobs > 0:
+            top_count = min(tensor_step.top_logprobs, logprobs.shape[-1])
             kth = logprobs.shape[-1] - top_count
             top_token_ids = mx.argpartition(logprobs, kth=kth, axis=-1)[:, -top_count:]
             top_token_logprobs = mx.take_along_axis(logprobs, top_token_ids, axis=-1)
@@ -281,7 +533,10 @@ def _sample_from_logits(
     if profile is not None:
         _record_profile_time(profile, "logits_sample_prep_s", t_prep0)
 
+<<<<<<< HEAD
     _enqueue_pending_eval(pending, async_eval=async_eval, profile=profile)
+=======
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
     return pending
 
 
@@ -315,19 +570,53 @@ def _build_logprob_payload(
     )
 
 
+<<<<<<< HEAD
 def _materialize_state(
     pending: _PendingStep,
     *,
     plan: DecodePlan,
 ) -> tuple[int, str, FinishReason | None]:
+=======
+def _materialize_token(
+    pending: _PendingStep,
+    *,
+    plan: DecodePlan,
+) -> tuple[int, str]:
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
     token_id = int(pending.token.item())
     text = plan.decoder(token_id) if plan.decode_text else ""
+    return token_id, text
 
+<<<<<<< HEAD
     finish_reason = plan.stop.check_token(token_id)
     if finish_reason is None and plan.stop.needs_text:
         finish_reason = plan.stop.check_text(text)
     return token_id, text, finish_reason
 
+=======
+
+def _resolve_finish_reason(
+    *,
+    stop: StopCondition,
+    token_id: int,
+    text: str,
+) -> FinishReason | None:
+    finish_reason = stop.check_token(token_id)
+    if finish_reason is None and stop.needs_text:
+        finish_reason = stop.check_text(text)
+    return finish_reason
+
+
+def _materialize_state(
+    pending: _PendingStep,
+    *,
+    plan: DecodePlan,
+) -> tuple[int, str, FinishReason | None]:
+    token_id, text = _materialize_token(pending, plan=plan)
+    finish_reason = _resolve_finish_reason(stop=plan.stop, token_id=token_id, text=text)
+    return token_id, text, finish_reason
+
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
 
 def _build_event(
     pending: _PendingStep,
@@ -389,6 +678,45 @@ def _apply_mutation_boundary(
         forward.downgrade_to_uncompiled(cache)
 
 
+def _transition_decode_step(
+    current: _PendingStep,
+    *,
+    cache: list[Any],
+    history: _RecentTokenHistory,
+    plan: DecodePlan,
+    step_index: int,
+    finish_reason: FinishReason | None,
+    before_emit: bool,
+    clear_cache_interval: int,
+    quantized_kv_start: int,
+    kv_bits: int | None,
+    kv_group_size: int,
+    profile: _Profile = None,
+) -> tuple[_PendingStep | None, int]:
+    if finish_reason is not None or before_emit != plan.sync.transition_before_emit:
+        return None, step_index
+
+    t_mut0 = time.perf_counter()
+    _apply_mutation_boundary(
+        step_index=step_index,
+        cache=cache,
+        forward=plan.tensor_step.forward,
+        clear_cache_interval=clear_cache_interval,
+        quantized_kv_start=quantized_kv_start,
+        kv_bits=kv_bits,
+        kv_group_size=kv_group_size,
+    )
+    _record_profile_time(profile, "mutation_s", t_mut0)
+
+    pending = plan.tensor_step.advance(
+        current.token,
+        history=history,
+        sync=plan.sync,
+        profile=profile,
+    )
+    return pending, step_index + 1
+
+
 def decode_loop(
     cache: list[Any],
     first_logits: mx.array,
@@ -398,6 +726,7 @@ def decode_loop(
     quantized_kv_start: int = 0,
     kv_bits: int | None = None,
     kv_group_size: int = 64,
+<<<<<<< HEAD
     profile: dict[str, Any] | None = None,
 ) -> Iterator[TokenEvent]:
     """Run the staged decode loop, yielding one TokenEvent per generated token."""
@@ -409,6 +738,18 @@ def decode_loop(
         history=history,
         profile=profile,
         async_eval=plan.async_eval,
+=======
+    profile: _Profile = None,
+) -> Iterator[TokenEvent]:
+    """Run the staged decode loop, yielding one TokenEvent per generated token."""
+
+    history = _RecentTokenHistory(plan.tensor_step.token_history_size)
+    pending = plan.tensor_step.seed(
+        first_logits,
+        history=history,
+        sync=plan.sync,
+        profile=profile,
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
     )
 
     step_index = 0
@@ -416,6 +757,7 @@ def decode_loop(
         generation_tokens = step_index + 1
         current = pending
 
+<<<<<<< HEAD
         if plan.async_eval:
             _sync_arrays((current.token,), profile=profile)
             t_mat0 = time.perf_counter()
@@ -495,15 +837,35 @@ def decode_loop(
         t_mut0 = time.perf_counter()
         _apply_mutation_boundary(
             step_index=step_index,
+=======
+        # Sync policy: only wait here when the current step was enqueued asynchronously.
+        plan.sync.sync_token_for_host(current, profile=profile)
+
+        # Host materialization + stop policy.
+        t_mat0 = time.perf_counter()
+        token_id, text, finish_reason = _materialize_state(current, plan=plan)
+        history.append(token_id)
+        _record_profile_time(profile, "materialize_s", t_mat0)
+
+        # Transition policy: async steps advance before emit; sync steps advance after emit.
+        next_pending, next_step_index = _transition_decode_step(
+            current,
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
             cache=cache,
-            forward=plan.forward,
+            history=history,
+            plan=plan,
+            step_index=step_index,
+            finish_reason=finish_reason,
+            before_emit=True,
             clear_cache_interval=clear_cache_interval,
             quantized_kv_start=quantized_kv_start,
             kv_bits=kv_bits,
             kv_group_size=kv_group_size,
+            profile=profile,
         )
         _record_profile_time(profile, "mutation_s", t_mut0)
 
+<<<<<<< HEAD
         step_index += 1
         lp0 = float(profile.get("logits_sample_prep_s", 0.0)) if profile is not None else 0.0
         ev0 = float(profile.get("mx_eval_s", 0.0)) if profile is not None else 0.0
@@ -524,3 +886,41 @@ def decode_loop(
             d_lp = float(profile.get("logits_sample_prep_s", 0.0)) - lp0
             d_ev = float(profile.get("mx_eval_s", 0.0)) - ev0
             profile.setdefault("step_wall_samples", []).append(dt + d_lp + d_ev)
+=======
+        plan.sync.sync_for_event(current, profile=profile)
+
+        t_evt0 = time.perf_counter()
+        event = _build_event(
+            current,
+            plan=plan,
+            token_id=token_id,
+            text=text,
+            finish_reason=finish_reason,
+            generation_tokens=generation_tokens,
+        )
+        _record_profile_time(profile, "materialize_s", t_evt0)
+        yield event
+
+        if finish_reason is not None:
+            return
+
+        if next_pending is None:
+            next_pending, next_step_index = _transition_decode_step(
+                current,
+                cache=cache,
+                history=history,
+                plan=plan,
+                step_index=step_index,
+                finish_reason=finish_reason,
+                before_emit=False,
+                clear_cache_interval=clear_cache_interval,
+                quantized_kv_start=quantized_kv_start,
+                kv_bits=kv_bits,
+                kv_group_size=kv_group_size,
+                profile=profile,
+            )
+            assert next_pending is not None
+
+        pending = next_pending
+        step_index = next_step_index
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)

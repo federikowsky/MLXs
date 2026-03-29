@@ -11,6 +11,12 @@ from typing import Any, cast
 
 import mlx.core as mx
 
+from mlxs.generate.capabilities import (
+    DecodeCapabilities,
+    PrefillSyncStrategy,
+    resolve_decode_capabilities,
+)
+
 
 def chunked_prefill(
     model: Any,
@@ -19,6 +25,7 @@ def chunked_prefill(
     *,
     prefill_step_size: int = 2048,
     input_embeddings: mx.array | None = None,
+    capabilities: DecodeCapabilities | None = None,
 ) -> mx.array:
     """Run prefill on a prompt, processing in chunks.
 
@@ -32,11 +39,14 @@ def chunked_prefill(
         prefill_step_size: Maximum tokens per prefill chunk.
         input_embeddings: Pre-computed embeddings ``(T, D)`` from
             multimodal preprocessing (§7.4). Sliced in sync with tokens.
+        capabilities: Resolved internal runtime assumptions for prefill.
 
     Returns:
         Logits array of shape (1, vocab_size) from the last prompt token.
     """
     total = len(prompt_tokens)
+    if capabilities is None:
+        capabilities = resolve_decode_capabilities(model, cache)
 
     # Process all tokens except the last one in chunks
     offset = 0
@@ -46,10 +56,20 @@ def chunked_prefill(
         chunk = prompt_tokens[offset : offset + n]
         if input_embeddings is not None:
             chunk_embeds = input_embeddings[offset : offset + n]
-            model(chunk[None], cache=cache, input_embeddings=chunk_embeds[None])
+            chunk_logits = cast(
+                mx.array,
+                model(chunk[None], cache=cache, input_embeddings=chunk_embeds[None]),
+            )
         else:
-            model(chunk[None], cache=cache)
-        mx.eval([c.state for c in cache if c.state is not None])
+            chunk_logits = cast(mx.array, model(chunk[None], cache=cache))
+        if capabilities.prefill_sync_strategy is PrefillSyncStrategy.CACHE_STATE:
+            states = tuple(c.state for c in cache if c.state is not None)
+            if states:
+                mx.eval(*states)
+            else:
+                mx.eval(chunk_logits)
+        else:
+            mx.eval(chunk_logits)
         offset += n
         mx.clear_cache()
 

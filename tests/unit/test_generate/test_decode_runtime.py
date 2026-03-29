@@ -14,6 +14,7 @@ from mlxs._types import FinishReason, GenerateOptions
 from mlxs.generate import compile as compile_mod
 from mlxs.generate import decode as decode_mod
 from mlxs.generate import generate
+from mlxs.generate.capabilities import resolve_decode_capabilities
 from mlxs.protocols.generate import TokenizerProtocol
 
 
@@ -181,6 +182,43 @@ def test_generate_compile_on_off_have_same_output(monkeypatch: pytest.MonkeyPatc
     assert compile_builds == ["full"]
 
 
+<<<<<<< HEAD
+=======
+def test_prepare_decode_plan_resolves_tensor_step_and_sync_policy() -> None:
+    tokenizer = _FakeTokenizer({0: "<eos>", 1: "A", 9: "P"})
+    model = _TableModel(_transition_row_fn({9: 1, 1: 0}, vocab_size=10))
+    cache = model.make_cache()
+    capabilities = resolve_decode_capabilities(model, cast(list[Any], cache))
+
+    sync_plan = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=4, temperature=0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=1,
+        capabilities=capabilities,
+        async_eval=False,
+    )
+    async_plan = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=4, temperature=0, repetition_penalty=2.0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=1,
+        capabilities=capabilities,
+        async_eval=True,
+    )
+
+    assert sync_plan.sync.async_eval is False
+    assert sync_plan.sync.transition_before_emit is False
+    assert async_plan.sync.async_eval is True
+    assert async_plan.sync.transition_before_emit is True
+    assert async_plan.tensor_step.token_history_size > 0
+
+
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
 def test_generate_async_eval_preserves_sequence_parity_and_uses_async_eval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

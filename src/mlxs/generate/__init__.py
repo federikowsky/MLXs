@@ -13,6 +13,10 @@ import mlx.core as mx
 
 from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
+<<<<<<< HEAD
+=======
+from mlxs.generate.capabilities import resolve_decode_capabilities
+>>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
 from mlxs.generate.decode import (
     decode_async_eval_enabled,
     decode_loop,
@@ -104,6 +108,18 @@ def generate(
     if cache is None:
         cache = model.make_cache()
 
+    capabilities = resolve_decode_capabilities(model, cache)
+
+    if input_embeddings is not None and not capabilities.supports_prefill_input_embeddings:
+        raise InvalidPromptError("Model does not support input_embeddings during prefill")
+
+    if (
+        quantized_kv_start > 0
+        and kv_bits is not None
+        and not capabilities.supports_delayed_kv_quantization
+    ):
+        raise ValueError("Delayed quantized KV requires full-precision KV caches")
+
     # Prefill: process prompt through model
     first_logits = chunked_prefill(
         model,
@@ -111,6 +127,7 @@ def generate(
         cache,
         prefill_step_size=prefill_step_size,
         input_embeddings=input_embeddings,
+        capabilities=capabilities,
     )
 
     async_eval = decode_async_eval_enabled()
@@ -121,6 +138,7 @@ def generate(
         decoder=tokenizer.decode,
         eos_token_id=tokenizer.eos_token_id,
         prompt_token_count=prompt_token_count,
+        capabilities=capabilities,
         compile_decode=compile_decode,
         async_eval=async_eval,
     )
