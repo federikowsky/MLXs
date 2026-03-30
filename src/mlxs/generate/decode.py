@@ -30,6 +30,8 @@ from mlxs.generate.stop import StopCondition
 
 _EMPTY_TOKEN_HISTORY = mx.array([], dtype=mx.int32)
 _Profile = dict[str, Any] | None
+_SELECTIVE_SPLIT_ASYNC_LONG_PROMPT_TOKENS = 1024
+_SELECTIVE_SPLIT_ASYNC_LONG_GENERATION_TOKENS = 256
 
 
 def _env_flag(name: str) -> bool:
@@ -46,6 +48,12 @@ def decode_async_eval_enabled() -> bool:
     """True when ``MLXS_DECODE_ASYNC_EVAL`` is set (experimental overlap path)."""
 
     return _env_flag("MLXS_DECODE_ASYNC_EVAL")
+
+
+def decode_selective_split_async_enabled() -> bool:
+    """True when selective split-async gating is enabled."""
+
+    return _env_flag("MLXS_DECODE_SELECTIVE_SPLIT_ASYNC")
 
 
 def emit_decode_profile_report(
@@ -65,6 +73,7 @@ def emit_decode_profile_report(
         f"[MLXS_DECODE_PROFILE] compile_decode={compile_decode} "
         f"async_eval={async_eval} "
         f"token_boundary_mode={profile.get('token_boundary_mode', 'unknown')} "
+        f"token_boundary_selection={profile.get('token_boundary_selection', 'unknown')} "
         f"forward_steps={n_fwd} "
         f"forward_decode_s={profile.get('forward_decode_s', 0.0):.6f} "
         f"logits_sample_prep_s={profile.get('logits_sample_prep_s', 0.0):.6f} "
@@ -207,6 +216,7 @@ class _TokenBoundaryPolicy:
     """Resolved policy for token-boundary scheduling and host readiness."""
 
     name: str
+    selection: str
     async_eval: bool
     profile_key: str
     _enqueue_pending: Callable[[_PendingStep, _Profile], None]
@@ -215,6 +225,7 @@ class _TokenBoundaryPolicy:
     def enqueue(self, pending: _PendingStep, *, profile: _Profile) -> None:
         if profile is not None:
             profile.setdefault("token_boundary_mode", self.name)
+            profile.setdefault("token_boundary_selection", self.selection)
             profile["token_boundary_steps"] = int(profile.get("token_boundary_steps", 0)) + 1
             if pending.sync_payload.token_wait_reuses_enqueue():
                 profile["token_boundary_wait_reuses_enqueue_steps"] = int(
@@ -353,6 +364,39 @@ class DecodePlan:
     capabilities: DecodeCapabilities
 
 
+def _uses_greedy_sampling(options: GenerateOptions) -> bool:
+    return bool(
+        options.temperature == 0
+        and options.top_p == 1.0
+        and options.top_k == 0
+        and options.min_p == 0.0
+    )
+
+
+def _selective_split_async_eligible(
+    *,
+    options: GenerateOptions,
+    compile_decode: bool,
+    prompt_token_count: int,
+    quantized_kv_start: int,
+    kv_bits: int | None,
+) -> bool:
+    if not compile_decode or not _uses_greedy_sampling(options):
+        return False
+    if options.logprobs or options.top_logprobs > 0:
+        return False
+    if options.repetition_penalty != 1.0:
+        return False
+    if options.stop_sequences:
+        return False
+    if quantized_kv_start > 0 and kv_bits is not None:
+        return False
+    return (
+        prompt_token_count >= _SELECTIVE_SPLIT_ASYNC_LONG_PROMPT_TOKENS
+        and options.max_tokens >= _SELECTIVE_SPLIT_ASYNC_LONG_GENERATION_TOKENS
+    )
+
+
 def prepare_decode_plan(
     model: Any,
     cache: list[Any],
@@ -364,10 +408,20 @@ def prepare_decode_plan(
     capabilities: DecodeCapabilities,
     compile_decode: bool = False,
     async_eval: bool = False,
+    quantized_kv_start: int = 0,
+    kv_bits: int | None = None,
 ) -> DecodePlan:
     """Resolve the staged decode runtime once before token generation."""
 
-    sync = _make_sync_policy(async_eval=async_eval)
+    sync = _make_sync_policy(
+        async_eval=async_eval,
+        selective_split_async=decode_selective_split_async_enabled(),
+        options=options,
+        compile_decode=compile_decode,
+        prompt_token_count=prompt_token_count,
+        quantized_kv_start=quantized_kv_start,
+        kv_bits=kv_bits,
+    )
     tensor_step = _TensorStep(
         forward=make_decode_forward_runtime(model, cache, compile_decode=compile_decode),
         logits=make_logits_processor_plan(repetition_penalty=options.repetition_penalty),
@@ -496,12 +550,35 @@ def _sync_pending_for_event(pending: _PendingStep, profile: _Profile) -> None:
     )
 
 
-def _make_sync_policy(*, async_eval: bool) -> _SyncPolicy:
-    if async_eval:
+def _make_sync_policy(
+    *,
+    async_eval: bool,
+    selective_split_async: bool,
+    options: GenerateOptions,
+    compile_decode: bool,
+    prompt_token_count: int,
+    quantized_kv_start: int,
+    kv_bits: int | None,
+) -> _SyncPolicy:
+    if async_eval and (
+        not selective_split_async
+        or _selective_split_async_eligible(
+            options=options,
+            compile_decode=compile_decode,
+            prompt_token_count=prompt_token_count,
+            quantized_kv_start=quantized_kv_start,
+            kv_bits=kv_bits,
+        )
+    ):
         return _SyncPolicy(
             transition_before_emit=True,
             token_boundary=_TokenBoundaryPolicy(
                 name="split_async",
+                selection=(
+                    "global_async"
+                    if not selective_split_async
+                    else "selective_split_async"
+                ),
                 async_eval=True,
                 profile_key="mx_async_eval_s",
                 _enqueue_pending=_enqueue_pending_async,
@@ -513,6 +590,11 @@ def _make_sync_policy(*, async_eval: bool) -> _SyncPolicy:
         transition_before_emit=False,
         token_boundary=_TokenBoundaryPolicy(
             name="single_sync",
+            selection=(
+                "default_sync"
+                if not selective_split_async
+                else "selective_fallback_sync"
+            ),
             async_eval=False,
             profile_key="mx_eval_s",
             _enqueue_pending=_enqueue_pending_sync,

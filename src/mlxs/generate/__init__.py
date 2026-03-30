@@ -101,6 +101,8 @@ def generate(
         capabilities=capabilities,
         compile_decode=compile_decode,
         async_eval=async_eval,
+        quantized_kv_start=quantized_kv_start,
+        kv_bits=kv_bits,
     )
 
     profile: dict[str, Any] | None = None
@@ -112,6 +114,7 @@ def generate(
             "sync_wait_token_s": 0.0,
             "sync_wait_event_s": 0.0,
             "token_boundary_mode": plan.sync.token_boundary.name,
+            "token_boundary_selection": plan.sync.token_boundary.selection,
             "mx_async_eval_s": 0.0,
             "mx_eval_s": 0.0,
             "materialize_s": 0.0,

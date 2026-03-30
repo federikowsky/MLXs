@@ -211,10 +211,101 @@ def test_prepare_decode_plan_resolves_tensor_step_and_sync_policy() -> None:
     assert sync_plan.sync.async_eval is False
     assert sync_plan.sync.transition_before_emit is False
     assert sync_plan.sync.token_boundary.name == "single_sync"
+    assert sync_plan.sync.token_boundary.selection == "default_sync"
     assert async_plan.sync.async_eval is True
     assert async_plan.sync.transition_before_emit is True
     assert async_plan.sync.token_boundary.name == "split_async"
+    assert async_plan.sync.token_boundary.selection == "global_async"
     assert async_plan.tensor_step.token_history_size > 0
+
+
+def test_prepare_decode_plan_selective_split_async_is_narrowly_gated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MLXS_DECODE_SELECTIVE_SPLIT_ASYNC", "1")
+    tokenizer = _FakeTokenizer({0: "<eos>", 1: "A", 9: "P"})
+    model = _TableModel(_transition_row_fn({9: 1, 1: 0}, vocab_size=10))
+    cache = model.make_cache()
+    capabilities = resolve_decode_capabilities(model, cast(list[Any], cache))
+
+    eligible = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=512, temperature=0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=2048,
+        capabilities=capabilities,
+        compile_decode=True,
+        async_eval=True,
+    )
+    short_decode_long_prompt = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=128, temperature=0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=2048,
+        capabilities=capabilities,
+        compile_decode=True,
+        async_eval=True,
+    )
+    short_prompt = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=128, temperature=0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=256,
+        capabilities=capabilities,
+        compile_decode=True,
+        async_eval=True,
+    )
+    with_logprobs = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=128, temperature=0, logprobs=True),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=2048,
+        capabilities=capabilities,
+        compile_decode=True,
+        async_eval=True,
+    )
+    delayed_quant = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=128, temperature=0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=2048,
+        capabilities=capabilities,
+        compile_decode=True,
+        async_eval=True,
+        quantized_kv_start=64,
+        kv_bits=4,
+    )
+    no_compile = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=128, temperature=0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=2048,
+        capabilities=capabilities,
+        compile_decode=False,
+        async_eval=True,
+    )
+
+    assert eligible.sync.token_boundary.name == "split_async"
+    assert eligible.sync.token_boundary.selection == "selective_split_async"
+    assert short_decode_long_prompt.sync.token_boundary.name == "single_sync"
+    assert short_decode_long_prompt.sync.token_boundary.selection == "selective_fallback_sync"
+    assert short_prompt.sync.token_boundary.name == "single_sync"
+    assert short_prompt.sync.token_boundary.selection == "selective_fallback_sync"
+    assert with_logprobs.sync.token_boundary.name == "single_sync"
+    assert delayed_quant.sync.token_boundary.name == "single_sync"
+    assert no_compile.sync.token_boundary.name == "single_sync"
 
 
 def test_pending_sync_payload_separates_enqueue_and_wait_groups() -> None:
