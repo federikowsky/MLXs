@@ -13,10 +13,7 @@ import mlx.core as mx
 
 from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
-<<<<<<< HEAD
-=======
 from mlxs.generate.capabilities import resolve_decode_capabilities
->>>>>>> 576859d (feat: Introduce decode capabilities resolution and enhance prefill process)
 from mlxs.generate.decode import (
     decode_async_eval_enabled,
     decode_loop,
@@ -44,48 +41,14 @@ def generate(
     kv_group_size: int = 64,
     final_cache_out: list[list[Any]] | None = None,
 ) -> Iterator[TokenEvent]:
-    """Generate tokens from a prompt (§6.1, FR3).
-
-    This is the single-request generation entry point. It:
-    1. Encodes the prompt (if string).
-    2. Creates or reuses KV cache.
-    3. Runs chunked prefill.
-    4. Runs the decode loop, yielding TokenEvent per token.
-
-    All abstractions (sampler, stop condition, logits processors) are
-    resolved once here — not per token (O2).
-
-    Args:
-        model: Model satisfying ModelProtocol.
-        tokenizer: Tokenizer satisfying TokenizerProtocol.
-        prompt: Input text or pre-tokenized token ids.
-        options: Generation parameters. Defaults to GenerateOptions().
-        cache: Optional pre-populated KV cache (e.g. from prompt cache).
-        input_embeddings: Pre-computed embeddings ``(T, D)`` from
-            multimodal preprocessing (§7.4). When provided, used instead
-            of ``embed_tokens`` during prefill.
-        prefill_step_size: Max tokens per prefill chunk.
-        compile_decode: If True, compile the model forward for decode (§6.8).
-            Falls back to uncompiled on failure (AC12).
-        clear_cache_interval: Steps between mx.clear_cache() calls.
-            0 = disabled. Default: 256.
-        final_cache_out: If provided, the list is appended with the KV cache
-            after generation completes (for prompt_cache.put). Plan-chat-cli.
-
-    Yields:
-        TokenEvent for each generated token. The last event has
-        finish_reason set.
-    """
+    """Generate tokens from a prompt (§6.1, FR3)."""
     if options is None:
         options = GenerateOptions()
 
-    # Encode prompt
     prompt_tokens = tokenizer.encode(prompt) if isinstance(prompt, str) else list(prompt)
-
     if not prompt_tokens:
         raise ValueError("Prompt must not be empty")
 
-    # Validate input_embeddings shape (§7.4)
     if input_embeddings is not None:
         if input_embeddings.ndim != 2:
             raise InvalidPromptError(
@@ -100,11 +63,9 @@ def generate(
     prompt_array = mx.array(prompt_tokens)
     prompt_token_count = len(prompt_tokens)
 
-    # Set seed if specified
     if options.seed is not None:
         mx.random.seed(options.seed)
 
-    # Create KV cache if not provided
     if cache is None:
         cache = model.make_cache()
 
@@ -120,7 +81,6 @@ def generate(
     ):
         raise ValueError("Delayed quantized KV requires full-precision KV caches")
 
-    # Prefill: process prompt through model
     first_logits = chunked_prefill(
         model,
         prompt_array,
@@ -148,11 +108,20 @@ def generate(
         profile = {
             "forward_decode_s": 0.0,
             "logits_sample_prep_s": 0.0,
+            "sync_enqueue_s": 0.0,
+            "sync_wait_token_s": 0.0,
+            "sync_wait_event_s": 0.0,
             "mx_async_eval_s": 0.0,
             "mx_eval_s": 0.0,
             "materialize_s": 0.0,
             "mutation_s": 0.0,
             "n_forward_decode": 0,
+            "sync_enqueue_calls": 0,
+            "sync_enqueue_tensors": 0,
+            "sync_wait_token_calls": 0,
+            "sync_wait_token_tensors": 0,
+            "sync_wait_event_calls": 0,
+            "sync_wait_event_tensors": 0,
             "forward_wall_samples": [],
             "step_wall_samples": [],
         }
