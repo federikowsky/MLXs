@@ -111,6 +111,7 @@ def generate(
             "sync_enqueue_s": 0.0,
             "sync_wait_token_s": 0.0,
             "sync_wait_event_s": 0.0,
+            "token_boundary_mode": plan.sync.token_boundary.name,
             "mx_async_eval_s": 0.0,
             "mx_eval_s": 0.0,
             "materialize_s": 0.0,
@@ -122,6 +123,10 @@ def generate(
             "sync_wait_token_tensors": 0,
             "sync_wait_event_calls": 0,
             "sync_wait_event_tensors": 0,
+            "token_boundary_steps": 0,
+            "token_boundary_wait_reuses_enqueue_steps": 0,
+            "token_boundary_event_wait_empty_steps": 0,
+            "token_boundary_token_only_steps": 0,
             "forward_wall_samples": [],
             "step_wall_samples": [],
         }

@@ -64,6 +64,7 @@ def emit_decode_profile_report(
         "mx_eval_s is explicit wait time before host reads.",
         f"[MLXS_DECODE_PROFILE] compile_decode={compile_decode} "
         f"async_eval={async_eval} "
+        f"token_boundary_mode={profile.get('token_boundary_mode', 'unknown')} "
         f"forward_steps={n_fwd} "
         f"forward_decode_s={profile.get('forward_decode_s', 0.0):.6f} "
         f"logits_sample_prep_s={profile.get('logits_sample_prep_s', 0.0):.6f} "
@@ -106,6 +107,13 @@ def emit_decode_profile_report(
         f"event_wait_calls={int(profile.get('sync_wait_event_calls', 0))} "
         f"event_wait_tensors={int(profile.get('sync_wait_event_tensors', 0))}"
     )
+    lines.append(
+        "[MLXS_DECODE_PROFILE] token boundary diagnostics: "
+        f"steps={int(profile.get('token_boundary_steps', 0))} "
+        f"wait_reuses_enqueue={int(profile.get('token_boundary_wait_reuses_enqueue_steps', 0))} "
+        f"event_wait_empty={int(profile.get('token_boundary_event_wait_empty_steps', 0))} "
+        f"token_only={int(profile.get('token_boundary_token_only_steps', 0))}"
+    )
     total = sum(
         float(profile.get(key, 0.0))
         for key in (
@@ -138,6 +146,15 @@ def emit_decode_profile_report(
             f"token_wait={profile.get('sync_wait_token_s', 0) / sync_total:.3f} "
             f"event_wait={profile.get('sync_wait_event_s', 0) / sync_total:.3f}"
         )
+    token_boundary_total = float(profile.get("sync_enqueue_s", 0.0)) + float(
+        profile.get("sync_wait_token_s", 0.0)
+    )
+    if token_boundary_total > 0:
+        lines.append(
+            "[MLXS_DECODE_PROFILE] token boundary wall split: "
+            f"enqueue={profile.get('sync_enqueue_s', 0) / token_boundary_total:.3f} "
+            f"token_wait={profile.get('sync_wait_token_s', 0) / token_boundary_total:.3f}"
+        )
     sys.stderr.write("\n".join(lines) + "\n")
 
 
@@ -154,6 +171,26 @@ class _PendingSyncPayload:
     token_wait: tuple[mx.array, ...]
     event_wait: tuple[mx.array, ...]
 
+    def token_wait_reuses_enqueue(self) -> bool:
+        if len(self.token_wait) > len(self.enqueue):
+            return False
+        return all(
+            wait is enqueued
+            for wait, enqueued in zip(self.token_wait, self.enqueue, strict=False)
+        )
+
+    @property
+    def has_event_wait(self) -> bool:
+        return bool(self.event_wait)
+
+    @property
+    def is_token_only_boundary(self) -> bool:
+        return (
+            len(self.enqueue) == 1
+            and self.token_wait_reuses_enqueue()
+            and not self.has_event_wait
+        )
+
 
 @dataclass(slots=True)
 class _PendingStep:
@@ -166,22 +203,59 @@ class _PendingStep:
 
 
 @dataclass(frozen=True, slots=True)
+class _TokenBoundaryPolicy:
+    """Resolved policy for token-boundary scheduling and host readiness."""
+
+    name: str
+    async_eval: bool
+    profile_key: str
+    _enqueue_pending: Callable[[_PendingStep, _Profile], None]
+    _wait_for_host: Callable[[_PendingStep, _Profile], None]
+
+    def enqueue(self, pending: _PendingStep, *, profile: _Profile) -> None:
+        if profile is not None:
+            profile.setdefault("token_boundary_mode", self.name)
+            profile["token_boundary_steps"] = int(profile.get("token_boundary_steps", 0)) + 1
+            if pending.sync_payload.token_wait_reuses_enqueue():
+                profile["token_boundary_wait_reuses_enqueue_steps"] = int(
+                    profile.get("token_boundary_wait_reuses_enqueue_steps", 0)
+                ) + 1
+            if not pending.sync_payload.has_event_wait:
+                profile["token_boundary_event_wait_empty_steps"] = int(
+                    profile.get("token_boundary_event_wait_empty_steps", 0)
+                ) + 1
+            if pending.sync_payload.is_token_only_boundary:
+                profile["token_boundary_token_only_steps"] = int(
+                    profile.get("token_boundary_token_only_steps", 0)
+                ) + 1
+        self._enqueue_pending(pending, profile)
+
+    def wait_for_host(self, pending: _PendingStep, *, profile: _Profile) -> None:
+        self._wait_for_host(pending, profile)
+
+
+@dataclass(frozen=True, slots=True)
 class _SyncPolicy:
     """Resolved policy for scheduling and synchronizing pending tensors."""
 
-    async_eval: bool
     transition_before_emit: bool
-    profile_key: str
-    _enqueue_pending: Callable[[_PendingStep, _Profile], None]
-    _sync_token_for_host: Callable[[_PendingStep, _Profile], None]
+    token_boundary: _TokenBoundaryPolicy
     _sync_for_event: Callable[[_PendingStep, _Profile], None]
+
+    @property
+    def async_eval(self) -> bool:
+        return self.token_boundary.async_eval
+
+    @property
+    def profile_key(self) -> str:
+        return self.token_boundary.profile_key
 
     def enqueue(self, pending: _PendingStep, *, profile: _Profile) -> None:
         pending.async_eval = self.async_eval
-        self._enqueue_pending(pending, profile)
+        self.token_boundary.enqueue(pending, profile=profile)
 
     def sync_token_for_host(self, pending: _PendingStep, *, profile: _Profile) -> None:
-        self._sync_token_for_host(pending, profile)
+        self.token_boundary.wait_for_host(pending, profile=profile)
 
     def sync_for_event(self, pending: _PendingStep, *, profile: _Profile) -> None:
         self._sync_for_event(pending, profile)
@@ -425,19 +499,25 @@ def _sync_pending_for_event(pending: _PendingStep, profile: _Profile) -> None:
 def _make_sync_policy(*, async_eval: bool) -> _SyncPolicy:
     if async_eval:
         return _SyncPolicy(
-            async_eval=True,
             transition_before_emit=True,
-            profile_key="mx_async_eval_s",
-            _enqueue_pending=_enqueue_pending_async,
-            _sync_token_for_host=_sync_pending_token_for_host,
+            token_boundary=_TokenBoundaryPolicy(
+                name="split_async",
+                async_eval=True,
+                profile_key="mx_async_eval_s",
+                _enqueue_pending=_enqueue_pending_async,
+                _wait_for_host=_sync_pending_token_for_host,
+            ),
             _sync_for_event=_sync_pending_for_event,
         )
     return _SyncPolicy(
-        async_eval=False,
         transition_before_emit=False,
-        profile_key="mx_eval_s",
-        _enqueue_pending=_enqueue_pending_sync,
-        _sync_token_for_host=_sync_pending_noop,
+        token_boundary=_TokenBoundaryPolicy(
+            name="single_sync",
+            async_eval=False,
+            profile_key="mx_eval_s",
+            _enqueue_pending=_enqueue_pending_sync,
+            _wait_for_host=_sync_pending_noop,
+        ),
         _sync_for_event=_sync_pending_noop,
     )
 

@@ -210,8 +210,10 @@ def test_prepare_decode_plan_resolves_tensor_step_and_sync_policy() -> None:
 
     assert sync_plan.sync.async_eval is False
     assert sync_plan.sync.transition_before_emit is False
+    assert sync_plan.sync.token_boundary.name == "single_sync"
     assert async_plan.sync.async_eval is True
     assert async_plan.sync.transition_before_emit is True
+    assert async_plan.sync.token_boundary.name == "split_async"
     assert async_plan.tensor_step.token_history_size > 0
 
 
@@ -247,6 +249,36 @@ def test_pending_sync_payload_separates_enqueue_and_wait_groups() -> None:
     assert pending.sync_payload.event_wait[0] is pending.token_logprob
     assert pending.sync_payload.event_wait[1] is pending.top_token_ids
     assert pending.sync_payload.event_wait[2] is pending.top_token_logprobs
+
+
+def test_pending_sync_payload_marks_common_token_boundary_shape() -> None:
+    tokenizer = _FakeTokenizer({0: "<eos>", 1: "A", 2: "B", 9: "P"})
+    model = _TableModel(_transition_row_fn({9: 2, 2: 0}, vocab_size=10))
+    cache = model.make_cache()
+    capabilities = resolve_decode_capabilities(model, cast(list[Any], cache))
+    plan = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=4, temperature=0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=1,
+        capabilities=capabilities,
+        async_eval=True,
+    )
+
+    pending = decode_mod._build_pending_from_logits(
+        mx.array([[0.1, 1.5, 2.0, -0.5]], dtype=mx.float32),
+        tensor_step=plan.tensor_step,
+        history=decode_mod._RecentTokenHistory(plan.tensor_step.token_history_size),
+    )
+
+    assert pending.sync_payload.enqueue == (pending.token,)
+    assert pending.sync_payload.token_wait == (pending.token,)
+    assert pending.sync_payload.event_wait == ()
+    assert pending.sync_payload.token_wait_reuses_enqueue() is True
+    assert pending.sync_payload.has_event_wait is False
+    assert pending.sync_payload.is_token_only_boundary is True
 
 
 def test_sync_policy_profiles_enqueue_and_wait_scopes(
@@ -301,6 +333,47 @@ def test_sync_policy_profiles_enqueue_and_wait_scopes(
     assert "sync_wait_event_s" in profile
     assert "mx_async_eval_s" in profile
     assert "mx_eval_s" in profile
+
+
+def test_sync_policy_records_common_token_boundary_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = _FakeTokenizer({0: "<eos>", 1: "A", 2: "B", 9: "P"})
+    model = _TableModel(_transition_row_fn({9: 2, 2: 0}, vocab_size=10))
+    cache = model.make_cache()
+    capabilities = resolve_decode_capabilities(model, cast(list[Any], cache))
+    plan = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=4, temperature=0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=1,
+        capabilities=capabilities,
+        async_eval=True,
+    )
+    pending = decode_mod._build_pending_from_logits(
+        mx.array([[0.1, 1.5, 2.0, -0.5]], dtype=mx.float32),
+        tensor_step=plan.tensor_step,
+        history=decode_mod._RecentTokenHistory(plan.tensor_step.token_history_size),
+    )
+
+    monkeypatch.setattr(mx, "async_eval", lambda *args: None)
+    monkeypatch.setattr(mx, "eval", lambda *args: None)
+
+    profile: dict[str, Any] = {}
+    plan.sync.enqueue(pending, profile=profile)
+    plan.sync.sync_token_for_host(pending, profile=profile)
+
+    assert profile["token_boundary_mode"] == "split_async"
+    assert profile["token_boundary_steps"] == 1
+    assert profile["token_boundary_wait_reuses_enqueue_steps"] == 1
+    assert profile["token_boundary_event_wait_empty_steps"] == 1
+    assert profile["token_boundary_token_only_steps"] == 1
+    assert profile["sync_enqueue_calls"] == 1
+    assert profile["sync_wait_token_calls"] == 1
+    assert "sync_enqueue_s" in profile
+    assert "sync_wait_token_s" in profile
 
 
 def test_generate_async_eval_preserves_sequence_parity_and_uses_async_eval(
