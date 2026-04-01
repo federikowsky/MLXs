@@ -266,9 +266,6 @@ class _SyncPolicy:
     transition_before_emit: bool
     token_boundary: _TokenBoundaryPolicy
     _sync_for_event: Callable[[_PendingStep, _Profile], None]
-    initial_transition_before_emit: bool | None = None
-    _initial_token_boundary: _TokenBoundaryPolicy | None = None
-    _initial_sync_for_event: Callable[[_PendingStep, _Profile], None] | None = None
 
     @property
     def async_eval(self) -> bool:
@@ -279,9 +276,9 @@ class _SyncPolicy:
         return self.token_boundary.profile_key
 
     def enqueue(self, pending: _PendingStep, *, step_index: int, profile: _Profile) -> None:
-        token_boundary = self._token_boundary_for_step(step_index)
-        pending.async_eval = token_boundary.async_eval
-        token_boundary.enqueue(pending, profile=profile)
+        del step_index
+        pending.async_eval = self.async_eval
+        self.token_boundary.enqueue(pending, profile=profile)
 
     def sync_token_for_host(
         self,
@@ -290,7 +287,8 @@ class _SyncPolicy:
         step_index: int,
         profile: _Profile,
     ) -> None:
-        self._token_boundary_for_step(step_index).wait_for_host(pending, profile=profile)
+        del step_index
+        self.token_boundary.wait_for_host(pending, profile=profile)
 
     def sync_for_event(
         self,
@@ -299,25 +297,12 @@ class _SyncPolicy:
         step_index: int,
         profile: _Profile,
     ) -> None:
-        self._sync_for_event_for_step(step_index)(pending, profile)
+        del step_index
+        self._sync_for_event(pending, profile)
 
     def transition_before_emit_for_step(self, step_index: int) -> bool:
-        if step_index == 0 and self._initial_token_boundary is not None:
-            return bool(self.initial_transition_before_emit)
+        del step_index
         return self.transition_before_emit
-
-    def _token_boundary_for_step(self, step_index: int) -> _TokenBoundaryPolicy:
-        if step_index == 0 and self._initial_token_boundary is not None:
-            return self._initial_token_boundary
-        return self.token_boundary
-
-    def _sync_for_event_for_step(
-        self,
-        step_index: int,
-    ) -> Callable[[_PendingStep, _Profile], None]:
-        if step_index == 0 and self._initial_token_boundary is not None:
-            return self._initial_sync_for_event or _sync_pending_noop
-        return self._sync_for_event
 
 
 class _RecentTokenHistory:
@@ -641,36 +626,19 @@ def _make_sync_policy(
     quantized_kv_start: int,
     kv_bits: int | None,
 ) -> _SyncPolicy:
-    def make_split_async_policy(*, selection: str, reason: str) -> _SyncPolicy:
+    if async_eval and not selective_split_async:
         return _SyncPolicy(
             transition_before_emit=True,
             token_boundary=_TokenBoundaryPolicy(
                 name="split_async",
-                selection=selection,
-                reason=f"first_token_sync:{reason}",
+                selection="global_async",
+                reason="global_async",
                 async_eval=True,
                 profile_key="mx_async_eval_s",
                 _enqueue_pending=_enqueue_pending_async,
                 _wait_for_host=_sync_pending_token_for_host,
             ),
             _sync_for_event=_sync_pending_for_event,
-            initial_transition_before_emit=False,
-            _initial_token_boundary=_TokenBoundaryPolicy(
-                name="single_sync",
-                selection=selection,
-                reason=f"first_token_sync:{reason}",
-                async_eval=False,
-                profile_key="mx_eval_s",
-                _enqueue_pending=_enqueue_pending_sync,
-                _wait_for_host=_sync_pending_noop,
-            ),
-            _initial_sync_for_event=_sync_pending_noop,
-        )
-
-    if async_eval and not selective_split_async:
-        return make_split_async_policy(
-            selection="global_async",
-            reason="global_async",
         )
     if async_eval and selective_split_async:
         decision = _selective_split_async_eligible(
@@ -681,9 +649,18 @@ def _make_sync_policy(
             kv_bits=kv_bits,
         )
         if decision.enabled:
-            return make_split_async_policy(
-                selection="selective_split_async",
-                reason=decision.reason,
+            return _SyncPolicy(
+                transition_before_emit=True,
+                token_boundary=_TokenBoundaryPolicy(
+                    name="split_async",
+                    selection="selective_split_async",
+                    reason=decision.reason,
+                    async_eval=True,
+                    profile_key="mx_async_eval_s",
+                    _enqueue_pending=_enqueue_pending_async,
+                    _wait_for_host=_sync_pending_token_for_host,
+                ),
+                _sync_for_event=_sync_pending_for_event,
             )
         return _SyncPolicy(
             transition_before_emit=False,
