@@ -212,10 +212,14 @@ def test_prepare_decode_plan_resolves_tensor_step_and_sync_policy() -> None:
     assert sync_plan.sync.transition_before_emit is False
     assert sync_plan.sync.token_boundary.name == "single_sync"
     assert sync_plan.sync.token_boundary.selection == "default_sync"
+    assert sync_plan.sync.token_boundary.reason == "async_disabled"
     assert async_plan.sync.async_eval is True
     assert async_plan.sync.transition_before_emit is True
+    assert async_plan.sync.transition_before_emit_for_step(0) is False
+    assert async_plan.sync.transition_before_emit_for_step(1) is True
     assert async_plan.sync.token_boundary.name == "split_async"
     assert async_plan.sync.token_boundary.selection == "global_async"
+    assert async_plan.sync.token_boundary.reason == "first_token_sync:global_async"
     assert async_plan.tensor_step.token_history_size > 0
 
 
@@ -235,6 +239,17 @@ def test_prepare_decode_plan_selective_split_async_is_narrowly_gated(
         decoder=tokenizer.decode,
         eos_token_id=tokenizer.eos_token_id,
         prompt_token_count=2048,
+        capabilities=capabilities,
+        compile_decode=True,
+        async_eval=True,
+    )
+    borderline_long_regime = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=256, temperature=0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=1024,
         capabilities=capabilities,
         compile_decode=True,
         async_eval=True,
@@ -299,13 +314,22 @@ def test_prepare_decode_plan_selective_split_async_is_narrowly_gated(
 
     assert eligible.sync.token_boundary.name == "split_async"
     assert eligible.sync.token_boundary.selection == "selective_split_async"
+    assert eligible.sync.token_boundary.reason == "first_token_sync:long_regime"
+    assert borderline_long_regime.sync.token_boundary.name == "single_sync"
+    assert borderline_long_regime.sync.token_boundary.selection == "selective_fallback_sync"
+    assert borderline_long_regime.sync.token_boundary.reason == "insufficient_token_work"
     assert short_decode_long_prompt.sync.token_boundary.name == "single_sync"
     assert short_decode_long_prompt.sync.token_boundary.selection == "selective_fallback_sync"
+    assert short_decode_long_prompt.sync.token_boundary.reason == "short_generation"
     assert short_prompt.sync.token_boundary.name == "single_sync"
     assert short_prompt.sync.token_boundary.selection == "selective_fallback_sync"
+    assert short_prompt.sync.token_boundary.reason == "short_prompt"
     assert with_logprobs.sync.token_boundary.name == "single_sync"
+    assert with_logprobs.sync.token_boundary.reason == "logprob_payload_enabled"
     assert delayed_quant.sync.token_boundary.name == "single_sync"
+    assert delayed_quant.sync.token_boundary.reason == "delayed_quantized_kv"
     assert no_compile.sync.token_boundary.name == "single_sync"
+    assert no_compile.sync.token_boundary.reason == "compile_or_sampling_excluded"
 
 
 def test_pending_sync_payload_separates_enqueue_and_wait_groups() -> None:
@@ -407,9 +431,9 @@ def test_sync_policy_profiles_enqueue_and_wait_scopes(
     monkeypatch.setattr(mx, "eval", fake_eval)
 
     profile: dict[str, Any] = {}
-    plan.sync.enqueue(pending, profile=profile)
-    plan.sync.sync_token_for_host(pending, profile=profile)
-    plan.sync.sync_for_event(pending, profile=profile)
+    plan.sync.enqueue(pending, step_index=1, profile=profile)
+    plan.sync.sync_token_for_host(pending, step_index=1, profile=profile)
+    plan.sync.sync_for_event(pending, step_index=1, profile=profile)
 
     assert async_calls == [pending.sync_payload.enqueue]
     assert eval_calls == [pending.sync_payload.token_wait, pending.sync_payload.event_wait]
@@ -424,6 +448,50 @@ def test_sync_policy_profiles_enqueue_and_wait_scopes(
     assert "sync_wait_event_s" in profile
     assert "mx_async_eval_s" in profile
     assert "mx_eval_s" in profile
+
+
+def test_sync_policy_uses_single_sync_for_first_token_then_split_async(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = _FakeTokenizer({0: "<eos>", 1: "A", 2: "B", 9: "P"})
+    model = _TableModel(_transition_row_fn({9: 2, 2: 0}, vocab_size=10))
+    cache = model.make_cache()
+    capabilities = resolve_decode_capabilities(model, cast(list[Any], cache))
+    plan = decode_mod.prepare_decode_plan(
+        model,
+        cast(list[Any], cache),
+        options=GenerateOptions(max_tokens=4, temperature=0),
+        decoder=tokenizer.decode,
+        eos_token_id=tokenizer.eos_token_id,
+        prompt_token_count=1,
+        capabilities=capabilities,
+        async_eval=True,
+    )
+    pending = decode_mod._build_pending_from_logits(
+        mx.array([[0.1, 1.5, 2.0, -0.5]], dtype=mx.float32),
+        tensor_step=plan.tensor_step,
+        history=decode_mod._RecentTokenHistory(plan.tensor_step.token_history_size),
+    )
+    async_calls: list[tuple[Any, ...]] = []
+    eval_calls: list[tuple[Any, ...]] = []
+
+    monkeypatch.setattr(mx, "async_eval", lambda *args: async_calls.append(args))
+    monkeypatch.setattr(mx, "eval", lambda *args: eval_calls.append(args))
+
+    initial_profile: dict[str, Any] = {}
+    plan.sync.enqueue(pending, step_index=0, profile=initial_profile)
+    plan.sync.sync_token_for_host(pending, step_index=0, profile=initial_profile)
+
+    steady_profile: dict[str, Any] = {}
+    plan.sync.enqueue(pending, step_index=1, profile=steady_profile)
+    plan.sync.sync_token_for_host(pending, step_index=1, profile=steady_profile)
+
+    assert async_calls == [pending.sync_payload.enqueue]
+    assert eval_calls == [pending.sync_payload.enqueue, pending.sync_payload.token_wait]
+    assert initial_profile["sync_enqueue_calls"] == 1
+    assert initial_profile.get("sync_wait_token_calls", 0) == 0
+    assert steady_profile["sync_enqueue_calls"] == 1
+    assert steady_profile["sync_wait_token_calls"] == 1
 
 
 def test_sync_policy_records_common_token_boundary_diagnostics(
@@ -453,10 +521,12 @@ def test_sync_policy_records_common_token_boundary_diagnostics(
     monkeypatch.setattr(mx, "eval", lambda *args: None)
 
     profile: dict[str, Any] = {}
-    plan.sync.enqueue(pending, profile=profile)
-    plan.sync.sync_token_for_host(pending, profile=profile)
+    plan.sync.enqueue(pending, step_index=1, profile=profile)
+    plan.sync.sync_token_for_host(pending, step_index=1, profile=profile)
 
     assert profile["token_boundary_mode"] == "split_async"
+    assert profile["token_boundary_selection"] == "global_async"
+    assert profile["token_boundary_reason"] == "first_token_sync:global_async"
     assert profile["token_boundary_steps"] == 1
     assert profile["token_boundary_wait_reuses_enqueue_steps"] == 1
     assert profile["token_boundary_event_wait_empty_steps"] == 1

@@ -32,10 +32,21 @@ _EMPTY_TOKEN_HISTORY = mx.array([], dtype=mx.int32)
 _Profile = dict[str, Any] | None
 _SELECTIVE_SPLIT_ASYNC_LONG_PROMPT_TOKENS = 1024
 _SELECTIVE_SPLIT_ASYNC_LONG_GENERATION_TOKENS = 256
+_SELECTIVE_SPLIT_ASYNC_MIN_TOKEN_WORK = 2048 * 256
 
 
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
 
 
 def decode_profile_enabled() -> bool:
@@ -74,6 +85,7 @@ def emit_decode_profile_report(
         f"async_eval={async_eval} "
         f"token_boundary_mode={profile.get('token_boundary_mode', 'unknown')} "
         f"token_boundary_selection={profile.get('token_boundary_selection', 'unknown')} "
+        f"token_boundary_reason={profile.get('token_boundary_reason', 'unknown')} "
         f"forward_steps={n_fwd} "
         f"forward_decode_s={profile.get('forward_decode_s', 0.0):.6f} "
         f"logits_sample_prep_s={profile.get('logits_sample_prep_s', 0.0):.6f} "
@@ -217,6 +229,7 @@ class _TokenBoundaryPolicy:
 
     name: str
     selection: str
+    reason: str
     async_eval: bool
     profile_key: str
     _enqueue_pending: Callable[[_PendingStep, _Profile], None]
@@ -226,6 +239,7 @@ class _TokenBoundaryPolicy:
         if profile is not None:
             profile.setdefault("token_boundary_mode", self.name)
             profile.setdefault("token_boundary_selection", self.selection)
+            profile.setdefault("token_boundary_reason", self.reason)
             profile["token_boundary_steps"] = int(profile.get("token_boundary_steps", 0)) + 1
             if pending.sync_payload.token_wait_reuses_enqueue():
                 profile["token_boundary_wait_reuses_enqueue_steps"] = int(
@@ -252,6 +266,9 @@ class _SyncPolicy:
     transition_before_emit: bool
     token_boundary: _TokenBoundaryPolicy
     _sync_for_event: Callable[[_PendingStep, _Profile], None]
+    initial_transition_before_emit: bool | None = None
+    _initial_token_boundary: _TokenBoundaryPolicy | None = None
+    _initial_sync_for_event: Callable[[_PendingStep, _Profile], None] | None = None
 
     @property
     def async_eval(self) -> bool:
@@ -261,15 +278,46 @@ class _SyncPolicy:
     def profile_key(self) -> str:
         return self.token_boundary.profile_key
 
-    def enqueue(self, pending: _PendingStep, *, profile: _Profile) -> None:
-        pending.async_eval = self.async_eval
-        self.token_boundary.enqueue(pending, profile=profile)
+    def enqueue(self, pending: _PendingStep, *, step_index: int, profile: _Profile) -> None:
+        token_boundary = self._token_boundary_for_step(step_index)
+        pending.async_eval = token_boundary.async_eval
+        token_boundary.enqueue(pending, profile=profile)
 
-    def sync_token_for_host(self, pending: _PendingStep, *, profile: _Profile) -> None:
-        self.token_boundary.wait_for_host(pending, profile=profile)
+    def sync_token_for_host(
+        self,
+        pending: _PendingStep,
+        *,
+        step_index: int,
+        profile: _Profile,
+    ) -> None:
+        self._token_boundary_for_step(step_index).wait_for_host(pending, profile=profile)
 
-    def sync_for_event(self, pending: _PendingStep, *, profile: _Profile) -> None:
-        self._sync_for_event(pending, profile)
+    def sync_for_event(
+        self,
+        pending: _PendingStep,
+        *,
+        step_index: int,
+        profile: _Profile,
+    ) -> None:
+        self._sync_for_event_for_step(step_index)(pending, profile)
+
+    def transition_before_emit_for_step(self, step_index: int) -> bool:
+        if step_index == 0 and self._initial_token_boundary is not None:
+            return bool(self.initial_transition_before_emit)
+        return self.transition_before_emit
+
+    def _token_boundary_for_step(self, step_index: int) -> _TokenBoundaryPolicy:
+        if step_index == 0 and self._initial_token_boundary is not None:
+            return self._initial_token_boundary
+        return self.token_boundary
+
+    def _sync_for_event_for_step(
+        self,
+        step_index: int,
+    ) -> Callable[[_PendingStep, _Profile], None]:
+        if step_index == 0 and self._initial_token_boundary is not None:
+            return self._initial_sync_for_event or _sync_pending_noop
+        return self._sync_for_event
 
 
 class _RecentTokenHistory:
@@ -308,6 +356,7 @@ class _TensorStep:
         self,
         logits: mx.array,
         *,
+        step_index: int,
         history: _RecentTokenHistory,
         sync: _SyncPolicy,
         profile: _Profile = None,
@@ -318,13 +367,14 @@ class _TensorStep:
             history=history,
             profile=profile,
         )
-        sync.enqueue(pending, profile=profile)
+        sync.enqueue(pending, step_index=step_index, profile=profile)
         return pending
 
     def advance(
         self,
         token: mx.array,
         *,
+        step_index: int,
         history: _RecentTokenHistory,
         sync: _SyncPolicy,
         profile: _Profile = None,
@@ -340,6 +390,7 @@ class _TensorStep:
             profile.setdefault("forward_wall_samples", []).append(dt)
         pending = self.seed(
             next_logits[:, -1, :],
+            step_index=step_index,
             history=history,
             sync=sync,
             profile=profile,
@@ -364,6 +415,19 @@ class DecodePlan:
     capabilities: DecodeCapabilities
 
 
+@dataclass(frozen=True, slots=True)
+class _SelectiveSplitAsyncConfig:
+    min_prompt_tokens: int
+    min_generation_tokens: int
+    min_token_work: int
+
+
+@dataclass(frozen=True, slots=True)
+class _SelectiveSplitAsyncDecision:
+    enabled: bool
+    reason: str
+
+
 def _uses_greedy_sampling(options: GenerateOptions) -> bool:
     return bool(
         options.temperature == 0
@@ -380,21 +444,38 @@ def _selective_split_async_eligible(
     prompt_token_count: int,
     quantized_kv_start: int,
     kv_bits: int | None,
-) -> bool:
-    if not compile_decode or not _uses_greedy_sampling(options):
-        return False
-    if options.logprobs or options.top_logprobs > 0:
-        return False
-    if options.repetition_penalty != 1.0:
-        return False
-    if options.stop_sequences:
-        return False
-    if quantized_kv_start > 0 and kv_bits is not None:
-        return False
-    return (
-        prompt_token_count >= _SELECTIVE_SPLIT_ASYNC_LONG_PROMPT_TOKENS
-        and options.max_tokens >= _SELECTIVE_SPLIT_ASYNC_LONG_GENERATION_TOKENS
+) -> _SelectiveSplitAsyncDecision:
+    config = _SelectiveSplitAsyncConfig(
+        min_prompt_tokens=_env_int(
+            "MLXS_DECODE_SELECTIVE_SPLIT_ASYNC_MIN_PROMPT_TOKENS",
+            _SELECTIVE_SPLIT_ASYNC_LONG_PROMPT_TOKENS,
+        ),
+        min_generation_tokens=_env_int(
+            "MLXS_DECODE_SELECTIVE_SPLIT_ASYNC_MIN_GENERATION_TOKENS",
+            _SELECTIVE_SPLIT_ASYNC_LONG_GENERATION_TOKENS,
+        ),
+        min_token_work=_env_int(
+            "MLXS_DECODE_SELECTIVE_SPLIT_ASYNC_MIN_TOKEN_WORK",
+            _SELECTIVE_SPLIT_ASYNC_MIN_TOKEN_WORK,
+        ),
     )
+    if not compile_decode or not _uses_greedy_sampling(options):
+        return _SelectiveSplitAsyncDecision(False, "compile_or_sampling_excluded")
+    if options.logprobs or options.top_logprobs > 0:
+        return _SelectiveSplitAsyncDecision(False, "logprob_payload_enabled")
+    if options.repetition_penalty != 1.0:
+        return _SelectiveSplitAsyncDecision(False, "logits_processors_enabled")
+    if options.stop_sequences:
+        return _SelectiveSplitAsyncDecision(False, "stop_sequences_enabled")
+    if quantized_kv_start > 0 and kv_bits is not None:
+        return _SelectiveSplitAsyncDecision(False, "delayed_quantized_kv")
+    if prompt_token_count < config.min_prompt_tokens:
+        return _SelectiveSplitAsyncDecision(False, "short_prompt")
+    if options.max_tokens < config.min_generation_tokens:
+        return _SelectiveSplitAsyncDecision(False, "short_generation")
+    if prompt_token_count * options.max_tokens < config.min_token_work:
+        return _SelectiveSplitAsyncDecision(False, "insufficient_token_work")
+    return _SelectiveSplitAsyncDecision(True, "long_regime")
 
 
 def prepare_decode_plan(
@@ -560,41 +641,69 @@ def _make_sync_policy(
     quantized_kv_start: int,
     kv_bits: int | None,
 ) -> _SyncPolicy:
-    if async_eval and (
-        not selective_split_async
-        or _selective_split_async_eligible(
-            options=options,
-            compile_decode=compile_decode,
-            prompt_token_count=prompt_token_count,
-            quantized_kv_start=quantized_kv_start,
-            kv_bits=kv_bits,
-        )
-    ):
+    def make_split_async_policy(*, selection: str, reason: str) -> _SyncPolicy:
         return _SyncPolicy(
             transition_before_emit=True,
             token_boundary=_TokenBoundaryPolicy(
                 name="split_async",
-                selection=(
-                    "global_async"
-                    if not selective_split_async
-                    else "selective_split_async"
-                ),
+                selection=selection,
+                reason=f"first_token_sync:{reason}",
                 async_eval=True,
                 profile_key="mx_async_eval_s",
                 _enqueue_pending=_enqueue_pending_async,
                 _wait_for_host=_sync_pending_token_for_host,
             ),
             _sync_for_event=_sync_pending_for_event,
+            initial_transition_before_emit=False,
+            _initial_token_boundary=_TokenBoundaryPolicy(
+                name="single_sync",
+                selection=selection,
+                reason=f"first_token_sync:{reason}",
+                async_eval=False,
+                profile_key="mx_eval_s",
+                _enqueue_pending=_enqueue_pending_sync,
+                _wait_for_host=_sync_pending_noop,
+            ),
+            _initial_sync_for_event=_sync_pending_noop,
+        )
+
+    if async_eval and not selective_split_async:
+        return make_split_async_policy(
+            selection="global_async",
+            reason="global_async",
+        )
+    if async_eval and selective_split_async:
+        decision = _selective_split_async_eligible(
+            options=options,
+            compile_decode=compile_decode,
+            prompt_token_count=prompt_token_count,
+            quantized_kv_start=quantized_kv_start,
+            kv_bits=kv_bits,
+        )
+        if decision.enabled:
+            return make_split_async_policy(
+                selection="selective_split_async",
+                reason=decision.reason,
+            )
+        return _SyncPolicy(
+            transition_before_emit=False,
+            token_boundary=_TokenBoundaryPolicy(
+                name="single_sync",
+                selection="selective_fallback_sync",
+                reason=decision.reason,
+                async_eval=False,
+                profile_key="mx_eval_s",
+                _enqueue_pending=_enqueue_pending_sync,
+                _wait_for_host=_sync_pending_noop,
+            ),
+            _sync_for_event=_sync_pending_noop,
         )
     return _SyncPolicy(
         transition_before_emit=False,
         token_boundary=_TokenBoundaryPolicy(
             name="single_sync",
-            selection=(
-                "default_sync"
-                if not selective_split_async
-                else "selective_fallback_sync"
-            ),
+            selection="default_sync" if not selective_split_async else "selective_fallback_sync",
+            reason="async_disabled",
             async_eval=False,
             profile_key="mx_eval_s",
             _enqueue_pending=_enqueue_pending_sync,
@@ -775,7 +884,9 @@ def _transition_decode_step(
     kv_group_size: int,
     profile: _Profile = None,
 ) -> tuple[_PendingStep | None, int]:
-    if finish_reason is not None or before_emit != plan.sync.transition_before_emit:
+    if finish_reason is not None or before_emit != plan.sync.transition_before_emit_for_step(
+        step_index
+    ):
         return None, step_index
 
     t_mut0 = time.perf_counter()
@@ -792,6 +903,7 @@ def _transition_decode_step(
 
     pending = plan.tensor_step.advance(
         current.token,
+        step_index=step_index + 1,
         history=history,
         sync=plan.sync,
         profile=profile,
@@ -815,6 +927,7 @@ def decode_loop(
     history = _RecentTokenHistory(plan.tensor_step.token_history_size)
     pending = plan.tensor_step.seed(
         first_logits,
+        step_index=0,
         history=history,
         sync=plan.sync,
         profile=profile,
@@ -825,7 +938,7 @@ def decode_loop(
         generation_tokens = step_index + 1
         current = pending
 
-        plan.sync.sync_token_for_host(current, profile=profile)
+        plan.sync.sync_token_for_host(current, step_index=step_index, profile=profile)
 
         t_mat0 = time.perf_counter()
         token_id, text, finish_reason = _materialize_state(current, plan=plan)
@@ -847,7 +960,7 @@ def decode_loop(
             profile=profile,
         )
 
-        plan.sync.sync_for_event(current, profile=profile)
+        plan.sync.sync_for_event(current, step_index=step_index, profile=profile)
 
         t_evt0 = time.perf_counter()
         event = _build_event(

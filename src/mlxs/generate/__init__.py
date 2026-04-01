@@ -115,6 +115,7 @@ def generate(
             "sync_wait_event_s": 0.0,
             "token_boundary_mode": plan.sync.token_boundary.name,
             "token_boundary_selection": plan.sync.token_boundary.selection,
+            "token_boundary_reason": plan.sync.token_boundary.reason,
             "mx_async_eval_s": 0.0,
             "mx_eval_s": 0.0,
             "materialize_s": 0.0,
