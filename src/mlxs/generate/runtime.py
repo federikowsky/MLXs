@@ -24,6 +24,8 @@ from mlxs.generate.logits import LogitsProcessor
 from mlxs.generate.profile import DecodeProfiler
 from mlxs.generate.stop import StopCondition
 
+_HEAVY_UNCOMPILED_SYNC_PROMPT_TOKENS = 1024
+
 
 @dataclass(slots=True)
 class DecodePlan:
@@ -132,18 +134,26 @@ class AsyncBoundaryDriver:
             self.profiler.sync_eval_s.append(elapsed)
 
 
-def make_boundary_driver(profiler: DecodeProfiler | None) -> BoundaryDriver:
+def make_boundary_driver(
+    *,
+    plan: DecodePlan,
+    forward_runtime: ForwardRuntime,
+    profiler: DecodeProfiler | None,
+) -> BoundaryDriver:
     """Select the internal decode boundary driver.
 
-    Async is the default steady-state boundary when MLX exposes ``async_eval``.
-    The internal env gate remains available to force sync for diagnostics.
+    Async stays the default steady-state boundary. The only automatic fallback
+    is for heavier uncompiled decode, where Milestone 4 showed a local
+    regression while compiled and smaller-prompt regimes remained healthy.
+    The env gate still provides explicit force-sync / force-async control.
     """
-    if _async_boundary_enabled():
+    mode, reason = _resolve_boundary_policy(plan=plan, forward_runtime=forward_runtime)
+    if mode == "async":
         if profiler is not None:
-            profiler.set_boundary_mode("async")
+            profiler.set_boundary_mode("async", reason=reason)
         return AsyncBoundaryDriver(profiler)
     if profiler is not None:
-        profiler.set_boundary_mode("sync")
+        profiler.set_boundary_mode("sync", reason=reason)
     return SyncBoundaryDriver(profiler)
 
 
@@ -311,8 +321,24 @@ def _env_truthy(name: str) -> bool:
     return value.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
-def _async_boundary_enabled() -> bool:
+def _resolve_boundary_policy(
+    *,
+    plan: DecodePlan,
+    forward_runtime: ForwardRuntime,
+) -> tuple[str, str]:
+    if not hasattr(mx, "async_eval"):
+        return "sync", "no_async_eval"
+
     env_value = os.getenv("MLXS_DECODE_ASYNC_EVAL")
-    if env_value is None:
-        return hasattr(mx, "async_eval")
-    return _env_truthy("MLXS_DECODE_ASYNC_EVAL") and hasattr(mx, "async_eval")
+    if env_value is not None:
+        if _env_truthy("MLXS_DECODE_ASYNC_EVAL"):
+            return "async", "forced_async_env"
+        return "sync", "forced_sync_env"
+
+    if (
+        not forward_runtime.compiled_active
+        and plan.prompt_token_count >= _HEAVY_UNCOMPILED_SYNC_PROMPT_TOKENS
+    ):
+        return "sync", "auto_sync_heavy_uncompiled"
+
+    return "async", "auto_async_default"

@@ -55,6 +55,7 @@ class DecodeProfiler:
     emit_logprobs: bool
     top_logprobs: int
     boundary_mode: str = "sync"
+    boundary_policy_reason: str = "n/a"
     compile_build_attempted: bool = False
     compiled_forward_available: bool = False
     compile_build_wall_s: float = 0.0
@@ -130,8 +131,9 @@ class DecodeProfiler:
         if compiled_active:
             self.cache_replacement_while_compiled_active += 1
 
-    def set_boundary_mode(self, mode: str) -> None:
+    def set_boundary_mode(self, mode: str, *, reason: str) -> None:
         self.boundary_mode = mode
+        self.boundary_policy_reason = reason
 
     def record_async_enqueue(self, *, duration_s: float, seed: bool) -> None:
         if seed:
@@ -174,7 +176,8 @@ class DecodeProfiler:
             )
 
         logger.warning(
-            "%s boundary_mode=%s compile_decode_requested=%s compile_build_attempted=%s "
+            "%s boundary_mode=%s boundary_policy_reason=%s "
+            "compile_decode_requested=%s compile_build_attempted=%s "
             "compiled_forward_available=%s compile_build_wall=%s "
             "compile_fallback_to_uncompiled=%s compile_fallback_reason=%s "
             "compile_rebind_attempts=%d compile_rebind_successes=%d "
@@ -185,6 +188,7 @@ class DecodeProfiler:
             "cache_replacement_events=%d cache_replacement_while_compiled_active=%d",
             _PROFILE_PREFIX,
             self.boundary_mode,
+            self.boundary_policy_reason,
             self.compile_decode_requested,
             self.compile_build_attempted,
             self.compiled_forward_available,

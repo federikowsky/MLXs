@@ -307,4 +307,75 @@ def test_sync_boundary_can_be_forced_via_env(monkeypatch: Any) -> None:
     )
 
     assert [event.token_id for event in events] == [7, 0]
-    assert calls == [("sync", 1), ("sync", 1)]
+    assert calls[-2:] == [("sync", 1), ("sync", 1)]
+
+
+def test_heavy_uncompiled_boundary_defaults_to_sync(monkeypatch: Any) -> None:
+    calls: list[tuple[str, int]] = []
+    real_async_eval = cast(Any, mx.async_eval)
+    real_eval = mx.eval
+
+    def _wrapped_async_eval(*args: Any) -> Any:
+        calls.append(("async", len(args)))
+        return real_async_eval(*args)
+
+    def _wrapped_eval(*args: Any) -> Any:
+        calls.append(("sync", len(args)))
+        return real_eval(*args)
+
+    monkeypatch.delenv("MLXS_DECODE_ASYNC_EVAL", raising=False)
+    monkeypatch.setattr("mlxs.generate.runtime.mx.async_eval", _wrapped_async_eval)
+    monkeypatch.setattr("mlxs.generate.runtime.mx.eval", _wrapped_eval)
+
+    model = _RuntimeModel([6, 7, 0])
+    tokenizer = _RuntimeTokenizer({0: "<eos>", 6: "six", 7: "seven"}, eos_token_id=0)
+
+    events = list(
+        generate(
+            model,
+            tokenizer,
+            [1] * 2048,
+            GenerateOptions(max_tokens=2, temperature=0.0),
+        )
+    )
+
+    assert [event.token_id for event in events] == [7, 0]
+    assert calls[-2:] == [("sync", 1), ("sync", 1)]
+
+
+def test_heavy_compiled_boundary_stays_async(monkeypatch: Any) -> None:
+    calls: list[tuple[str, int]] = []
+    real_async_eval = cast(Any, mx.async_eval)
+    real_eval = mx.eval
+
+    def _wrapped_async_eval(*args: Any) -> Any:
+        calls.append(("async", len(args)))
+        return real_async_eval(*args)
+
+    def _wrapped_eval(*args: Any) -> Any:
+        calls.append(("sync", len(args)))
+        return real_eval(*args)
+
+    def _fake_make_compiled_step(model: _RuntimeModel, cache: list[_RuntimeCache]) -> Any:
+        return lambda input_ids: model(input_ids, cache=cache)
+
+    monkeypatch.delenv("MLXS_DECODE_ASYNC_EVAL", raising=False)
+    monkeypatch.setattr("mlxs.generate.runtime.mx.async_eval", _wrapped_async_eval)
+    monkeypatch.setattr("mlxs.generate.runtime.mx.eval", _wrapped_eval)
+    monkeypatch.setattr("mlxs.generate.compile.make_compiled_step", _fake_make_compiled_step)
+
+    model = _RuntimeModel([6, 7, 0])
+    tokenizer = _RuntimeTokenizer({0: "<eos>", 6: "six", 7: "seven"}, eos_token_id=0)
+
+    events = list(
+        generate(
+            model,
+            tokenizer,
+            [1] * 2048,
+            GenerateOptions(max_tokens=2, temperature=0.0),
+            compile_decode=True,
+        )
+    )
+
+    assert [event.token_id for event in events] == [7, 0]
+    assert calls[-3:] == [("sync", 1), ("async", 1), ("sync", 1)]
