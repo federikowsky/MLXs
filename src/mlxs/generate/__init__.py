@@ -14,9 +14,12 @@ import mlx.nn as nn
 from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
 from mlxs.cache.kv import KVCache
+from mlxs.generate.compile import ForwardRuntime
 from mlxs.generate.decode import decode_loop
 from mlxs.generate.logits import make_logits_processors
 from mlxs.generate.prefill import chunked_prefill
+from mlxs.generate.profile import create_decode_profiler
+from mlxs.generate.runtime import DecodePlan
 from mlxs.generate.sampling import make_sampler
 from mlxs.generate.stop import StopCondition
 from mlxs.protocols.generate import TokenizerProtocol
@@ -122,18 +125,31 @@ def generate(
         stop_sequences=options.stop_sequences,
         extra_eos_token_ids=options.extra_eos_token_ids,
     )
+    profiler = create_decode_profiler(
+        compile_decode_requested=compile_decode,
+        emit_logprobs=options.logprobs,
+        top_logprobs=options.top_logprobs,
+    )
+    plan = DecodePlan(
+        sampler=sampler,
+        stop=stop,
+        decoder=tokenizer.decode,
+        logits_processors=tuple(logits_processors),
+        prompt_token_count=prompt_token_count,
+        emit_logprobs=options.logprobs,
+        top_logprobs=options.top_logprobs,
+        clear_cache_interval=clear_cache_interval,
+        quantized_kv_start=quantized_kv_start,
+        kv_bits=kv_bits,
+        kv_group_size=kv_group_size,
+    )
 
-    # Build compiled forward if requested (§6.8, AC12 fallback-safe).
-    # Cache must be closed over — mx.compile cannot take KVCache as an argument.
-    forward_fn = None
-    if compile_decode:
-        try:
-            from mlxs.generate.compile import make_compiled_step
-
-            forward_fn = make_compiled_step(model, cache)
-        except Exception:
-            # Fallback to uncompiled (AC12)
-            forward_fn = None
+    forward_runtime = ForwardRuntime.create(
+        model,
+        cache,
+        compile_decode=compile_decode,
+        profiler=profiler,
+    )
 
     # Prefill: process prompt through model
     first_logits = chunked_prefill(
@@ -147,20 +163,10 @@ def generate(
     def _gen() -> Iterator[TokenEvent]:
         try:
             yield from decode_loop(
-                model,
-                cache,
                 first_logits,
-                sampler=sampler,
-                stop=stop,
-                decoder=tokenizer.decode,
-                logits_processors=logits_processors or None,
-                options=options,
-                prompt_token_count=prompt_token_count,
-                forward_fn=forward_fn,
-                clear_cache_interval=clear_cache_interval,
-                quantized_kv_start=quantized_kv_start,
-                kv_bits=kv_bits,
-                kv_group_size=kv_group_size,
+                plan=plan,
+                forward_runtime=forward_runtime,
+                profiler=profiler,
             )
         finally:
             if final_cache_out is not None:
