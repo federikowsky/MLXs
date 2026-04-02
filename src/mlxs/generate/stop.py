@@ -1,7 +1,7 @@
-"""Stop condition checking for generation (FR9, FR10).
+"""Stop matching for generation.
 
-Handles EOS tokens, max_tokens, stop sequences, and extra EOS token ids.
-Designed for zero-allocation checking in the decode loop.
+The decode engine keeps stop handling host-side to preserve exact text-buffer
+semantics while keeping the device step minimal.
 """
 
 from __future__ import annotations
@@ -9,17 +9,14 @@ from __future__ import annotations
 from mlxs._types import FinishReason
 
 
-class StopCondition:
-    """Evaluates whether generation should stop.
-
-    Constructed once before the decode loop. Check methods are designed
-    to be called per-token with minimal overhead (O2).
-    """
+class StopMatcher:
+    """Evaluate EOS, max-token, and stop-sequence termination."""
 
     __slots__ = (
         "_eos_token_id",
         "_extra_eos_ids",
         "_generated",
+        "_max_stop_sequence_len",
         "_max_tokens",
         "_stop_sequences",
         "_text_buffer",
@@ -35,44 +32,39 @@ class StopCondition:
     ) -> None:
         self._eos_token_id = eos_token_id
         self._extra_eos_ids = frozenset(extra_eos_token_ids)
-        self._stop_sequences = stop_sequences
-        self._max_tokens = max_tokens
         self._generated = 0
+        self._max_tokens = max_tokens
+        self._stop_sequences = stop_sequences
         self._text_buffer = ""
+        self._max_stop_sequence_len = max((len(seq) for seq in stop_sequences), default=0)
 
     def check(self, token_id: int, text: str) -> FinishReason | None:
-        """Check if generation should stop after this token.
-
-        Args:
-            token_id: The generated token id.
-            text: The decoded text for this token.
-
-        Returns:
-            FinishReason if generation should stop, None otherwise.
-        """
         self._generated += 1
 
-        # EOS token check
         if token_id == self._eos_token_id or token_id in self._extra_eos_ids:
             return FinishReason.STOP
 
-        # Max tokens check
         if self._generated >= self._max_tokens:
             return FinishReason.LENGTH
 
-        # Stop sequence check
-        if self._stop_sequences:
-            self._text_buffer += text
-            # Only keep enough buffer for the longest stop sequence
-            max_len = max(len(s) for s in self._stop_sequences)
-            if len(self._text_buffer) > max_len * 2:
-                self._text_buffer = self._text_buffer[-max_len:]
-            for seq in self._stop_sequences:
-                if seq in self._text_buffer:
-                    return FinishReason.STOP
+        if not self._stop_sequences:
+            return None
 
+        self._text_buffer += text
+        if (
+            self._max_stop_sequence_len > 0
+            and len(self._text_buffer) > self._max_stop_sequence_len * 2
+        ):
+            self._text_buffer = self._text_buffer[-self._max_stop_sequence_len :]
+        for seq in self._stop_sequences:
+            if seq in self._text_buffer:
+                return FinishReason.STOP
         return None
 
     @property
     def generated_count(self) -> int:
         return self._generated
+
+
+# Preserve the existing import surface for legacy call sites and tests.
+StopCondition = StopMatcher

@@ -1,4 +1,4 @@
-"""Focused tests for the staged decode runtime."""
+"""Focused tests for the decode engine runtime."""
 
 from __future__ import annotations
 
@@ -73,6 +73,37 @@ class _RuntimeModel:
         return [_RuntimeCache()]
 
 
+class _PenaltyModel:
+    def __init__(self) -> None:
+        self.call_index = 0
+
+    def __call__(
+        self,
+        input_ids: mx.array,
+        *,
+        cache: list[_RuntimeCache] | None = None,
+        mask: Any = None,
+        input_embeddings: mx.array | None = None,
+    ) -> mx.array:
+        del input_ids, mask, input_embeddings
+        assert cache is not None
+        cache[0].calls += 1
+        idx = self.call_index
+        self.call_index += 1
+
+        row = mx.full((8,), -10.0, dtype=mx.float32)
+        if idx in {0, 1}:
+            row[7] = 6.0
+            row[5] = 5.0
+        else:
+            row[0] = 6.0
+            row[5] = 4.0
+        return mx.broadcast_to(row, (1, 1, 8))
+
+    def make_cache(self) -> list[_RuntimeCache]:
+        return [_RuntimeCache()]
+
+
 def test_final_token_stop_does_not_dispatch_next_step() -> None:
     model = _RuntimeModel([0, 7])
     tokenizer = _RuntimeTokenizer({0: "<eos>", 7: "seven"}, eos_token_id=0)
@@ -117,10 +148,29 @@ def test_stop_sequence_match_across_token_boundaries() -> None:
 
 
 def test_compile_on_off_parity_for_tokens_finish_and_logprobs(monkeypatch: Any) -> None:
-    def _fake_make_compiled_step(model: _RuntimeModel, cache: list[_RuntimeCache]) -> Any:
-        return lambda input_ids: model(input_ids, cache=cache)
+    def _fake_make_compiled_step_backend(
+        model: _RuntimeModel,
+        cache: list[_RuntimeCache],
+        recipe: Any,
+    ) -> Any:
+        def _step(input_ids: mx.array) -> tuple[mx.array, mx.array, mx.array, mx.array]:
+            logits = model(input_ids, cache=cache)[:, -1, :]
+            token = mx.argmax(logits, axis=-1)
+            lse = mx.logsumexp(logits, keepdims=True)
+            token_logprob = mx.take_along_axis(logits, token[:, None], axis=-1).reshape(-1)
+            token_logprob = token_logprob - lse.reshape(-1)
+            row = logits[0]
+            top_ids = mx.argpartition(row, kth=-recipe.top_logprobs)[-recipe.top_logprobs :]
+            top_ids = top_ids[mx.argsort(row[top_ids])[::-1]]
+            top_logprobs = row[top_ids] - lse[0, 0]
+            return token, token_logprob, top_ids, top_logprobs
 
-    monkeypatch.setattr("mlxs.generate.compile.make_compiled_step", _fake_make_compiled_step)
+        return _step
+
+    monkeypatch.setattr(
+        "mlxs.generate.compile.make_compiled_step_backend",
+        _fake_make_compiled_step_backend,
+    )
 
     options = GenerateOptions(
         max_tokens=3,
@@ -173,6 +223,36 @@ def test_compile_on_off_parity_for_tokens_finish_and_logprobs(monkeypatch: Any) 
         )
 
 
+def test_repetition_penalty_parity_with_device_history() -> None:
+    tokenizer = _RuntimeTokenizer({0: "<eos>", 5: "five", 7: "seven"}, eos_token_id=0)
+    options = GenerateOptions(
+        max_tokens=3,
+        temperature=0.0,
+        repetition_penalty=2.0,
+    )
+
+    def _run(*, compile_decode: bool) -> list[Any]:
+        model = _PenaltyModel()
+        return list(
+            generate(
+                model,
+                tokenizer,
+                [1],
+                options,
+                compile_decode=compile_decode,
+            )
+        )
+
+    events_off = _run(compile_decode=False)
+    events_on = _run(compile_decode=True)
+
+    assert [event.token_id for event in events_off] == [7, 5, 0]
+    assert [event.token_id for event in events_off] == [event.token_id for event in events_on]
+    assert [event.finish_reason for event in events_off] == [
+        event.finish_reason for event in events_on
+    ]
+
+
 def test_cache_replacement_occurs_before_next_dispatch(monkeypatch: Any) -> None:
     def _fake_convert_to_quantized(
         cache: list[_RuntimeCache],
@@ -204,13 +284,15 @@ def test_cache_replacement_occurs_before_next_dispatch(monkeypatch: Any) -> None
 
 
 def test_compile_rebind_failure_falls_back_to_uncompiled(monkeypatch: Any) -> None:
+    from mlxs.generate.compile import make_compiled_step_backend as real_builder
+
     build_count = 0
 
-    def _fake_make_compiled_step(model: _RuntimeModel, cache: list[_RuntimeCache]) -> Any:
+    def _counting_builder(model: _RuntimeModel, cache: list[_RuntimeCache], recipe: Any) -> Any:
         nonlocal build_count
         build_count += 1
         if build_count == 1:
-            return lambda input_ids: model(input_ids, cache=cache)
+            return real_builder(model, cache, recipe)
         raise RuntimeError("rebind exploded")
 
     def _fake_convert_to_quantized(
@@ -222,7 +304,7 @@ def test_compile_rebind_failure_falls_back_to_uncompiled(monkeypatch: Any) -> No
         del kv_bits, kv_group_size
         return [_RuntimeCache("quantized") for _ in cache]
 
-    monkeypatch.setattr("mlxs.generate.compile.make_compiled_step", _fake_make_compiled_step)
+    monkeypatch.setattr("mlxs.generate.compile.make_compiled_step_backend", _counting_builder)
     monkeypatch.setattr("mlxs.cache.convert_to_quantized", _fake_convert_to_quantized)
 
     model = _RuntimeModel([7, 5, 0])
@@ -356,13 +438,25 @@ def test_heavy_compiled_boundary_stays_async(monkeypatch: Any) -> None:
         calls.append(("sync", len(args)))
         return real_eval(*args)
 
-    def _fake_make_compiled_step(model: _RuntimeModel, cache: list[_RuntimeCache]) -> Any:
-        return lambda input_ids: model(input_ids, cache=cache)
+    def _fake_make_compiled_step_backend(
+        model: _RuntimeModel,
+        cache: list[_RuntimeCache],
+        recipe: Any,
+    ) -> Any:
+        del recipe
+
+        def _step(input_ids: mx.array) -> mx.array:
+            return mx.argmax(model(input_ids, cache=cache)[:, -1, :], axis=-1)
+
+        return _step
 
     monkeypatch.delenv("MLXS_DECODE_ASYNC_EVAL", raising=False)
     monkeypatch.setattr("mlxs.generate.runtime.mx.async_eval", _wrapped_async_eval)
     monkeypatch.setattr("mlxs.generate.runtime.mx.eval", _wrapped_eval)
-    monkeypatch.setattr("mlxs.generate.compile.make_compiled_step", _fake_make_compiled_step)
+    monkeypatch.setattr(
+        "mlxs.generate.compile.make_compiled_step_backend",
+        _fake_make_compiled_step_backend,
+    )
 
     model = _RuntimeModel([6, 7, 0])
     tokenizer = _RuntimeTokenizer({0: "<eos>", 6: "six", 7: "seven"}, eos_token_id=0)

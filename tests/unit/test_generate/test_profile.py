@@ -1,4 +1,4 @@
-"""Tests for env-gated decode profiling diagnostics."""
+"""Tests for env-gated decode diagnostics."""
 
 from __future__ import annotations
 
@@ -127,10 +127,11 @@ def test_decode_profile_logs_compile_fallback(
     monkeypatch.setenv("MLXS_DECODE_PROFILE", "1")
     caplog.set_level(logging.WARNING, logger="mlxs.generate.profile")
 
-    def _boom(model: Any, cache: list[Any]) -> Any:
+    def _boom(model: Any, cache: list[Any], recipe: Any) -> Any:
+        del model, cache, recipe
         raise RuntimeError("compile exploded")
 
-    monkeypatch.setattr("mlxs.generate.compile.make_compiled_step", _boom)
+    monkeypatch.setattr("mlxs.generate.compile.make_compiled_step_backend", _boom)
 
     model = _ProfileModel([7, 5, 0])
     tokenizer = _ProfileTokenizer()
@@ -158,8 +159,17 @@ def test_decode_profile_logs_cache_replacement_under_compiled_forward(
     monkeypatch.setenv("MLXS_DECODE_PROFILE", "1")
     caplog.set_level(logging.WARNING, logger="mlxs.generate.profile")
 
-    def _fake_make_compiled_step(model: _ProfileModel, cache: list[_ProfileCache]) -> Any:
-        return lambda input_ids: model(input_ids, cache=cache)
+    def _fake_make_compiled_step_backend(
+        model: _ProfileModel,
+        cache: list[_ProfileCache],
+        recipe: Any,
+    ) -> Any:
+        del recipe
+
+        def _step(input_ids: mx.array) -> mx.array:
+            return mx.argmax(model(input_ids, cache=cache)[:, -1, :], axis=-1)
+
+        return _step
 
     def _fake_convert_to_quantized(
         cache: list[_ProfileCache],
@@ -170,7 +180,10 @@ def test_decode_profile_logs_cache_replacement_under_compiled_forward(
         del kv_bits, kv_group_size
         return [_ProfileCache() for _ in cache]
 
-    monkeypatch.setattr("mlxs.generate.compile.make_compiled_step", _fake_make_compiled_step)
+    monkeypatch.setattr(
+        "mlxs.generate.compile.make_compiled_step_backend",
+        _fake_make_compiled_step_backend,
+    )
     monkeypatch.setattr("mlxs.cache.convert_to_quantized", _fake_convert_to_quantized)
 
     model = _ProfileModel([7, 5, 6, 7])
@@ -206,11 +219,20 @@ def test_decode_profile_logs_compile_rebind_fallback_to_uncompiled(
     caplog.set_level(logging.WARNING, logger="mlxs.generate.profile")
     build_count = 0
 
-    def _fake_make_compiled_step(model: _ProfileModel, cache: list[_ProfileCache]) -> Any:
+    def _fake_make_compiled_step_backend(
+        model: _ProfileModel,
+        cache: list[_ProfileCache],
+        recipe: Any,
+    ) -> Any:
         nonlocal build_count
         build_count += 1
         if build_count == 1:
-            return lambda input_ids: model(input_ids, cache=cache)
+            del recipe
+
+            def _step(input_ids: mx.array) -> mx.array:
+                return mx.argmax(model(input_ids, cache=cache)[:, -1, :], axis=-1)
+
+            return _step
         raise RuntimeError("rebind exploded")
 
     def _fake_convert_to_quantized(
@@ -222,7 +244,10 @@ def test_decode_profile_logs_compile_rebind_fallback_to_uncompiled(
         del kv_bits, kv_group_size
         return [_ProfileCache() for _ in cache]
 
-    monkeypatch.setattr("mlxs.generate.compile.make_compiled_step", _fake_make_compiled_step)
+    monkeypatch.setattr(
+        "mlxs.generate.compile.make_compiled_step_backend",
+        _fake_make_compiled_step_backend,
+    )
     monkeypatch.setattr("mlxs.cache.convert_to_quantized", _fake_convert_to_quantized)
 
     model = _ProfileModel([7, 5, 0])

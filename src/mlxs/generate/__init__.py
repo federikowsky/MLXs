@@ -1,8 +1,4 @@
-"""Generate module — single-request inference (§6.1, §9, FR3).
-
-Public API: ``generate()`` — takes model, tokenizer, prompt, options
-and yields a stream of TokenEvent objects.
-"""
+"""Single-request generation entrypoint."""
 
 from __future__ import annotations
 
@@ -14,14 +10,12 @@ import mlx.nn as nn
 from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
 from mlxs.cache.kv import KVCache
-from mlxs.generate.compile import ForwardRuntime
+from mlxs.generate.compile import StepBackend
 from mlxs.generate.decode import decode_loop
-from mlxs.generate.logits import make_logits_processors
-from mlxs.generate.prefill import chunked_prefill
+from mlxs.generate.logits import create_step_recipe
 from mlxs.generate.profile import create_decode_profiler
-from mlxs.generate.runtime import DecodePlan
-from mlxs.generate.sampling import make_sampler
-from mlxs.generate.stop import StopCondition
+from mlxs.generate.runtime import EnginePlan
+from mlxs.generate.stop import StopMatcher
 from mlxs.protocols.generate import TokenizerProtocol
 
 
@@ -41,48 +35,14 @@ def generate(
     kv_group_size: int = 64,
     final_cache_out: list[list[KVCache]] | None = None,
 ) -> Iterator[TokenEvent]:
-    """Generate tokens from a prompt (§6.1, FR3).
-
-    This is the single-request generation entry point. It:
-    1. Encodes the prompt (if string).
-    2. Creates or reuses KV cache.
-    3. Runs chunked prefill.
-    4. Runs the decode loop, yielding TokenEvent per token.
-
-    All abstractions (sampler, stop condition, logits processors) are
-    resolved once here — not per token (O2).
-
-    Args:
-        model: Model satisfying ModelProtocol.
-        tokenizer: Tokenizer satisfying TokenizerProtocol.
-        prompt: Input text or pre-tokenized token ids.
-        options: Generation parameters. Defaults to GenerateOptions().
-        cache: Optional pre-populated KV cache (e.g. from prompt cache).
-        input_embeddings: Pre-computed embeddings ``(T, D)`` from
-            multimodal preprocessing (§7.4). When provided, used instead
-            of ``embed_tokens`` during prefill.
-        prefill_step_size: Max tokens per prefill chunk.
-        compile_decode: If True, compile the model forward for decode (§6.8).
-            Falls back to uncompiled on failure (AC12).
-        clear_cache_interval: Steps between mx.clear_cache() calls.
-            0 = disabled. Default: 256.
-        final_cache_out: If provided, the list is appended with the KV cache
-            after generation completes (for prompt_cache.put). Plan-chat-cli.
-
-    Yields:
-        TokenEvent for each generated token. The last event has
-        finish_reason set.
-    """
+    """Generate tokens from a prompt."""
     if options is None:
         options = GenerateOptions()
 
-    # Encode prompt
     prompt_tokens = tokenizer.encode(prompt) if isinstance(prompt, str) else list(prompt)
-
     if not prompt_tokens:
         raise ValueError("Prompt must not be empty")
 
-    # Validate input_embeddings shape (§7.4)
     if input_embeddings is not None:
         if input_embeddings.ndim != 2:
             raise InvalidPromptError(
@@ -97,29 +57,22 @@ def generate(
     prompt_array = mx.array(prompt_tokens)
     prompt_token_count = len(prompt_tokens)
 
-    # Set seed if specified
     if options.seed is not None:
         mx.random.seed(options.seed)
 
-    # Create KV cache if not provided
     if cache is None:
         cache = model.make_cache()
 
-    # Build sampler (resolved once, not per token — O2)
-    sampler = make_sampler(
+    recipe = create_step_recipe(
         temperature=options.temperature,
         top_p=options.top_p,
         top_k=options.top_k,
         min_p=options.min_p,
-    )
-
-    # Build logits processors (resolved once)
-    logits_processors = make_logits_processors(
         repetition_penalty=options.repetition_penalty,
+        emit_logprobs=options.logprobs,
+        top_logprobs=options.top_logprobs,
     )
-
-    # Build stop condition (resolved once)
-    stop = StopCondition(
+    stop = StopMatcher(
         eos_token_id=tokenizer.eos_token_id,
         max_tokens=options.max_tokens,
         stop_sequences=options.stop_sequences,
@@ -130,42 +83,33 @@ def generate(
         emit_logprobs=options.logprobs,
         top_logprobs=options.top_logprobs,
     )
-    plan = DecodePlan(
-        sampler=sampler,
+    plan = EnginePlan(
+        recipe=recipe,
         stop=stop,
         decoder=tokenizer.decode,
-        logits_processors=tuple(logits_processors),
         prompt_token_count=prompt_token_count,
-        emit_logprobs=options.logprobs,
-        top_logprobs=options.top_logprobs,
         clear_cache_interval=clear_cache_interval,
         quantized_kv_start=quantized_kv_start,
         kv_bits=kv_bits,
         kv_group_size=kv_group_size,
     )
-
-    forward_runtime = ForwardRuntime.create(
+    step_backend = StepBackend.create(
         model,
         cache,
+        recipe=recipe,
         compile_decode=compile_decode,
         profiler=profiler,
-    )
-
-    # Prefill: process prompt through model
-    first_logits = chunked_prefill(
-        model,
-        prompt_array,
-        cache,
-        prefill_step_size=prefill_step_size,
-        input_embeddings=input_embeddings,
     )
 
     def _gen() -> Iterator[TokenEvent]:
         try:
             yield from decode_loop(
-                first_logits,
+                prompt_array,
                 plan=plan,
-                forward_runtime=forward_runtime,
+                cache=cache,
+                step_backend=step_backend,
+                input_embeddings=input_embeddings,
+                prefill_step_size=prefill_step_size,
                 profiler=profiler,
             )
         finally:
@@ -176,3 +120,4 @@ def generate(
 
 
 __all__ = ["generate"]
+
