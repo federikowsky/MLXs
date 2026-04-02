@@ -245,7 +245,7 @@ def test_compile_rebind_failure_falls_back_to_uncompiled(monkeypatch: Any) -> No
     assert model.cache_markers == ["orig", "orig", "quantized"]
 
 
-def test_async_boundary_enqueues_before_wait(monkeypatch: Any) -> None:
+def test_async_boundary_keeps_seed_sync_and_enqueues_steady_state(monkeypatch: Any) -> None:
     calls: list[tuple[str, int]] = []
     real_async_eval = cast(Any, mx.async_eval)
     real_eval = mx.eval
@@ -258,7 +258,6 @@ def test_async_boundary_enqueues_before_wait(monkeypatch: Any) -> None:
         calls.append(("sync", len(args)))
         return real_eval(*args)
 
-    monkeypatch.setenv("MLXS_DECODE_ASYNC_EVAL", "1")
     monkeypatch.setattr("mlxs.generate.runtime.mx.async_eval", _wrapped_async_eval)
     monkeypatch.setattr("mlxs.generate.runtime.mx.eval", _wrapped_eval)
 
@@ -270,9 +269,42 @@ def test_async_boundary_enqueues_before_wait(monkeypatch: Any) -> None:
             model,
             tokenizer,
             [1],
-            GenerateOptions(max_tokens=1, temperature=0.0),
+            GenerateOptions(max_tokens=2, temperature=0.0),
         )
     )
 
-    assert [event.token_id for event in events] == [7]
-    assert calls[:2] == [("async", 1), ("sync", 1)]
+    assert [event.token_id for event in events] == [7, 0]
+    assert calls == [("sync", 1), ("async", 1), ("sync", 1)]
+
+
+def test_sync_boundary_can_be_forced_via_env(monkeypatch: Any) -> None:
+    calls: list[tuple[str, int]] = []
+    real_async_eval = cast(Any, mx.async_eval)
+    real_eval = mx.eval
+
+    def _wrapped_async_eval(*args: Any) -> Any:
+        calls.append(("async", len(args)))
+        return real_async_eval(*args)
+
+    def _wrapped_eval(*args: Any) -> Any:
+        calls.append(("sync", len(args)))
+        return real_eval(*args)
+
+    monkeypatch.setenv("MLXS_DECODE_ASYNC_EVAL", "0")
+    monkeypatch.setattr("mlxs.generate.runtime.mx.async_eval", _wrapped_async_eval)
+    monkeypatch.setattr("mlxs.generate.runtime.mx.eval", _wrapped_eval)
+
+    model = _RuntimeModel([7, 0])
+    tokenizer = _RuntimeTokenizer({0: "<eos>", 7: "seven"}, eos_token_id=0)
+
+    events = list(
+        generate(
+            model,
+            tokenizer,
+            [1],
+            GenerateOptions(max_tokens=2, temperature=0.0),
+        )
+    )
+
+    assert [event.token_id for event in events] == [7, 0]
+    assert calls == [("sync", 1), ("sync", 1)]

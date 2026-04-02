@@ -109,6 +109,8 @@ class AsyncBoundaryDriver:
     profiler: DecodeProfiler | None = None
 
     def dispatch(self, step: TensorStep, *, seed: bool = False) -> None:
+        if seed:
+            return
         t0 = time.perf_counter() if self.profiler is not None else 0.0
         async_eval = cast(Callable[..., Any], mx.async_eval)
         async_eval(*step.sync_payload())
@@ -133,9 +135,10 @@ class AsyncBoundaryDriver:
 def make_boundary_driver(profiler: DecodeProfiler | None) -> BoundaryDriver:
     """Select the internal decode boundary driver.
 
-    Async is internal-only for now and env-gated so the public API stays fixed.
+    Async is the default steady-state boundary when MLX exposes ``async_eval``.
+    The internal env gate remains available to force sync for diagnostics.
     """
-    if _env_truthy("MLXS_DECODE_ASYNC_EVAL") and hasattr(mx, "async_eval"):
+    if _async_boundary_enabled():
         if profiler is not None:
             profiler.set_boundary_mode("async")
         return AsyncBoundaryDriver(profiler)
@@ -306,3 +309,10 @@ def _env_truthy(name: str) -> bool:
     if value is None:
         return False
     return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _async_boundary_enabled() -> bool:
+    env_value = os.getenv("MLXS_DECODE_ASYNC_EVAL")
+    if env_value is None:
+        return hasattr(mx, "async_eval")
+    return _env_truthy("MLXS_DECODE_ASYNC_EVAL") and hasattr(mx, "async_eval")
