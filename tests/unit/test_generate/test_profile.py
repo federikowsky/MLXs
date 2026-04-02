@@ -99,7 +99,25 @@ def test_decode_profile_logs_async_boundary_when_enabled(
 
     joined = "\n".join(record.message for record in caplog.records)
     assert "boundary_mode=async" in joined
+    assert "boundary_policy_reason=forced_async_env" in joined
     assert "async_enqueue=" in joined
+
+
+def test_decode_profile_logs_auto_sync_heavy_uncompiled_boundary(
+    monkeypatch: Any,
+    caplog: Any,
+) -> None:
+    monkeypatch.setenv("MLXS_DECODE_PROFILE", "1")
+    monkeypatch.delenv("MLXS_DECODE_ASYNC_EVAL", raising=False)
+    caplog.set_level(logging.WARNING, logger="mlxs.generate.profile")
+
+    model = _ProfileModel([7, 5, 0])
+    tokenizer = _ProfileTokenizer()
+    list(generate(model, tokenizer, [1] * 2048, GenerateOptions(max_tokens=2, temperature=0.0)))
+
+    joined = "\n".join(record.message for record in caplog.records)
+    assert "boundary_mode=sync" in joined
+    assert "boundary_policy_reason=auto_sync_heavy_uncompiled" in joined
 
 
 def test_decode_profile_logs_compile_fallback(

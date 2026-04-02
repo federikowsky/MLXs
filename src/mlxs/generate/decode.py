@@ -28,7 +28,11 @@ def decode_loop(
     profiler: DecodeProfiler | None = None,
 ) -> Iterator[TokenEvent]:
     """Run the staged decode loop, yielding one ``TokenEvent`` per token."""
-    boundary = make_boundary_driver(profiler)
+    boundary = make_boundary_driver(
+        plan=plan,
+        forward_runtime=forward_runtime,
+        profiler=profiler,
+    )
     tokens_generated: list[int] = []
     current_step = build_seed_step(first_logits, plan=plan, profiler=profiler)
     boundary.dispatch(current_step, seed=True)
