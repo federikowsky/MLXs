@@ -7,6 +7,8 @@ intermediate buffers.
 
 from __future__ import annotations
 
+from typing import cast
+
 import mlx.core as mx
 import mlx.nn as nn
 
@@ -20,6 +22,7 @@ def chunked_prefill(
     *,
     prefill_step_size: int = 2048,
     input_embeddings: mx.array | None = None,
+    stream: mx.Stream | None = None,
 ) -> mx.array:
     """Run prefill on a prompt, processing in chunks.
 
@@ -37,9 +40,34 @@ def chunked_prefill(
     Returns:
         Logits array of shape (1, vocab_size) from the last prompt token.
     """
+    if stream is None:
+        return _chunked_prefill_impl(
+            model,
+            prompt_tokens,
+            cache,
+            prefill_step_size=prefill_step_size,
+            input_embeddings=input_embeddings,
+        )
+    with mx.stream(stream):
+        return _chunked_prefill_impl(
+            model,
+            prompt_tokens,
+            cache,
+            prefill_step_size=prefill_step_size,
+            input_embeddings=input_embeddings,
+        )
+
+
+def _chunked_prefill_impl(
+    model: nn.Module,
+    prompt_tokens: mx.array,
+    cache: list[KVCache],
+    *,
+    prefill_step_size: int,
+    input_embeddings: mx.array | None,
+) -> mx.array:
     total = len(prompt_tokens)
 
-    # Process all tokens except the last one in chunks
     offset = 0
     while total - offset > 1:
         remaining = (total - offset) - 1
@@ -54,11 +82,10 @@ def chunked_prefill(
         offset += n
         mx.clear_cache()
 
-    # Process the last token and return its logits
     last_token = prompt_tokens[offset:]
     if input_embeddings is not None:
         last_embed = input_embeddings[offset:]
         logits = model(last_token[None], cache=cache, input_embeddings=last_embed[None])
     else:
         logits = model(last_token[None], cache=cache)
-    return logits[:, -1, :]
+    return cast(mx.array, logits[:, -1, :])

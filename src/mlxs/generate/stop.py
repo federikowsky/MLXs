@@ -20,6 +20,7 @@ class StopCondition:
         "_eos_token_id",
         "_extra_eos_ids",
         "_generated",
+        "_max_stop_sequence_length",
         "_max_tokens",
         "_stop_sequences",
         "_text_buffer",
@@ -37,6 +38,7 @@ class StopCondition:
         self._extra_eos_ids = frozenset(extra_eos_token_ids)
         self._stop_sequences = stop_sequences
         self._max_tokens = max_tokens
+        self._max_stop_sequence_length = max((len(s) for s in stop_sequences), default=0)
         self._generated = 0
         self._text_buffer = ""
 
@@ -64,14 +66,17 @@ class StopCondition:
         if self._stop_sequences:
             self._text_buffer += text
             # Only keep enough buffer for the longest stop sequence
-            max_len = max(len(s) for s in self._stop_sequences)
-            if len(self._text_buffer) > max_len * 2:
-                self._text_buffer = self._text_buffer[-max_len:]
+            if len(self._text_buffer) > self._max_stop_sequence_length * 2:
+                self._text_buffer = self._text_buffer[-self._max_stop_sequence_length :]
             for seq in self._stop_sequences:
                 if seq in self._text_buffer:
                     return FinishReason.STOP
 
         return None
+
+    def will_stop_at_next(self, generated_count: int) -> bool:
+        """Return True when the next token must stop due to length."""
+        return generated_count + 1 >= self._max_tokens
 
     @property
     def generated_count(self) -> int:

@@ -139,6 +139,12 @@ class TestStopStateful:
         stop.check(1, "a" * 10000)
         assert stop._text_buffer == ""
 
+    def test_will_stop_at_next_only_predicts_length(self) -> None:
+        stop = StopCondition(eos_token_id=None, max_tokens=3)
+        assert stop.will_stop_at_next(0) is False
+        assert stop.will_stop_at_next(1) is False
+        assert stop.will_stop_at_next(2) is True
+
 
 # -- Corner cases --------------------------------------------------------------
 

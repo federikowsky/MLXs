@@ -69,7 +69,7 @@ def test_generate_with_none_embeddings() -> None:
     """generate() with input_embeddings=None works normally."""
     model = _FakeModel()
     tokenizer = _FakeTokenizer()
-    opts = GenerateOptions(max_tokens=1)
+    opts = GenerateOptions(max_tokens=1, temperature=0.0)
     events = list(generate(model, tokenizer, [1, 2, 3], opts))
     assert len(events) == 1
     # Prefill should NOT have received embeddings
@@ -80,7 +80,7 @@ def test_generate_with_embeddings() -> None:
     """generate() with valid input_embeddings passes them to the model."""
     model = _FakeModel()
     tokenizer = _FakeTokenizer()
-    opts = GenerateOptions(max_tokens=1)
+    opts = GenerateOptions(max_tokens=1, temperature=0.0)
     prompt = [1, 2, 3]
     embeds = mx.zeros((3, 8))  # (T, D) matching prompt length
     events = list(generate(model, tokenizer, prompt, opts, input_embeddings=embeds))
@@ -93,7 +93,7 @@ def test_generate_embeddings_wrong_ndim() -> None:
     """generate() raises InvalidPromptError for wrong ndim."""
     model = _FakeModel()
     tokenizer = _FakeTokenizer()
-    opts = GenerateOptions(max_tokens=1)
+    opts = GenerateOptions(max_tokens=1, temperature=0.0)
     embeds = mx.zeros((1, 3, 8))  # 3-D, should be 2-D
     with pytest.raises(InvalidPromptError, match="2-D"):
         list(generate(model, tokenizer, [1, 2, 3], opts, input_embeddings=embeds))
@@ -103,7 +103,7 @@ def test_generate_embeddings_length_mismatch() -> None:
     """generate() raises InvalidPromptError when embed length != prompt length."""
     model = _FakeModel()
     tokenizer = _FakeTokenizer()
-    opts = GenerateOptions(max_tokens=1)
+    opts = GenerateOptions(max_tokens=1, temperature=0.0)
     embeds = mx.zeros((5, 8))  # Length 5 != prompt length 3
     with pytest.raises(InvalidPromptError, match="length"):
         list(generate(model, tokenizer, [1, 2, 3], opts, input_embeddings=embeds))
