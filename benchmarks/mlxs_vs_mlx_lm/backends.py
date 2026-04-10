@@ -404,7 +404,9 @@ def _run_mlx_lm_class_a_trial(
     clear_cache_interval: int,
 ) -> GenerationMetrics:
     mx = _require_mx()
-    import mlx_lm.generate as mlx_lm_generate
+    import importlib
+
+    mlx_lm_generate = importlib.import_module("mlx_lm.generate")
     from mlx_lm.models import cache as mlx_lm_cache
 
     if session.error or session.model is None:
