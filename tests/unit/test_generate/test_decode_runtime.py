@@ -301,6 +301,93 @@ def test_compile_decode_supports_compile_mode_and_calls_warmup(monkeypatch: Any)
     assert explicit_calls == [(2, 256)]
 
 
+def test_eager_first_greedy_slice_dispatch_is_guarded_by_narrow_contract(
+    monkeypatch: Any,
+) -> None:
+    tokenizer = _RuntimeTokenizer({0: "<eos>", 7: "seven"}, eos_token_id=0)
+    calls: list[str] = []
+
+    class _StubRuntime:
+        def decode(self, first_logits: Any, max_tokens: int) -> Any:
+            del first_logits
+            calls.append(f"slice:{max_tokens}")
+            yield 7, None
+            yield 0, None
+
+    def _build_runtime_stub(
+        model_arg: Any,
+        cache_arg: list[KVCache],
+        stream_arg: Any,
+        clear_cache_interval_arg: int,
+    ) -> _StubRuntime:
+        del model_arg, stream_arg
+        assert clear_cache_interval_arg == 256
+        assert all(type(layer_cache) is KVCache for layer_cache in cache_arg)
+        calls.append("build")
+        return _StubRuntime()
+
+    def _reference_stub(
+        model_arg: Any,
+        cache_arg: Any,
+        recipe_arg: Any,
+        stream_arg: Any,
+        first_logits_arg: Any,
+        max_tokens_arg: int,
+        clear_cache_interval_arg: int,
+        *,
+        quantized_kv_start: int,
+        kv_bits: int | None,
+        kv_group_size: int,
+    ) -> Any:
+        del (
+            model_arg,
+            cache_arg,
+            recipe_arg,
+            stream_arg,
+            first_logits_arg,
+            max_tokens_arg,
+            clear_cache_interval_arg,
+            quantized_kv_start,
+            kv_bits,
+            kv_group_size,
+        )
+        calls.append("reference")
+        yield 7, mx.zeros((8,), dtype=mx.float32)
+        yield 0, mx.zeros((8,), dtype=mx.float32)
+
+    monkeypatch.setattr(
+        "mlxs.generate.eager_greedy_mod.build_eager_greedy_runtime",
+        _build_runtime_stub,
+    )
+    monkeypatch.setattr("mlxs.generate._decode_steps", _reference_stub)
+
+    eligible_events = list(
+        generate(
+            _CompileRuntimeModel([7, 0]),
+            tokenizer,
+            [1],
+            GenerateOptions(max_tokens=2, temperature=0.0),
+        )
+    )
+
+    assert [event.token_id for event in eligible_events] == [7, 0]
+    assert calls == ["build", "slice:2"]
+
+    calls.clear()
+
+    ineligible_events = list(
+        generate(
+            _CompileRuntimeModel([7, 0]),
+            tokenizer,
+            [1],
+            GenerateOptions(max_tokens=2, temperature=0.0, logprobs=True),
+        )
+    )
+
+    assert [event.token_id for event in ineligible_events] == [7, 0]
+    assert calls == ["reference"]
+
+
 def test_build_step_fn_compile_mode_on_uses_compiled_closure(monkeypatch: Any) -> None:
     model = _RuntimeModel([7, 0])
     cache = model.make_cache()

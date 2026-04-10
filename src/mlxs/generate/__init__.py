@@ -8,6 +8,7 @@ from collections.abc import Generator, Iterator
 import mlx.core as mx
 import mlx.nn as nn
 
+import mlxs.generate.eager_greedy as eager_greedy_mod
 from mlxs._errors import InvalidPromptError
 from mlxs._types import GenerateOptions, TokenEvent
 from mlxs.cache.kv import KVCache
@@ -138,6 +139,13 @@ def generate(
         emit_logprobs=options.logprobs,
         top_logprobs=options.top_logprobs,
     )
+    eager_greedy_slice_active = eager_greedy_mod.supports_eager_greedy_slice(
+        compile_decode=compile_decode,
+        options=options,
+        cache=cache,
+        quantized_kv_start=quantized_kv_start,
+        kv_bits=kv_bits,
+    ) and not (profiler is not None and profiler.detail_mode)
 
     prompt_array = mx.array(prompt_tokens)
     prefill_t0 = time.perf_counter()
@@ -166,6 +174,13 @@ def generate(
             clear_cache_interval,
             final_cache_holder=compiled_final_cache_holder,
         )
+    elif eager_greedy_slice_active:
+        core_iter = eager_greedy_mod.build_eager_greedy_runtime(
+            model,
+            cache,
+            _generation_stream,
+            clear_cache_interval,
+        ).decode(first_logits, options.max_tokens)
     elif profiler is not None and profiler.detail_mode:
         core_iter = _decode_steps_detail(
             model,

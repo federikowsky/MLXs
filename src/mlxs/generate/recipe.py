@@ -20,8 +20,6 @@ ExplicitState = tuple[mx.array, ...]
 ExplicitOffsets = tuple[mx.array, ...]
 ExplicitStateStepFn = Callable[..., tuple[mx.array, ...]]
 ExplicitStateSnapshotFn = Callable[[ExplicitOffsets], ExplicitState]
-ResidentGreedyAdvanceFn = Callable[[], mx.array]
-ResidentGreedySnapshotFn = Callable[[], ExplicitState]
 
 
 class CompileMode(StrEnum):
@@ -43,15 +41,6 @@ class Recipe:
     emit_top_logprobs: bool
     top_logprobs_k: int
     compile_mode: CompileMode
-
-
-@dataclass(frozen=True, slots=True)
-class ResidentGreedySession:
-    """Minimal resident-state greedy session for Gate 1 / Gate 2 probing."""
-
-    advance: ResidentGreedyAdvanceFn
-    snapshot_state: ResidentGreedySnapshotFn
-
 
 class _ExplicitStateLayerCache:
     """Experimental P2 cache adapter backed only by explicit array state."""
@@ -277,68 +266,6 @@ def build_explicit_state_step_fn(
 
     return cast(ExplicitStateStepFn, compiled_step), snapshot_state
 
-
-def build_resident_greedy_session(
-    model: nn.Module,
-    recipe: Recipe,
-    stream: mx.Stream,
-    *,
-    num_layers: int,
-    initial_state: ExplicitState,
-    seed_token: mx.array,
-) -> ResidentGreedySession:
-    """Build a resident greedy session with no host-threaded live continuation state."""
-    if recipe.compile_mode is not CompileMode.ON:
-        raise NotImplementedError("Resident-state session requires compile mode on")
-    if recipe.has_processors or recipe.logits_processors:
-        raise NotImplementedError("Resident-state session currently supports greedy decode only")
-    if recipe.emit_logprobs or recipe.emit_top_logprobs:
-        raise NotImplementedError("Resident-state session currently does not emit logprobs")
-
-    k_arrays, v_arrays, offsets = unflatten_explicit_state(initial_state, num_layers=num_layers)
-    tracked_state: list[mx.array] = [
-        *k_arrays,
-        *v_arrays,
-        *offsets,
-        seed_token.astype(mx.int32).reshape(1),
-    ]
-    offset_base = num_layers * 2
-    token_index = num_layers * 3
-
-    @partial(mx.compile, inputs=tracked_state, outputs=tracked_state)
-    def advance() -> mx.array:
-        caches = [
-            _ExplicitStateLayerCache(
-                tracked_state[idx],
-                tracked_state[num_layers + idx],
-                tracked_state[offset_base + idx],
-            )
-            for idx in range(num_layers)
-        ]
-        prev_token = tracked_state[token_index]
-        with mx.stream(stream):
-            logits = cast(mx.array, model(prev_token[None], cache=caches))
-            logits = logits[:, -1, :]
-            logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-            next_token = recipe.sampler(logprobs).astype(mx.int32).reshape(1)
-
-        for idx, cache in enumerate(caches):
-            tracked_state[idx] = cache.keys_array
-            tracked_state[num_layers + idx] = cache.values_array
-            tracked_state[offset_base + idx] = cache.offset_array
-        tracked_state[token_index] = next_token
-        return next_token
-
-    def snapshot_state() -> ExplicitState:
-        return flatten_explicit_state(
-            tuple(tracked_state[idx] for idx in range(num_layers)),
-            tuple(tracked_state[num_layers + idx] for idx in range(num_layers)),
-            tuple(tracked_state[offset_base + idx] for idx in range(num_layers)),
-        )
-
-    return ResidentGreedySession(advance=advance, snapshot_state=snapshot_state)
-
-
 __all__ = [
     "CompileMode",
     "ExplicitOffsets",
@@ -347,14 +274,10 @@ __all__ = [
     "ExplicitStateStepFn",
     "LogitsStepFn",
     "Recipe",
-    "ResidentGreedyAdvanceFn",
-    "ResidentGreedySession",
-    "ResidentGreedySnapshotFn",
     "SamplerFn",
     "StepFn",
     "build_explicit_state_step_fn",
     "build_logits_step_fn",
-    "build_resident_greedy_session",
     "build_step_fn",
     "flatten_explicit_state",
     "unflatten_explicit_state",

@@ -20,7 +20,6 @@ from mlxs.generate.recipe import (
     Recipe,
     build_explicit_state_step_fn,
     build_logits_step_fn,
-    build_resident_greedy_session,
     build_step_fn,
     flatten_explicit_state,
     unflatten_explicit_state,
@@ -743,75 +742,6 @@ def run_explicit_state_decode_experiment(
         num_layers=len(prefill_cache),
     )
 
-
-def run_resident_state_decode_experiment(
-    model: nn.Module,
-    prompt_tokens: list[int],
-    recipe: Recipe,
-    *,
-    max_tokens: int,
-    eos_token_id: int | None = None,
-    prefill_step_size: int = 2048,
-    input_embeddings: mx.array | None = None,
-    stream: mx.Stream = _generation_stream,
-) -> tuple[list[int], list[KVCache]]:
-    """Run the resident-state greedy slice outside the shipping generator."""
-    if recipe.compile_mode is not CompileMode.ON:
-        raise NotImplementedError("Resident-state decode requires compile mode on")
-    if recipe.has_processors or recipe.logits_processors:
-        raise NotImplementedError("Resident-state decode currently supports greedy only")
-    if recipe.emit_logprobs or recipe.emit_top_logprobs:
-        raise NotImplementedError("Resident-state decode currently does not emit logprobs")
-    if not prompt_tokens:
-        raise ValueError("Resident-state decode requires a non-empty prompt")
-    if max_tokens <= 0:
-        return [], []
-
-    prefill_cache = model.make_cache()
-    prompt_array = mx.array(prompt_tokens)
-    first_logits = chunked_prefill(
-        model,
-        prompt_array,
-        prefill_cache,
-        prefill_step_size=prefill_step_size,
-        input_embeddings=input_embeddings,
-        stream=stream,
-    )
-
-    with mx.stream(stream):
-        seed_logprobs = first_logits - mx.logsumexp(first_logits, axis=-1, keepdims=True)
-        seed_token = recipe.sampler(seed_logprobs).astype(mx.int32).reshape(1)
-    mx.eval(seed_token)
-
-    token_ids = [int(seed_token.item())]
-    if max_tokens == 1 or (eos_token_id is not None and token_ids[-1] == eos_token_id):
-        return token_ids, prefill_cache
-
-    total_slots = len(prompt_tokens) + max_tokens
-    state_arrays = export_kvcache_to_explicit_state(prefill_cache, total_slots=total_slots)
-    session = build_resident_greedy_session(
-        model,
-        recipe,
-        stream,
-        num_layers=len(prefill_cache),
-        initial_state=state_arrays,
-        seed_token=seed_token,
-    )
-
-    for _ in range(1, max_tokens):
-        next_token = session.advance()
-        mx.eval(next_token)
-        token_id = int(next_token.item())
-        token_ids.append(token_id)
-        if eos_token_id is not None and token_id == eos_token_id:
-            break
-
-    return token_ids, materialize_explicit_state_to_kvcache(
-        session.snapshot_state(),
-        num_layers=len(prefill_cache),
-    )
-
-
 __all__ = [
     "_decode_steps",
     "_decode_steps_detail",
@@ -821,5 +751,4 @@ __all__ = [
     "materialize_explicit_state_to_kvcache",
     "require_async_eval",
     "run_explicit_state_decode_experiment",
-    "run_resident_state_decode_experiment",
 ]
