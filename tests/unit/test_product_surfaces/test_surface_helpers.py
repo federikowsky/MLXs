@@ -1,0 +1,126 @@
+"""Pure helper tests for Layer 4 product surfaces."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from types import SimpleNamespace
+
+import pytest
+
+from mlxs._errors import CapacityExceededError, RequestTimeoutError
+from mlxs._types import FinishReason, GenerateOptions, TokenEvent
+from mlxs.config.schema import AppConfig
+from mlxs.observability.metrics import InMemoryMetrics, NoOpMetrics
+from mlxs.product_surfaces.compat_openai import _execute_generation, build_openai_options
+from mlxs.product_surfaces.lifecycle import RuntimeLifecycle
+from mlxs.product_surfaces.observability import metrics_snapshot
+from mlxs.server.queue import RequestQueue
+
+
+def _runtime(
+    *,
+    metrics_enabled: bool = False,
+    request_timeout: float = 300.0,
+    max_queue_size: int = 64,
+    generate_fn=None,
+):
+    config = AppConfig()
+    config = config.model_copy(
+        update={
+            "server": config.server.model_copy(
+                update={
+                    "request_timeout": request_timeout,
+                    "max_queue_size": max_queue_size,
+                }
+            ),
+            "observability": config.observability.model_copy(
+                update={"metrics_enabled": metrics_enabled}
+            ),
+        }
+    )
+
+    def _default_generate(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return iter([TokenEvent(token_id=1, text="ok", finish_reason=FinishReason.STOP)])
+
+    return SimpleNamespace(
+        config=config,
+        model=SimpleNamespace(),
+        tokenizer=SimpleNamespace(),
+        metrics=InMemoryMetrics() if metrics_enabled else NoOpMetrics(),
+        generate_fn=generate_fn or _default_generate,
+        request_queue=RequestQueue(max_size=max_queue_size, timeout=request_timeout),
+    )
+
+
+def test_build_openai_options_layer4_mapping() -> None:
+    options = build_openai_options(
+        {
+            "max_tokens": 32,
+            "temperature": 0.5,
+            "top_p": 0.9,
+            "stop": ["END"],
+            "stream": True,
+            "logprobs": True,
+            "top_logprobs": 3,
+        }
+    )
+    assert isinstance(options, GenerateOptions)
+    assert options.max_tokens == 32
+    assert options.stop_sequences == ("END",)
+    assert options.logprobs is True
+    assert options.top_logprobs == 3
+
+
+def test_lifecycle_payload_reports_layer4_status() -> None:
+    lifecycle = RuntimeLifecycle(model_id="m")
+    lifecycle.mark_ready()
+    payload = lifecycle.health_payload(metrics_enabled=True, metrics_route_enabled=True)
+    assert payload["status"] == "ok"
+    assert payload["ready"] is True
+    assert payload["model_id"] == "m"
+
+
+def test_metrics_snapshot_main_app_mode() -> None:
+    runtime = _runtime(metrics_enabled=True)
+    runtime.metrics.counter("http_requests_total", 1.0)
+    snapshot = metrics_snapshot(runtime)
+    assert snapshot["enabled"] is True
+    assert snapshot["route_mode"] == "main_app"
+    assert snapshot["metrics_port_compatibility_only"] is True
+    assert snapshot["backend"] == "in_memory"
+
+
+def test_execute_generation_rejects_when_queue_full() -> None:
+    runtime = _runtime(max_queue_size=1)
+    asyncio.run(runtime.request_queue.put({"id": "existing"}))
+
+    with pytest.raises(CapacityExceededError, match="queue full"):
+        asyncio.run(
+            _execute_generation(
+                runtime,
+                "prompt",
+                GenerateOptions(),
+                input_embeddings=None,
+            )
+        )
+
+
+def test_execute_generation_times_out_at_layer4_surface() -> None:
+    def slow_generate(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        time.sleep(0.05)
+        return iter([TokenEvent(token_id=1, text="late", finish_reason=FinishReason.STOP)])
+
+    runtime = _runtime(request_timeout=0.01, generate_fn=slow_generate)
+
+    with pytest.raises(RequestTimeoutError, match="timed out"):
+        asyncio.run(
+            _execute_generation(
+                runtime,
+                "prompt",
+                GenerateOptions(),
+                input_embeddings=None,
+            )
+        )

@@ -1,6 +1,6 @@
-"""Serious runtime comparison: MLXs vs mlx-lm (no Adaptive KV).
+"""Phase 2 benchmark harness: canonical Class A plus exploratory scans.
 
-Defaults: MLXs ``compile_decode`` on, ``prefill_step`` 2048 (aligned with mlx-lm).
-
-Run: ``PYTHONPATH=. python -m benchmarks.mlxs_vs_mlx_lm --help``
+Default mode is the frozen canonical Class A sign-off case:
+MLXs eager primary path, mlx-lm fair baseline, and a separately labeled
+compiled MLXs secondary variant.
 """

@@ -1,11 +1,5 @@
-"""Health check endpoint (§6.7)."""
+"""Compatibility health route delegating to the Layer 4 HTTP surface."""
 
-from __future__ import annotations
+from mlxs.product_surfaces.http import health
 
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-
-
-async def health(request: Request) -> JSONResponse:
-    """GET /health — basic liveness check."""
-    return JSONResponse({"status": "ok"})
+__all__ = ["health"]

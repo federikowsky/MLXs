@@ -7,10 +7,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from mlxs.advanced_engines.prompt_cache import PromptCacheOrchestrator
 from mlxs._types import FinishReason, GenerateOptions, TokenEvent
 from mlxs.chat.session import ChatSession
 from mlxs.config.schema import AppConfig
-from mlxs.server.chat import _handle_plain_command, run_chat_loop
+from mlxs.product_surfaces.chat import _handle_plain_command, run_chat_loop
 
 
 def _make_deps(
@@ -46,6 +47,7 @@ def _make_deps(
         model=model,
         tokenizer=tokenizer,
         prompt_cache=prompt_cache,
+        prompt_cache_orchestrator=PromptCacheOrchestrator(prompt_cache),
         metrics=MagicMock(),
         generate_fn=generate_fn,
     )
@@ -71,7 +73,7 @@ class TestChatLoopHappyPath:
             except StopIteration:
                 return None
 
-        monkeypatch.setattr("mlxs.server.chat._read_line", fake_read_line)
+        monkeypatch.setattr("mlxs.product_surfaces.chat._read_line", fake_read_line)
         run_chat_loop(deps)
 
         deps.tokenizer.apply_chat_template.assert_called()
@@ -97,7 +99,7 @@ class TestChatLoopHappyPath:
                 return "hello"
             return None
 
-        monkeypatch.setattr("mlxs.server.chat._read_line", fake_read_line)
+        monkeypatch.setattr("mlxs.product_surfaces.chat._read_line", fake_read_line)
         run_chat_loop(deps)
 
         deps.generate_fn.assert_called()
@@ -126,7 +128,7 @@ class TestChatLoopPromptCacheHit:
             assert prompt is None
             return next(lines_iter)
 
-        monkeypatch.setattr("mlxs.server.chat._read_line", fake_read_line)
+        monkeypatch.setattr("mlxs.product_surfaces.chat._read_line", fake_read_line)
         run_chat_loop(deps)
 
         deps.prompt_cache.get.assert_called_with("default", (1, 2, 3, 4, 5))
@@ -147,7 +149,7 @@ class TestChatLoopKeyboardInterrupt:
             assert prompt is None
             raise KeyboardInterrupt()
 
-        monkeypatch.setattr("mlxs.server.chat._read_line", raise_interrupt)
+        monkeypatch.setattr("mlxs.product_surfaces.chat._read_line", raise_interrupt)
         run_chat_loop(deps)
 
         deps.prompt_cache.put.assert_not_called()
@@ -164,7 +166,7 @@ class TestChatLoopKeyboardInterrupt:
         def fail_read_line(prompt: str | None = None) -> str | None:
             raise AssertionError("_read_line should not be called for one-shot chat")
 
-        monkeypatch.setattr("mlxs.server.chat._read_line", fail_read_line)
+        monkeypatch.setattr("mlxs.product_surfaces.chat._read_line", fail_read_line)
         run_chat_loop(deps, initial_query="hello")
 
         deps.prompt_cache.get.assert_called_once_with("default", (1, 2, 3, 4))
@@ -182,7 +184,7 @@ class TestChatLoopKeyboardInterrupt:
             assert prompt is None
             return next(lines_iter)
 
-        monkeypatch.setattr("mlxs.server.chat._read_line", fake_read_line)
+        monkeypatch.setattr("mlxs.product_surfaces.chat._read_line", fake_read_line)
         run_chat_loop(deps)
 
         deps.generate_fn.assert_not_called()
@@ -204,7 +206,7 @@ class TestChatLoopKeyboardInterrupt:
             assert prompt is None
             return next(lines_iter)
 
-        monkeypatch.setattr("mlxs.server.chat._read_line", fake_read_line)
+        monkeypatch.setattr("mlxs.product_surfaces.chat._read_line", fake_read_line)
         run_chat_loop(deps)
 
         exported = export_path.read_text(encoding="utf-8")
@@ -229,7 +231,7 @@ class TestChatLoopKeyboardInterrupt:
         def fail_read_line(prompt: str | None = None) -> str | None:
             raise AssertionError("_read_line should not be called for one-shot chat")
 
-        monkeypatch.setattr("mlxs.server.chat._read_line", fail_read_line)
+        monkeypatch.setattr("mlxs.product_surfaces.chat._read_line", fail_read_line)
         run_chat_loop(deps, initial_query="hello")
 
         assert capsys.readouterr().out == "Hello world\n"
@@ -482,7 +484,7 @@ class TestPlainCommandActions:
             called.append(args[1].messages[-1].content)
             return "ok"
 
-        monkeypatch.setattr("mlxs.server.chat._run_turn", fake_run_turn)
+        monkeypatch.setattr("mlxs.product_surfaces.chat._run_turn", fake_run_turn)
 
         session, should_exit = _handle_plain_command(
             ("retry", ""),

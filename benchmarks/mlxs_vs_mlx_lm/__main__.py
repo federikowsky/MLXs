@@ -1,4 +1,4 @@
-"""CLI: ``python -m benchmarks.mlxs_vs_mlx_lm`` (set ``PYTHONPATH`` to repo root)."""
+"""CLI for canonical Class A and exploratory MLXs vs mlx-lm benchmarks."""
 
 from __future__ import annotations
 
@@ -8,7 +8,14 @@ import sys
 from pathlib import Path
 
 from benchmarks.mlxs_vs_mlx_lm.discovery import discover_local_models, parse_explicit_model_paths
-from benchmarks.mlxs_vs_mlx_lm.harness import HarnessConfig, resolve_models, run_harness
+from benchmarks.mlxs_vs_mlx_lm.harness import (
+    CANONICAL_MAX_TOKENS,
+    CANONICAL_MODE,
+    CANONICAL_PROMPT_TARGETS,
+    CANONICAL_TIMED_RUNS,
+    CANONICAL_WARMUP_RUNS,
+    EXPLORATORY_MODE,
+)
 from benchmarks.mlxs_vs_mlx_lm.json_util import sanitize_for_json
 
 
@@ -25,180 +32,219 @@ def _parse_backends(s: str) -> frozenset[str]:
     if not raw <= allowed:
         bad = raw - allowed
         raise argparse.ArgumentTypeError(f"unknown backend(s): {bad}")
-    if "both" in raw:
-        return frozenset({"mlxs", "mlx_lm"})
-    if not raw:
+    if "both" in raw or not raw:
         return frozenset({"mlxs", "mlx_lm"})
     return frozenset(raw)
 
 
+def _missing_runtime_dependencies(backends: frozenset[str]) -> list[str]:
+    required = ["transformers", "mlx"]
+    if "mlx_lm" in backends:
+        required.append("mlx_lm")
+
+    missing: list[str] = []
+    for module_name in required:
+        try:
+            __import__(module_name)
+        except ImportError:
+            missing.append(module_name)
+    return missing
+
+
 def _print_text_summary(payload: dict) -> None:
-    print("\n=== MLXs vs mlx-lm — summary (median over timed runs) ===\n")
+    benchmark = payload.get("benchmark", {})
+    print(f"\n=== {benchmark.get('benchmark_class', 'Benchmark')} summary ===\n")
+    print(f"mode: {benchmark.get('benchmark_mode', 'unknown')}")
+    print(f"warmup: {benchmark.get('warmup_rule', 'n/a')}")
+    print(f"aggregation: {benchmark.get('aggregation_rule', 'n/a')}\n")
+
     for row in payload.get("results", []):
         if row.get("skipped"):
             print(f"[skip] {row.get('model_hub_id')}: {row.get('skip_reason')}")
             continue
-        mid = row["model_hub_id"]
-        pt = row["prompt_target_tokens"]
-        print(f"\n{mid}  |  prompt≈{pt} tok  |  {row['model_type']}")
-        if "mlx_lm" in row:
-            sess = row["mlx_lm"].get("session", {})
-            le = sess.get("load_error")
-            if le:
-                print(f"  mlx_lm: load failed: {le}")
-            else:
-                s = row["mlx_lm"]["stats"]
-                d = s.get("decode_tok_per_s", {})
-                p = s.get("prefill_effective_tok_per_s", {})
-                t = s.get("ttft_s", {})
-                rss = s.get("rss_bytes_after_generate", {})
-                print(
-                    f"  mlx_lm: load {sess.get('load_wall_s', 0):.2f}s  "
-                    f"decode {d.get('median', float('nan')):.2f} tok/s  "
-                    f"prefill_eff {p.get('median', float('nan')):.2f} tok/s  "
-                    f"TTFT {t.get('median', float('nan')) * 1000:.2f} ms  "
-                    f"RSS~{rss.get('median', 0) / 1e6:.0f} MB"
-                )
-        if "mlxs" in row:
-            sess = row["mlxs"].get("session", {})
-            le = sess.get("load_error")
-            if le:
-                print(f"  mlxs: load failed: {le}")
-            else:
-                s = row["mlxs"]["stats"]
-                d = s.get("decode_tok_per_s", {})
-                p = s.get("prefill_effective_tok_per_s", {})
-                t = s.get("ttft_s", {})
-                rss = s.get("rss_bytes_after_generate", {})
-                print(
-                    f"  mlxs:   load {sess.get('load_wall_s', 0):.2f}s  "
-                    f"decode {d.get('median', float('nan')):.2f} tok/s  "
-                    f"prefill_eff {p.get('median', float('nan')):.2f} tok/s  "
-                    f"TTFT {t.get('median', float('nan')) * 1000:.2f} ms  "
-                    f"RSS~{rss.get('median', 0) / 1e6:.0f} MB"
-                )
+
+        model_id = row["model_hub_id"]
+        prompt_tokens = row["prompt_token_count"]
+        decode_target = row["decode_target_tokens"]
+        print(
+            f"{model_id}  |  prompt={prompt_tokens} tok  |  decode={decode_target} tok  "
+            f"|  {row['weight_format_class']}"
+        )
+        for key in ("mlx_lm", "mlxs_eager", "mlxs_compiled"):
+            if key not in row:
+                continue
+            session = row[key].get("session", {})
+            load_error = session.get("load_error")
+            if load_error:
+                print(f"  {key}: load failed: {load_error}")
+                continue
+            stats = row[key]["stats"]
+            decode = stats.get("decode_tok_per_s", {})
+            prefill = stats.get("prefill_tok_per_s", {})
+            ttft = stats.get("ttft_s", {})
+            e2e = stats.get("end_to_end_wall_s", {})
+            print(
+                f"  {key}: load {session.get('load_wall_s', 0):.2f}s  "
+                f"prefill {prefill.get('median', float('nan')):.2f} tok/s  "
+                f"decode {decode.get('median', float('nan')):.2f} tok/s  "
+                f"TTFT {ttft.get('median', float('nan')) * 1000:.2f} ms  "
+                f"e2e {e2e.get('median', float('nan')):.3f} s"
+            )
         if "comparison" in row:
-            for k, v in row["comparison"]["median_ratios"].items():
-                print(f"  ratio {k}: {v:.4f} (>1 means MLXs faster on that metric)")
+            for metric, ratio in row["comparison"]["median_ratios"].items():
+                print(f"  ratio {metric}: {ratio:.4f}")
+        print()
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description=(
-            "Professional greedy-decoding benchmark: MLXs vs mlx-lm on local HF caches. "
-            "Adaptive KV is not used. Default MLXs: compile_decode on, prefill_step 2048 "
-            "(matches mlx-lm generate_step default). Requires: pip install mlx-lm."
+            "Canonical Phase 2 Class A benchmark: MLXs eager primary path vs mlx-lm, "
+            "with compiled MLXs as a separately labeled secondary variant."
         ),
     )
-    p.add_argument(
+    parser.add_argument(
+        "--mode",
+        choices=(CANONICAL_MODE, EXPLORATORY_MODE),
+        default=CANONICAL_MODE,
+        help="`canonical` runs the frozen Phase 2 Class A sign-off case; `exploratory` keeps hub scanning.",
+    )
+    parser.add_argument(
         "--hub-root",
         type=Path,
         default=None,
-        help="Hugging Face hub cache root (default: ~/.cache/huggingface/hub).",
+        help="Hugging Face hub cache root (used only in exploratory mode).",
     )
-    p.add_argument(
+    parser.add_argument(
         "--model-paths",
         type=str,
         default="",
-        help="Comma-separated snapshot directories (overrides hub scan).",
+        help="Comma-separated snapshot directories (exploratory mode only).",
     )
-    p.add_argument(
+    parser.add_argument(
         "--max-models",
         type=int,
         default=6,
-        help="When scanning hub: keep N smallest checkpoints by safetensors size.",
+        help="When scanning the hub in exploratory mode: keep N smallest checkpoints by safetensors size.",
     )
-    p.add_argument(
+    parser.add_argument(
         "--list-models",
         action="store_true",
         help="Print discovered causal-LM snapshots and exit.",
     )
-    p.add_argument(
+    parser.add_argument(
         "--prompt-targets",
         type=_parse_targets,
-        default="256,2048",
-        help="Comma-separated target prompt lengths (tokenizer tokens).",
+        default=CANONICAL_PROMPT_TARGETS,
+        help="Comma-separated target prompt lengths (exploratory mode only).",
     )
-    p.add_argument("--max-tokens", type=int, default=128, help="Generated tokens per trial.")
-    p.add_argument(
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=CANONICAL_MAX_TOKENS,
+        help="Generated tokens per timed trial.",
+    )
+    parser.add_argument(
         "--warmup",
         type=int,
-        default=2,
+        default=CANONICAL_WARMUP_RUNS,
         help="Warmup generations per backend and prompt.",
     )
-    p.add_argument("--runs", type=int, default=7, help="Timed generations (statistics).")
-    p.add_argument("--seed", type=int, default=0, help="Base PRNG seed (incremented per run).")
-    p.add_argument(
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=CANONICAL_TIMED_RUNS,
+        help="Timed generations per backend and prompt.",
+    )
+    parser.add_argument("--seed", type=int, default=0, help="Base PRNG seed (incremented per run).")
+    parser.add_argument(
         "--prefill-step",
         type=int,
         default=2048,
-        help="MLXs chunked prefill step (default 2048, same as mlx-lm generate_step).",
+        help="Chunked prefill step size for both canonical paths.",
     )
-    p.add_argument(
+    parser.add_argument(
         "--no-compile-decode",
         action="store_true",
-        help="Disable MLXs mx.compile on decode forward (default: compile enabled).",
+        help="Skip the separately labeled compiled MLXs secondary variant.",
     )
-    p.add_argument(
+    parser.add_argument(
         "--trust-remote-code",
         action="store_true",
         help="Forward to tokenizer loaders.",
     )
-    p.add_argument(
+    parser.add_argument(
         "--backends",
         type=_parse_backends,
-        default="both",
+        default=frozenset({"mlxs", "mlx_lm"}),
         help="mlx_lm, mlxs, or both.",
     )
-    p.add_argument(
+    parser.add_argument(
         "-o",
         "--output",
         type=Path,
         default=None,
-        help="Write full JSON report (all trials + order statistics).",
+        help="Write the full JSON report.",
     )
-    p.add_argument(
+    parser.add_argument(
         "--print-summary",
         action="store_true",
-        help="Print human-readable median table to stdout.",
+        help="Print a human-readable summary to stdout.",
     )
-    args = p.parse_args(argv)
+    args = parser.parse_args(argv)
 
     if args.list_models:
         found = discover_local_models(args.hub_root, max_models=None)
-        for m in found:
-            mb = m.weight_bytes / (1024 * 1024)
-            print(f"{m.weight_bytes:12d} B  {mb:8.1f} MiB  {m.model_type:24s}  {m.path}")
+        for model in found:
+            mb = model.weight_bytes / (1024 * 1024)
+            print(
+                f"{model.weight_bytes:12d} B  {mb:8.1f} MiB  "
+                f"{model.weight_format_class:16s}  {model.model_type:24s}  {model.path}"
+            )
         print(f"\nTotal: {len(found)}")
         return 0
 
-    explicit = parse_explicit_model_paths(args.model_paths) if args.model_paths.strip() else None
+    missing = _missing_runtime_dependencies(args.backends)
+    if missing:
+        print(
+            "Phase 2 blocked: missing benchmark dependencies in the active interpreter: "
+            f"{', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return 3
+
+    from benchmarks.mlxs_vs_mlx_lm.harness import HarnessConfig, resolve_models, run_harness
+
+    explicit_paths = parse_explicit_model_paths(args.model_paths) if args.model_paths.strip() else None
+    prompt_targets = CANONICAL_PROMPT_TARGETS if args.mode == CANONICAL_MODE else args.prompt_targets
+    max_tokens = CANONICAL_MAX_TOKENS if args.mode == CANONICAL_MODE else max(1, args.max_tokens)
+    warmup_runs = CANONICAL_WARMUP_RUNS if args.mode == CANONICAL_MODE else max(0, args.warmup)
+    timed_runs = CANONICAL_TIMED_RUNS if args.mode == CANONICAL_MODE else max(1, args.runs)
+
     models = resolve_models(
         hub_root=args.hub_root,
-        max_models=None if explicit else args.max_models,
-        explicit_paths=explicit,
+        max_models=None if explicit_paths else args.max_models,
+        explicit_paths=explicit_paths,
+        mode=args.mode,
     )
     if not models:
-        print("No models found. Use --list-models or --model-paths.", file=sys.stderr)
+        if args.mode == CANONICAL_MODE:
+            print("Phase 2 blocked: canonical Class A model path is missing or invalid.", file=sys.stderr)
+        else:
+            print("No models found. Use --list-models or --model-paths.", file=sys.stderr)
         return 2
 
-    if "mlx_lm" in args.backends:
-        try:
-            import mlx_lm  # noqa: F401
-        except ImportError:
-            print("mlx_lm backend requested but mlx-lm is not installed.", file=sys.stderr)
-            return 3
-
     cfg = HarnessConfig(
-        warmup_runs=max(0, args.warmup),
-        timed_runs=max(1, args.runs),
-        max_tokens=max(1, args.max_tokens),
+        mode=args.mode,
+        warmup_runs=warmup_runs,
+        timed_runs=timed_runs,
+        max_tokens=max_tokens,
         seed=args.seed,
         prefill_step_size=max(1, args.prefill_step),
-        compile_decode=not args.no_compile_decode,
         trust_remote_code=args.trust_remote_code,
-        prompt_targets=args.prompt_targets,
+        prompt_targets=prompt_targets,
         backends=args.backends,
+        run_compiled_secondary=not args.no_compile_decode,
     )
 
     payload = run_harness(models, cfg)

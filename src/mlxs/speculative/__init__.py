@@ -1,13 +1,8 @@
-"""Speculative decoding — draft model + verify (§6.5, FR6, AC14).
+"""Legacy package namespace only.
 
-Uses a smaller/faster draft model to generate candidate tokens,
-then verifies them with the target model in a single forward pass.
-Accepted tokens skip individual decode steps, improving throughput.
+The canonical Layer 3 speculative boundary is `mlxs.advanced_engines`.
+Import the concrete orchestration modules directly only where the legacy
+module layout still matters.
 """
 
-from __future__ import annotations
-
-from mlxs.speculative.draft import draft_tokens
-from mlxs.speculative.verify import speculative_generate
-
-__all__ = ["draft_tokens", "speculative_generate"]
+__all__: list[str] = []

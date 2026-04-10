@@ -1,6 +1,7 @@
-"""Prompt cache module — LRU prefix cache with memory monitoring (§6.3, §9).
+"""Prompt-cache substrate — storage and memory monitoring, not orchestration.
 
-Public API: ``PromptCache`` — wraps LRU store with memory-aware insert.
+Cross-request reuse decisions belong in Layer 3. This package remains the
+cache substrate used by that orchestration layer.
 """
 
 from __future__ import annotations

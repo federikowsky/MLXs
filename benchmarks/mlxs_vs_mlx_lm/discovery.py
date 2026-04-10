@@ -29,6 +29,9 @@ class LocalModelInfo:
     weight_bytes: int
     """Total size of ``*.safetensors`` under the snapshot (for sorting)."""
 
+    weight_format_class: str
+    """Declared weight-format / quantization class for fairness reporting."""
+
 
 def _dir_to_repo_id(cache_name: str) -> str:
     if not cache_name.startswith("models--"):
@@ -85,6 +88,25 @@ def _should_skip_config(config: dict[str, object], path: Path) -> str | None:
     return None
 
 
+def infer_weight_format_class(config: dict[str, object], path: Path) -> str:
+    """Return a stable, report-friendly weight-format label."""
+    quantization = config.get("quantization")
+    if isinstance(quantization, dict):
+        bits = quantization.get("bits")
+        group_size = quantization.get("group_size")
+        if isinstance(bits, int) and isinstance(group_size, int):
+            return f"mlx_q{bits}_g{group_size}"
+        if isinstance(bits, int):
+            return f"mlx_q{bits}"
+    if isinstance(quantization, str) and quantization:
+        return f"mlx_{quantization}"
+
+    lower_parts = [part.lower() for part in path.parts]
+    if any("gguf" in part for part in lower_parts):
+        return "gguf"
+    return "safetensors"
+
+
 def discover_local_models(
     hub_root: Path | None = None,
     *,
@@ -136,6 +158,7 @@ def discover_local_models(
                 architectures=arch_tuple,
                 safetensors_files=st,
                 weight_bytes=wbytes,
+                weight_format_class=infer_weight_format_class(config, chosen),
             )
         )
 

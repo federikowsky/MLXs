@@ -1,8 +1,8 @@
-"""Batch module — batch scheduler and continuous batching (§6.4, §9).
+"""Legacy package namespace only.
 
-Public API: ``BatchScheduler`` — manages concurrent generation sequences.
+The canonical Layer 3 boundary is `mlxs.advanced_engines`. Import concrete
+batching behavior from `mlxs.batch.scheduler` only where legacy module layout
+still matters.
 """
 
-from mlxs.batch.scheduler import BatchScheduler
-
-__all__ = ["BatchScheduler"]
+__all__: list[str] = []

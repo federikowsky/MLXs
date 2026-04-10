@@ -1,4 +1,4 @@
-"""Server package exports with lazy imports."""
+"""Layer 4 compatibility exports over the canonical product-surface boundary."""
 
 from __future__ import annotations
 
