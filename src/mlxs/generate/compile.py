@@ -1,4 +1,4 @@
-"""Compiled decode and warmup utilities (§6.8, AC12).
+"""Legacy compile helpers for the compatibility generation surface.
 
 Wraps the model forward pass with mx.compile for decode-time optimization.
 Provides warmup logic to trigger JIT compilation before serving.

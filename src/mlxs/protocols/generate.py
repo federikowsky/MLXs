@@ -1,4 +1,4 @@
-"""Generate protocol — contract for single-request inference (§6.1, §9).
+"""Legacy generate protocol for compatibility surfaces above Layer 1.
 
 The generate module exposes a function matching this protocol. It produces
 a lazy stream of TokenEvent objects. No HTTP or server concepts.
@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    import mlx.core as mx
 
     from mlxs._types import GenerateOptions, TokenEvent
     from mlxs.protocols.cache import CacheProtocol

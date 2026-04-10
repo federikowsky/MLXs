@@ -1,7 +1,8 @@
-"""Shared value types used across module boundaries.
+"""Shared value types used across legacy generation-facing boundaries.
 
-These types form the data contract between generate, batch, server, and other
-consumers. They are pure data — no business logic, no MLX dependency.
+These types form the compatibility data contract between ``mlxs.generate``,
+batch, server, and related legacy consumers. Phase 1 Layer 1 code in
+``mlxs.runtime_core`` uses separate core-local contracts.
 """
 
 from __future__ import annotations
@@ -83,12 +84,10 @@ class TokenLogprobs:
 
 @dataclass(slots=True)
 class TokenEvent:
-    """One generated token in the output stream.
+    """One generated token in the legacy output stream.
 
-    This is the central data contract between generate and all consumers
-    (server, batch, direct callers). Designed for minimal allocation in the
-    decode loop — fields are set directly, not via constructor kwargs where
-    avoidable.
+    This remains the compatibility contract for legacy generate/server/batch
+    surfaces. It is not the canonical Layer 1 output contract after Phase 1.
     """
 
     token_id: int
@@ -102,9 +101,10 @@ class TokenEvent:
 
 @dataclass(frozen=True, slots=True)
 class GenerateOptions:
-    """Options for a single generation request (§6.1, §8.2).
+    """Options for a legacy single-request generation call (§6.1, §8.2).
 
-    Passed to generate(); immutable after construction.
+    Passed to the compatibility ``generate()`` surface. It is not the
+    canonical Layer 1 input contract after Phase 1.
     """
 
     max_tokens: int = 512

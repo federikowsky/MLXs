@@ -119,8 +119,12 @@ def generate_mlxs_loaded(
     prefill_step_size: int,
     compile_decode: bool,
 ) -> GenerationMetrics:
-    from mlxs._types import GenerateOptions
-    from mlxs.generate import generate
+    from mlxs.runtime_core import (
+        CoreExecutionPolicy,
+        CoreState,
+        CoreTerminationPolicy,
+        run_greedy,
+    )
 
     if session.error or session.model is None:
         return GenerationMetrics(
@@ -142,14 +146,43 @@ def generate_mlxs_loaded(
     model = session.model
     tokenizer = session.tokenizer
 
-    opts = GenerateOptions(
-        max_tokens=max_tokens,
-        temperature=0.0,
-        top_p=1.0,
-        top_k=0,
-        seed=seed,
-    )
     mx.random.seed(seed)
+
+    prompt_tokens_arr = tokenizer.encode(prompt_text)
+    eos_token_id = getattr(tokenizer, "eos_token_id", None)
+    eos_token_ids = (int(eos_token_id),) if eos_token_id is not None else ()
+    execution = CoreExecutionPolicy(clear_cache_interval=0)
+    termination = CoreTerminationPolicy(max_tokens=max_tokens, eos_token_ids=eos_token_ids)
+
+    if compile_decode:
+        cache = model.make_cache()
+        state = CoreState.adopt(cache)
+
+        @mx.compile
+        def compiled_step(input_ids: mx.array) -> mx.array:
+            return model(input_ids, cache=cache)
+
+        def run() -> Any:
+            return run_greedy(
+                model,
+                prompt_tokens_arr,
+                termination=termination,
+                execution=execution,
+                state=state,
+                prefill_step_size=prefill_step_size,
+                step_fn=compiled_step,
+            )
+
+    else:
+
+        def run() -> Any:
+            return run_greedy(
+                model,
+                prompt_tokens_arr,
+                termination=termination,
+                execution=execution,
+                prefill_step_size=prefill_step_size,
+            )
 
     n_gen = 0
     ttft: float | None = None
@@ -159,23 +192,14 @@ def generate_mlxs_loaded(
 
     t_e2e0 = time.perf_counter()
     try:
-        gen = generate(
-            model,
-            tokenizer,
-            prompt_text,
-            opts,
-            prefill_step_size=prefill_step_size,
-            compile_decode=compile_decode,
-            clear_cache_interval=0,
-        )
-        for ev in gen:
+        for result in run():
             now = time.perf_counter()
             if ttft is None:
                 ttft = now - t_e2e0
                 t_first = now
-            prompt_tokens = ev.prompt_tokens
-            n_gen = ev.generation_tokens
-            if ev.finish_reason is not None:
+            prompt_tokens = result.prompt_tokens
+            n_gen = result.generation_tokens
+            if result.finish is not None:
                 t_end = now
                 break
     except Exception as exc:

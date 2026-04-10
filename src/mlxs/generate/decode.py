@@ -1,4 +1,4 @@
-"""Decode loop — token-by-token generation (§6.1, O1, O2).
+"""Legacy mixed decode loop for the compatibility generation surface.
 
 The hottest path in the library. Design principles:
 - Zero per-token Python allocations where possible.

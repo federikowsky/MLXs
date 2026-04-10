@@ -1,7 +1,8 @@
-"""Generate module — single-request inference (§6.1, §9, FR3).
+"""Legacy single-request generation compatibility surface.
 
-Public API: ``generate()`` — takes model, tokenizer, prompt, options
-and yields a stream of TokenEvent objects.
+Phase 1 introduces the canonical Layer 1 boundary in ``mlxs.runtime_core``.
+This module remains a legacy compatibility surface for higher layers until
+later reattachment phases remove or narrow it.
 """
 
 from __future__ import annotations
@@ -169,4 +170,38 @@ def generate(
     return _gen()
 
 
-__all__ = ["generate"]
+def generate_compat(
+    model: nn.Module,
+    tokenizer: TokenizerProtocol,
+    prompt: str | list[int],
+    options: GenerateOptions | None = None,
+    *,
+    cache: list[KVCache] | None = None,
+    input_embeddings: mx.array | None = None,
+    prefill_step_size: int = 2048,
+    compile_decode: bool = False,
+    clear_cache_interval: int = 256,
+    quantized_kv_start: int = 0,
+    kv_bits: int | None = None,
+    kv_group_size: int = 64,
+    final_cache_out: list[list[KVCache]] | None = None,
+) -> Iterator[TokenEvent]:
+    """Transitional compatibility wrapper above the canonical Layer 1 root."""
+    return generate(
+        model,
+        tokenizer,
+        prompt,
+        options,
+        cache=cache,
+        input_embeddings=input_embeddings,
+        prefill_step_size=prefill_step_size,
+        compile_decode=compile_decode,
+        clear_cache_interval=clear_cache_interval,
+        quantized_kv_start=quantized_kv_start,
+        kv_bits=kv_bits,
+        kv_group_size=kv_group_size,
+        final_cache_out=final_cache_out,
+    )
+
+
+__all__ = ["generate", "generate_compat"]

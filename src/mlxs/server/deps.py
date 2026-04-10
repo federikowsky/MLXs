@@ -14,7 +14,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from mlxs.config.schema import AppConfig
-from mlxs.generate import generate
+from mlxs.generate import generate_compat
 from mlxs.generate.compile import warmup
 from mlxs.load import load_model_and_tokenizer
 from mlxs.load.tokenizer import TokenizerWrapper
@@ -83,5 +83,5 @@ def create_dependencies(config: AppConfig) -> Dependencies:
         tokenizer=tokenizer,
         prompt_cache=prompt_cache,
         metrics=metrics,
-        generate_fn=generate,
+        generate_fn=generate_compat,
     )
