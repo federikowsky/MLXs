@@ -72,6 +72,12 @@ class KVCache:
         B, n_kv_heads, _, k_head_dim = keys.shape
         v_head_dim = values.shape[3]
         n_steps = (self.step + n_new - 1) // self.step
+        # If the first prefill allocation ends one token before a chunk boundary,
+        # the final prompt token exactly fills capacity and the very first decode
+        # forward immediately pays a grow+concatenate cost. Reserve one extra
+        # chunk up front to move that cost off the canonical prompt-boundary gate.
+        if self._keys is None and n_new % self.step == self.step - 1:
+            n_steps += 1
         k_shape = (B, n_kv_heads, n_steps * self.step, k_head_dim)
         v_shape = (B, n_kv_heads, n_steps * self.step, v_head_dim)
         new_k = mx.zeros(k_shape, keys.dtype)
