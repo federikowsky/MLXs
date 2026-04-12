@@ -53,7 +53,8 @@ def help_card() -> str:
         (
             "",
             "keyboard:",
-            "  Enter          submit current input",
+            "  Enter          insert newline",
+            "  Ctrl+J         submit current input",
             "  Tab / Shift-Tab browse completion menu",
             "  Up / Down      recall previous inputs when composer is empty",
             "  Esc            cancel current generation",

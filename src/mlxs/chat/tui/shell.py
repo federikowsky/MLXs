@@ -43,7 +43,12 @@ from mlxs.chat.present.transcript import (
 from mlxs.chat.session import ChatSession
 from mlxs.chat.tui.completion import ChatCompleter
 from mlxs.chat.tui.keymap import build_chat_key_bindings
-from mlxs.chat.tui.scaffold import ShellScaffoldParts, build_transcript_first_scaffold
+from mlxs.chat.tui.scaffold import (
+    BodyScaffoldParts,
+    ShellScaffoldParts,
+    build_body_scaffold,
+    build_transcript_first_scaffold,
+)
 from mlxs.chat.tui.style import CHAT_STYLE
 
 
@@ -112,7 +117,7 @@ class ChatShell:
 
         self._history = InMemoryHistory()
         self._buffer = Buffer(
-            multiline=False,
+            multiline=True,
             completer=ThreadedCompleter(ChatCompleter(command_names())),
             complete_while_typing=True,
             auto_suggest=AutoSuggestFromHistory(),
@@ -175,14 +180,19 @@ class ChatShell:
                 focus_on_click=True,
                 input_processors=[BeforeInput([("class:composer.prompt", "> ")])],
             ),
-            height=1,
+            height=Dimension(min=3, max=8),
             style="class:composer",
         )
 
         container = build_transcript_first_scaffold(
             ShellScaffoldParts(
                 header=self._header_window,
-                transcript=self._transcript_window,
+                body=build_body_scaffold(
+                    BodyScaffoldParts(
+                        center=self._transcript_window,
+                    )
+                ),
+                progress=None,
                 composer=self._input_window,
                 composer_meta=self._meta_row,
                 footer=self._footer,

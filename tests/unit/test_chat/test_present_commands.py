@@ -12,6 +12,8 @@ def test_help_card_contains_expected_commands_and_shortcuts() -> None:
     assert "slash commands:" in text
     assert "/help" in text
     assert "/retry" in text
+    assert "Enter          insert newline" in text
+    assert "Ctrl+J         submit current input" in text
     assert "Ctrl+C" in text
 
 

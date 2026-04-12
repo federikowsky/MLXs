@@ -1,0 +1,20 @@
+{
+  "name": "mlxs-core-exec",
+  "interface": {
+    "displayName": "MLXs Core Exec — workflow skills (.skills/mlxs)"
+  },
+  "plugins": [
+    {
+      "name": "mlxs-core-exec",
+      "source": {
+        "source": "local",
+        "path": "./plugins/mlxs-core-exec"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
+    }
+  ]
+}

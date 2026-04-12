@@ -1,0 +1,39 @@
+{
+  "name": "mlxs-core-exec",
+  "version": "0.1.0",
+  "description": "MLXs workflow guides: performance loop, remote benchmarks, bounded integration, chat TUI refactor (.skills/mlxs/*.md).",
+  "author": {
+    "name": "MLXs",
+    "email": "",
+    "url": ""
+  },
+  "homepage": "",
+  "repository": "",
+  "license": "MIT",
+  "keywords": [
+    "mlxs",
+    "benchmark",
+    "performance",
+    "tui",
+    "integration",
+    "remote"
+  ],
+  "skills": "./../../.skills/mlxs/",
+  "interface": {
+    "displayName": "MLXs Core Exec",
+    "shortDescription": "MLXs performance, remote bench, integration, TUI workflows",
+    "longDescription": "Markdown workflows under .skills/mlxs/: performance-loop.md, remote-benchmark.md, bounded-integration.md, tui-refactor.md. Load the file that matches the active task.",
+    "developerName": "MLXs",
+    "category": "Development",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "",
+    "privacyPolicyURL": "",
+    "termsOfServiceURL": "",
+    "defaultPrompt": [
+      "Follow performance-loop.md for this decode change.",
+      "Run remote-benchmark.md discipline for promotion-grade results.",
+      "Use tui-refactor.md for the next chat TUI slice."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

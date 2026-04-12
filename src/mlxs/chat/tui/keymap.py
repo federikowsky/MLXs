@@ -21,6 +21,14 @@ def build_chat_key_bindings(
     kb = KeyBindings()
 
     @kb.add("enter")
+    def _newline(event) -> None:
+        if buffer.complete_state is not None and buffer.complete_state.current_completion is not None:
+            buffer.apply_completion(buffer.complete_state.current_completion)
+            buffer.complete_state = None
+            return
+        buffer.insert_text("\n")
+
+    @kb.add("c-j")
     def _submit(event) -> None:
         if buffer.complete_state is not None and buffer.complete_state.current_completion is not None:
             buffer.apply_completion(buffer.complete_state.current_completion)

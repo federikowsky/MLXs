@@ -31,6 +31,37 @@ The goal is to produce changes that are:
 
 ---
 
+## Repository mission and quality bar
+
+This repository is not a demo, not an MVP, not a toy project, and not a speculative prototype.
+
+It is intended to become a serious, production-ready system.
+
+All work should be judged against that bar:
+- professional quality,
+- production-readiness,
+- strong architectural integrity,
+- high performance,
+- high efficiency,
+- disciplined resource usage,
+- operational reliability,
+- and maintainability under continued growth.
+
+Agents must not optimize for “good enough for now” if that would create throwaway-quality foundations.
+They should optimize for solutions that are credible in a real long-term production codebase.
+
+For runtime, serving, and core-path work, the expectation is not merely to work correctly.
+The expectation is to be:
+- fast,
+- efficient,
+- well-designed,
+- and competitive against strong existing baselines.
+
+Where the project can clearly surpass the reference baseline, it should aim to do so.
+Where it cannot yet surpass it, it should aim for parity without degrading architecture, clarity, or long-term maintainability.
+
+---
+
 ## Default operating mode
 
 ### Autonomous by default
@@ -183,6 +214,30 @@ Evidence should answer:
 Prefer the smallest artifact that makes the next decision clean.
 Do not create documents for their own sake.
 Create only the minimum evidence needed to support disciplined execution.
+
+---
+
+## Production-grade decision standard
+
+Autonomous agents must make decisions with a production-grade standard, not a prototype standard.
+
+This means:
+- do not choose temporary-looking structures unless they are explicitly intended as bounded transitional seams,
+- do not introduce hacks that solve only the immediate case while weakening the long-term design,
+- do not frame work as “MVP” unless the repository explicitly asks for an MVP,
+- do not accept demo-quality UX, runtime behavior, or code organization as an endpoint,
+- do not ship changes that are merely “functionally passing” if they are structurally poor.
+
+When choosing between alternatives, prefer the one that is:
+- more robust,
+- more performant,
+- more maintainable,
+- more architecturally coherent,
+- and more defensible as production code,
+provided the scope remains bounded and the evidence supports it.
+
+The correct target is not “quickly good enough”.
+The correct target is “bounded, validated, and production-credible”.
 
 ---
 
@@ -429,6 +484,34 @@ Especially when the task touches:
 
 For this work, the agent should not decide based only on current code shape.  
 It must also use the relevant `docs/refactor/*` documents as decision inputs.
+
+### MLXs strategic objective
+
+For MLXs work, a central repository objective is to become the practical new standard relative to `mlx_lm`.
+
+This means autonomous decisions should be evaluated not only on local correctness, but on whether they move the system toward:
+- stronger core execution,
+- stronger real-path performance,
+- stronger serving/orchestration behavior,
+- stronger operational reliability,
+- and stronger production readiness.
+
+The performance standard is therefore:
+
+- where MLXs can clearly beat `mlx_lm`, it should aim to beat it;
+- where it cannot yet beat `mlx_lm`, it should aim for parity;
+- it should not accept unnecessary regressions in architecture, clarity, or correctness just to chase a narrow benchmark win;
+- it should not settle for avoidable underperformance where a stronger design is realistically achievable.
+
+For core/runtime/serving tasks, agents must think in terms of:
+- real competitiveness,
+- efficient execution,
+- clean hot paths,
+- scalable serving behavior,
+- and production-grade system quality.
+
+Do not optimize only for isolated micro-benchmarks.
+Optimize toward making MLXs the stronger practical system.
 
 ### How to use `docs/refactor/`
 For core/runtime/performance tasks:

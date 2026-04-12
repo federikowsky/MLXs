@@ -20,6 +20,7 @@ def test_build_chat_key_bindings_registers_expected_keys() -> None:
 
     bindings = {tuple(str(key) for key in binding.keys) for binding in kb.bindings}
     assert ("Keys.ControlM",) in bindings
+    assert ("Keys.ControlJ",) in bindings
     assert ("Keys.ControlI",) in bindings
     assert ("Keys.BackTab",) in bindings
     assert ("Keys.Escape",) in bindings
@@ -48,3 +49,44 @@ def test_escape_invokes_cancel_when_generating() -> None:
     escape_binding.handler(SimpleNamespace(app=None))
 
     assert called == ["cancel"]
+
+
+def test_enter_inserts_newline_when_idle() -> None:
+    buffer = Buffer()
+    kb = build_chat_key_bindings(
+        buffer=buffer,
+        get_state=lambda: "idle",
+        get_cancel_callback=lambda: None,
+        submit_buffer=lambda: None,
+        history_previous=lambda: None,
+        history_next=lambda: None,
+        invalidate=lambda: None,
+    )
+
+    enter_binding = next(
+        binding for binding in kb.bindings if tuple(str(key) for key in binding.keys) == ("Keys.ControlM",)
+    )
+    enter_binding.handler(SimpleNamespace(app=None))
+
+    assert buffer.text == "\n"
+
+
+def test_ctrl_j_submits_buffer() -> None:
+    buffer = Buffer()
+    called: list[str] = []
+    kb = build_chat_key_bindings(
+        buffer=buffer,
+        get_state=lambda: "idle",
+        get_cancel_callback=lambda: None,
+        submit_buffer=lambda: called.append("submit"),
+        history_previous=lambda: None,
+        history_next=lambda: None,
+        invalidate=lambda: None,
+    )
+
+    submit_binding = next(
+        binding for binding in kb.bindings if tuple(str(key) for key in binding.keys) == ("Keys.ControlJ",)
+    )
+    submit_binding.handler(SimpleNamespace(app=None))
+
+    assert called == ["submit"]

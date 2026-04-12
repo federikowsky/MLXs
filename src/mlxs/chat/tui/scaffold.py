@@ -14,15 +14,39 @@ from prompt_toolkit.layout.containers import AnyContainer
 
 
 @dataclass(frozen=True, slots=True)
+class BodyScaffoldParts:
+    """Named body-region parts for the future transcript/rail layout."""
+
+    center: AnyContainer
+    left: AnyContainer | None = None
+    right: AnyContainer | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ShellScaffoldParts:
     """Named scaffold parts used to assemble the current chat shell layout."""
 
     header: AnyContainer
-    transcript: AnyContainer
+    body: AnyContainer
+    progress: AnyContainer | None
     composer: AnyContainer
     composer_meta: VSplit
     footer: VSplit
     completion_menu: AnyContainer
+
+
+def build_body_scaffold(parts: BodyScaffoldParts) -> AnyContainer:
+    """Build the future main body region while preserving transcript dominance."""
+    children: list[AnyContainer] = []
+    if parts.left is not None:
+        children.append(parts.left)
+    children.append(parts.center)
+    if parts.right is not None:
+        children.append(parts.right)
+
+    if len(children) == 1:
+        return parts.center
+    return VSplit(children)
 
 
 def build_transcript_first_scaffold(parts: ShellScaffoldParts) -> FloatContainer:
@@ -31,17 +55,22 @@ def build_transcript_first_scaffold(parts: ShellScaffoldParts) -> FloatContainer
     This intentionally preserves the current vertical structure while making
     the scaffold explicit for later Phase 2 layout work.
     """
+    body_children: list[AnyContainer] = [
+        parts.header,
+        parts.body,
+    ]
+    if parts.progress is not None:
+        body_children.append(parts.progress)
+    body_children.extend(
+        [
+            Window(height=1, char=" ", style="class:surface"),
+            parts.composer,
+            parts.composer_meta,
+            parts.footer,
+        ]
+    )
     return FloatContainer(
-        content=HSplit(
-            [
-                parts.header,
-                parts.transcript,
-                Window(height=1, char=" ", style="class:surface"),
-                parts.composer,
-                parts.composer_meta,
-                parts.footer,
-            ]
-        ),
+        content=HSplit(body_children),
         floats=[
             Float(
                 xcursor=True,
@@ -52,4 +81,9 @@ def build_transcript_first_scaffold(parts: ShellScaffoldParts) -> FloatContainer
     )
 
 
-__all__ = ["ShellScaffoldParts", "build_transcript_first_scaffold"]
+__all__ = [
+    "BodyScaffoldParts",
+    "ShellScaffoldParts",
+    "build_body_scaffold",
+    "build_transcript_first_scaffold",
+]
