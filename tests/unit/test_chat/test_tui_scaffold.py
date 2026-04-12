@@ -4,6 +4,7 @@ from prompt_toolkit.layout import HSplit, VSplit, Window
 from prompt_toolkit.layout.containers import FloatContainer
 from prompt_toolkit.layout.menus import CompletionsMenu
 
+from mlxs.chat.tui.overlay import anchored_overlay
 from mlxs.chat.tui.scaffold import (
     BodyScaffoldParts,
     ShellScaffoldParts,
@@ -49,7 +50,7 @@ def test_build_transcript_first_scaffold_preserves_current_structure() -> None:
             composer=composer,
             composer_meta=composer_meta,
             footer=footer,
-            completion_menu=menu,
+            overlays=(anchored_overlay(menu, xcursor=True, ycursor=True),),
         )
     )
 
@@ -81,7 +82,7 @@ def test_build_transcript_first_scaffold_accepts_progress_strip() -> None:
             composer=composer,
             composer_meta=composer_meta,
             footer=footer,
-            completion_menu=menu,
+            overlays=(anchored_overlay(menu, xcursor=True, ycursor=True),),
         )
     )
 

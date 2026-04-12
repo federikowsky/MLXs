@@ -49,6 +49,7 @@ from mlxs.chat.session import ChatSession
 from mlxs.chat.tui.completion import ChatCompleter
 from mlxs.chat.tui.context import ContextRail
 from mlxs.chat.tui.keymap import build_chat_key_bindings
+from mlxs.chat.tui.overlay import anchored_overlay
 from mlxs.chat.tui.rail import SessionRail
 from mlxs.chat.tui.scaffold import (
     BodyScaffoldParts,
@@ -219,7 +220,13 @@ class ChatShell:
                 composer=self._input_window,
                 composer_meta=self._meta_row,
                 footer=self._footer,
-                completion_menu=CompletionsMenu(max_height=10),
+                overlays=(
+                    anchored_overlay(
+                        CompletionsMenu(max_height=10),
+                        xcursor=True,
+                        ycursor=True,
+                    ),
+                ),
             )
         )
 

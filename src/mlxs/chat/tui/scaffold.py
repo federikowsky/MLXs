@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from prompt_toolkit.layout import Float, FloatContainer, HSplit, VSplit, Window
+from prompt_toolkit.layout import HSplit, VSplit, Window
 from prompt_toolkit.layout.containers import AnyContainer
+
+from mlxs.chat.tui.overlay import OverlaySpec, build_overlay_host
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +34,7 @@ class ShellScaffoldParts:
     composer: AnyContainer
     composer_meta: VSplit
     footer: VSplit
-    completion_menu: AnyContainer
+    overlays: tuple[OverlaySpec, ...] = ()
 
 
 def build_body_scaffold(parts: BodyScaffoldParts) -> AnyContainer:
@@ -49,7 +51,7 @@ def build_body_scaffold(parts: BodyScaffoldParts) -> AnyContainer:
     return VSplit(children)
 
 
-def build_transcript_first_scaffold(parts: ShellScaffoldParts) -> FloatContainer:
+def build_transcript_first_scaffold(parts: ShellScaffoldParts):
     """Build the current transcript-first shell scaffold.
 
     This intentionally preserves the current vertical structure while making
@@ -69,16 +71,7 @@ def build_transcript_first_scaffold(parts: ShellScaffoldParts) -> FloatContainer
             parts.footer,
         ]
     )
-    return FloatContainer(
-        content=HSplit(body_children),
-        floats=[
-            Float(
-                xcursor=True,
-                ycursor=True,
-                content=parts.completion_menu,
-            ),
-        ],
-    )
+    return build_overlay_host(HSplit(body_children), parts.overlays)
 
 
 __all__ = [
