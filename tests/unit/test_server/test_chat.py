@@ -422,6 +422,70 @@ class TestPlainCommandActions:
         assert store.get_active_session() is new_session
         assert len(store.list_summaries()) == 2
 
+    def test_interactive_controller_syncs_store_summaries_to_shell(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        deps = _make_deps(generate_events=[])
+        captured: dict[str, object] = {}
+
+        class DummyShell:
+            def __init__(self, model_id, session, *, max_tokens, temperature):
+                captured["init_session_id"] = session.session_id
+
+            def sync_session(self, session, *, session_items=None, clear_notices=False):
+                captured["sync_session_id"] = session.session_id
+                captured["clear_notices"] = clear_notices
+                captured["session_items"] = session_items
+
+            def run(self, *, on_submit, on_cancel):
+                return None
+
+            def show_status(self, text):
+                captured["status"] = text
+
+            def set_state(self, state, detail):
+                captured["state"] = (state, detail)
+
+            def request_exit(self):
+                return None
+
+            def show_help(self):
+                return None
+
+            def show_runtime(self, *, max_tokens, temperature):
+                return None
+
+            def show_error(self, text):
+                return None
+
+            def show_history(self, session, limit):
+                return None
+
+            def show_stats(self, session):
+                return None
+
+            def stream_reply(self, text):
+                return None
+
+            def finish_reply(self, *, emitted_text):
+                return None
+
+            def close_reply(self):
+                return None
+
+        monkeypatch.setattr("mlxs.chat.cli.ChatShell", DummyShell)
+        controller = __import__("mlxs.product_surfaces.chat", fromlist=["_InteractiveChatController"])._InteractiveChatController(
+            deps,
+            GenerateOptions(max_tokens=32, temperature=1.0, stream=True),
+            "default",
+        )
+
+        controller._sync_shell(clear_notices=True)
+
+        session_items = captured["session_items"]
+        assert captured["clear_notices"] is True
+        assert captured["sync_session_id"] == captured["init_session_id"]
+        assert session_items is not None
+        assert len(session_items) == 1
+
     def test_system_history_export_and_unknown_commands(self, tmp_path) -> None:
         deps = _make_deps(generate_events=[])
         console = _RecordingConsole()

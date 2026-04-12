@@ -14,8 +14,10 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import ThreadedCompleter
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.layout import Float, FloatContainer, HSplit, Layout, VSplit, Window
+from prompt_toolkit.layout.containers import ConditionalContainer
 from prompt_toolkit.layout.containers import WindowAlign
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
@@ -34,6 +36,8 @@ from mlxs.chat.present.chrome import (
     truncate_text,
 )
 from mlxs.chat.present.commands import command_context, command_names, help_card
+from mlxs.chat.present.progress import build_progress_fragments, progress_visible
+from mlxs.chat.present.sessions import SessionListItem, item_from_session, render_session_list_fragments
 from mlxs.chat.present.transcript import (
     TranscriptEntry,
     empty_state_fragments,
@@ -106,6 +110,7 @@ class ChatShell:
         self._temperature = temperature
         self._message_entries: list[TranscriptEntry] = []
         self._notice_entries: list[TranscriptEntry] = []
+        self._session_items: list[SessionListItem] = []
         self._pending_assistant = ""
         self._submitted_inputs: list[str] = []
         self._history_index = 0
@@ -133,6 +138,13 @@ class ChatShell:
             content=transcript_control,
             wrap_lines=True,
             style="class:transcript",
+            dont_extend_height=False,
+        )
+        self._session_list_window = Window(
+            content=FormattedTextControl(self._session_list_fragments),
+            wrap_lines=True,
+            style="class:rail",
+            width=Dimension(min=22, preferred=28, max=32),
             dont_extend_height=False,
         )
         self._header_window = Window(
@@ -183,16 +195,25 @@ class ChatShell:
             height=Dimension(min=3, max=8),
             style="class:composer",
         )
+        self._progress_window = ConditionalContainer(
+            content=Window(
+                content=FormattedTextControl(self._progress_fragments),
+                height=1,
+                style="class:progress",
+            ),
+            filter=Condition(lambda: progress_visible(state=self._state)),
+        )
 
         container = build_transcript_first_scaffold(
             ShellScaffoldParts(
                 header=self._header_window,
                 body=build_body_scaffold(
                     BodyScaffoldParts(
+                        left=self._session_list_window,
                         center=self._transcript_window,
                     )
                 ),
-                progress=None,
+                progress=self._progress_window,
                 composer=self._input_window,
                 composer_meta=self._meta_row,
                 footer=self._footer,
@@ -231,10 +252,17 @@ class ChatShell:
     def request_exit(self) -> None:
         self._application.exit()
 
-    def sync_session(self, session: ChatSession, *, clear_notices: bool = False) -> None:
+    def sync_session(
+        self,
+        session: ChatSession,
+        *,
+        session_items: list[SessionListItem] | None = None,
+        clear_notices: bool = False,
+    ) -> None:
         with self._lock:
             self._session = session
             self._message_entries = [entry_from_message(message) for message in session.messages]
+            self._session_items = session_items or [item_from_session(session)]
             self._pending_assistant = ""
             if clear_notices:
                 self._notice_entries.clear()
@@ -409,6 +437,12 @@ class ChatShell:
             detail = self._state_detail
         return build_footer_right_fragments(state=state, detail=detail)
 
+    def _progress_fragments(self) -> list[tuple[str, str]]:
+        with self._lock:
+            state = self._state
+            detail = self._state_detail
+        return build_progress_fragments(state=state, detail=detail)
+
     def _transcript_fragments(self) -> list[tuple[str, str]]:
         with self._lock:
             entries = [*self._message_entries, *self._notice_entries]
@@ -433,6 +467,11 @@ class ChatShell:
         if not fragments:
             fragments.extend(empty_state_fragments())
         return fragments
+
+    def _session_list_fragments(self) -> list[tuple[str, str]]:
+        with self._lock:
+            items = list(self._session_items)
+        return render_session_list_fragments(items)
 
     def _transcript_cursor(self) -> Point:
         text = "".join(part for _, part in self._transcript_fragments())

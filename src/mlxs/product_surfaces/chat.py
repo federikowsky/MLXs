@@ -12,6 +12,7 @@ from mlxs.advanced_engines.prompt_cache import PromptCachePlan
 from mlxs._types import FinishReason, GenerateOptions
 from mlxs.chat.input import AttachmentResolutionError, resolve_attachments
 from mlxs.chat.session import ChatSession
+from mlxs.chat.present.sessions import items_from_summaries
 from mlxs.chat.store import ChatSessionStore
 from mlxs.chat.template import (
     StreamingTextSanitizer,
@@ -103,6 +104,7 @@ class _InteractiveChatController:
             max_tokens=gen_opts.max_tokens,
             temperature=gen_opts.temperature,
         )
+        self._sync_shell(clear_notices=True)
         self._cancel_event = threading.Event()
         self._worker: threading.Thread | None = None
 
@@ -113,6 +115,13 @@ class _InteractiveChatController:
     @_session.setter
     def _session(self, session: ChatSession) -> None:
         self._store.update_session(session, make_active=True)
+
+    def _sync_shell(self, *, clear_notices: bool = False) -> None:
+        self._shell.sync_session(
+            self._session,
+            session_items=items_from_summaries(self._store.list_summaries()),
+            clear_notices=clear_notices,
+        )
 
     def run(self) -> None:
         self._shell.run(on_submit=self._submit, on_cancel=self._cancel_generation)
@@ -150,7 +159,7 @@ class _InteractiveChatController:
         )
         self._session.add_user_message(text, metadata=metadata)
         self._session.auto_title()
-        self._shell.sync_session(self._session)
+        self._sync_shell()
         self._start_generation()
 
     def _handle_command(self, command: tuple[str, str]) -> None:
@@ -172,7 +181,7 @@ class _InteractiveChatController:
             return
         if name == "new":
             self._session = ChatSession(model_path=self._model_id)
-            self._shell.sync_session(self._session, clear_notices=True)
+            self._sync_shell(clear_notices=True)
             self._shell.show_status(f"Started a new chat: {self._session.session_id}")
             return
         if name == "clear":
@@ -180,12 +189,12 @@ class _InteractiveChatController:
             self._session.clear_messages()
             if system_prompt:
                 self._session.set_system_message(system_prompt)
-            self._shell.sync_session(self._session, clear_notices=True)
+            self._sync_shell(clear_notices=True)
             self._shell.show_status("Conversation cleared.")
             return
         if name == "undo":
             removed = self._session.delete_last_turn()
-            self._shell.sync_session(self._session)
+            self._sync_shell()
             if removed:
                 self._shell.show_status(f"Removed {removed} message(s).")
             else:
@@ -196,7 +205,7 @@ class _InteractiveChatController:
             return
         if name == "system":
             self._session = _handle_system_command(self._session, arg, self._shell)
-            self._shell.sync_session(self._session)
+            self._sync_shell()
             return
         if name == "title":
             title = arg.strip()
@@ -204,7 +213,7 @@ class _InteractiveChatController:
                 self._shell.show_error("Usage: /title <text>")
                 return
             self._session.title = title
-            self._shell.sync_session(self._session)
+            self._sync_shell()
             self._shell.show_status(f"Renamed chat to: {title}")
             return
         if name == "history":
@@ -236,20 +245,20 @@ class _InteractiveChatController:
             cancel_event=self._cancel_event,
         )
         if status == "ok":
-            self._shell.sync_session(self._session)
+            self._sync_shell()
             self._shell.set_state("idle", "Ready")
             return
         if status == "cancel":
-            self._shell.sync_session(self._session)
+            self._sync_shell()
             self._shell.set_state("idle", "Cancelled")
             self._shell.show_status("Generation cancelled.")
             return
         if status == "interrupt":
-            self._shell.sync_session(self._session)
+            self._sync_shell()
             self._shell.set_state("idle", "Interrupted")
             self._shell.show_status("Generation interrupted.")
             return
-        self._shell.sync_session(self._session)
+        self._sync_shell()
         self._shell.set_state("error", "Last turn failed")
 
     def _cancel_generation(self) -> None:
@@ -271,7 +280,7 @@ class _InteractiveChatController:
         last_user = self._session.messages.pop()
         self._session.add_user_message(last_user.content, metadata=dict(last_user.metadata))
         self._session.auto_title()
-        self._shell.sync_session(self._session)
+        self._sync_shell()
         self._start_generation()
 
     def _is_generating(self) -> bool:
