@@ -30,14 +30,12 @@ from prompt_toolkit.completion import ThreadedCompleter
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import InMemoryHistory
-from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Float, FloatContainer, HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.containers import WindowAlign
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.processors import BeforeInput
-from prompt_toolkit.styles import Style
 
 # ── Canonical modules — re-exported for backwards compatibility ───────────────
 from mlxs.chat.input import (  # noqa: F401
@@ -65,43 +63,8 @@ from mlxs.chat.tui.completion import (  # noqa: F401
     ChatCompleter as _ChatCompleter,
     build_completions,
 )
-
-# ── Style ─────────────────────────────────────────────────────────────────────
-
-_STYLE = Style.from_dict(
-    {
-        "shell": "bg:#0b0f14 #e6edf3",
-        "surface": "bg:#0e141b",
-        "header": "bg:#0e141b #e6edf3",
-        "header.brand": "bg:#ff8a65 #0b0f14 bold",
-        "header.model": "bg:#0e141b #f0f6fc bold",
-        "header.meta": "bg:#0e141b #8b949e",
-        "header.path": "bg:#0e141b #c9d1d9",
-        "header.badge": "bg:#18212b #cdd9e5 bold",
-        "transcript": "bg:#0b0f14 #e6edf3",
-        "label.user": "#cbd5e1 bold",
-        "label.assistant": "bg:#163225 #b8f7c0 bold",
-        "label.system": "bg:#4f4017 #f5d06b bold",
-        "label.status": "bg:#162a40 #9fd3ff bold",
-        "label.error": "bg:#4a1f1f #ffb4ae bold",
-        "label.help": "bg:#36224d #e2c8ff bold",
-        "body.user": "#dbe4ee",
-        "body.assistant": "#edf5ff",
-        "body.system": "#f4d57a",
-        "body.status": "#c9d1d9",
-        "body.error": "#ffb4ae",
-        "body.help": "#e2c8ff",
-        "attachment": "#7d8590 italic",
-        "composer": "bg:#111821 #f0f6fc",
-        "composer.prompt": "#7dd3fc bold",
-        "composer.context": "bg:#0f151c #a7b7c9",
-        "composer.shortcuts": "bg:#0f151c #768390",
-        "statusbar": "bg:#0f151c #c9d1d9",
-        "statusbar.meta": "bg:#0f151c #8b949e",
-        "statusbar.state": "bg:#0f151c #f0f6fc bold",
-    }
-)
-
+from mlxs.chat.tui.keymap import build_chat_key_bindings
+from mlxs.chat.tui.style import CHAT_STYLE
 
 # ── Data types ────────────────────────────────────────────────────────────────
 
@@ -237,8 +200,16 @@ class ChatShell:
 
         self._application = Application(
             layout=Layout(container, focused_element=self._input_window),
-            key_bindings=self._build_key_bindings(),
-            style=_STYLE,
+            key_bindings=build_chat_key_bindings(
+                buffer=self._buffer,
+                get_state=lambda: self._state,
+                get_cancel_callback=lambda: self._cancel_callback,
+                submit_buffer=self._submit_buffer,
+                history_previous=self._history_previous,
+                history_next=self._history_next,
+                invalidate=self._invalidate,
+            ),
+            style=CHAT_STYLE,
             mouse_support=True,
             full_screen=False,
         )
@@ -383,65 +354,6 @@ class ChatShell:
         text = self._submitted_inputs[self._history_index]
         self._buffer.document = Document(text, cursor_position=len(text))
         self._invalidate()
-
-    def _build_key_bindings(self) -> KeyBindings:
-        kb = KeyBindings()
-
-        @kb.add("enter")
-        def _submit(event) -> None:
-            buffer = self._buffer
-            if (
-                buffer.complete_state is not None
-                and buffer.complete_state.current_completion is not None
-            ):
-                buffer.apply_completion(buffer.complete_state.current_completion)
-                buffer.complete_state = None
-                return
-            self._submit_buffer()
-
-        @kb.add("tab")
-        def _next_completion(event) -> None:
-            if self._buffer.complete_state is None:
-                self._buffer.start_completion(select_first=False)
-                return
-            self._buffer.complete_next()
-
-        @kb.add("s-tab")
-        def _previous_completion(event) -> None:
-            if self._buffer.complete_state is None:
-                self._buffer.start_completion(select_first=False)
-                return
-            self._buffer.complete_previous()
-
-        @kb.add("escape")
-        def _escape(event) -> None:
-            if self._state == "generating" and self._cancel_callback is not None:
-                self._cancel_callback()
-                return
-            self._buffer.complete_state = None
-            self._invalidate()
-
-        @kb.add("c-c")
-        def _interrupt(event) -> None:
-            if self._state == "generating" and self._cancel_callback is not None:
-                self._cancel_callback()
-                return
-            event.app.exit()
-
-        @kb.add("c-l")
-        def _redraw(event) -> None:
-            event.app.renderer.clear()
-            event.app.invalidate()
-
-        @kb.add("up")
-        def _history_up(event) -> None:
-            self._history_previous()
-
-        @kb.add("down")
-        def _history_down(event) -> None:
-            self._history_next()
-
-        return kb
 
     def _header_fragments(self) -> list[tuple[str, str]]:
         with self._lock:

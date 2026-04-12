@@ -58,3 +58,4 @@ logs/
 # tests/fixtures/models/
 CLAUDE.md
 scripts/smoke_ouro.py
+uv.lock
