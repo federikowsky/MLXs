@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mlxs.chat.present.chrome import short_model_name, truncate_text
+from mlxs.chat.present.chrome import truncate_text
+from mlxs.chat.present.sessions import format_updated_label
 from mlxs.chat.session import ChatSession
 
 
@@ -32,20 +33,35 @@ def build_context_rail_summary(
     detail: str,
 ) -> ContextRailSummary:
     """Build a compact right-rail summary from real existing shell state."""
+    del model_id
     state_label = {
         "idle": "Ready",
         "generating": "Running",
         "cancelling": "Cancelling",
         "error": "Attention",
     }.get(state, state.replace("_", " ").title())
+    user_turns = sum(1 for message in session.messages if message.role == "user")
+    assistant_messages = sum(1 for message in session.messages if message.role == "assistant")
+    attachment_count = sum(
+        1
+        for message in session.messages
+        for attachment in message.metadata.get("attachments", [])
+        if isinstance(attachment, dict) and isinstance(attachment.get("path"), str)
+    )
     rows = [
         ContextRailRow("chat", truncate_text(session.title.strip() or "New chat", 22)),
         ContextRailRow("session", session.session_id),
-        ContextRailRow("messages", str(len(session.messages))),
-        ContextRailRow("system", "On" if session.system_message() else "Off"),
-        ContextRailRow("model", truncate_text(short_model_name(model_id), 22)),
-        ContextRailRow("state", state_label),
+        ContextRailRow("updated", format_updated_label(session.updated_at)),
+        ContextRailRow("turns", f"{user_turns} user · {assistant_messages} asst"),
     ]
+    if attachment_count:
+        rows.append(ContextRailRow("files", str(attachment_count)))
+    rows.extend(
+        [
+        ContextRailRow("system", "On" if session.system_message() else "Off"),
+        ContextRailRow("state", state_label),
+        ]
+    )
     detail_text = detail.strip()
     if detail_text and detail_text != state_label:
         rows.append(ContextRailRow("detail", truncate_text(detail_text, 22), subdued=True))

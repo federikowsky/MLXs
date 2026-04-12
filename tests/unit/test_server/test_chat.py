@@ -178,6 +178,147 @@ class TestChatLoopKeyboardInterrupt:
         deps.prompt_cache.put.assert_called_once()
         assert capsys.readouterr().out == "Hello world\n"
 
+
+class TestInteractiveControllerOperationalNoise:
+    def test_run_generation_cancel_uses_state_without_status_notice(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        deps = _make_deps(generate_events=[])
+        captured: dict[str, list | tuple | None] = {
+            "statuses": [],
+            "states": [],
+        }
+
+        class DummyShell:
+            def __init__(self, model_id, session, *, max_tokens, temperature):
+                return None
+
+            def sync_session(self, session, *, session_items=None, clear_notices=False):
+                return None
+
+            def run(self, *, on_submit, on_cancel, on_previous_session=None, on_next_session=None):
+                return None
+
+            def show_status(self, text):
+                captured["statuses"].append(text)
+
+            def set_state(self, state, detail):
+                captured["states"].append((state, detail))
+
+            def request_exit(self):
+                return None
+
+            def show_help(self):
+                return None
+
+            def show_runtime(self, *, max_tokens, temperature):
+                return None
+
+            def show_error(self, text):
+                return None
+
+            def show_history(self, session, limit):
+                return None
+
+            def show_stats(self, session):
+                return None
+
+            def stream_reply(self, text):
+                return None
+
+            def finish_reply(self, *, emitted_text):
+                return None
+
+            def close_reply(self):
+                return None
+
+        monkeypatch.setattr("mlxs.chat.cli.ChatShell", DummyShell)
+        monkeypatch.setattr("mlxs.product_surfaces.chat._run_turn", lambda *args, **kwargs: "cancel")
+
+        module = __import__("mlxs.product_surfaces.chat", fromlist=["_InteractiveChatController"])
+        controller = module._InteractiveChatController(
+            deps,
+            GenerateOptions(max_tokens=32, temperature=1.0, stream=True),
+            "default",
+        )
+
+        controller._run_generation()
+
+        assert captured["statuses"] == []
+        assert captured["states"][-1] == ("idle", "Generation cancelled")
+
+    def test_run_generation_interrupt_uses_state_without_status_notice(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        deps = _make_deps(generate_events=[])
+        captured: dict[str, list | tuple | None] = {
+            "statuses": [],
+            "states": [],
+        }
+
+        class DummyShell:
+            def __init__(self, model_id, session, *, max_tokens, temperature):
+                return None
+
+            def sync_session(self, session, *, session_items=None, clear_notices=False):
+                return None
+
+            def run(self, *, on_submit, on_cancel, on_previous_session=None, on_next_session=None):
+                return None
+
+            def show_status(self, text):
+                captured["statuses"].append(text)
+
+            def set_state(self, state, detail):
+                captured["states"].append((state, detail))
+
+            def request_exit(self):
+                return None
+
+            def show_help(self):
+                return None
+
+            def show_runtime(self, *, max_tokens, temperature):
+                return None
+
+            def show_error(self, text):
+                return None
+
+            def show_history(self, session, limit):
+                return None
+
+            def show_stats(self, session):
+                return None
+
+            def stream_reply(self, text):
+                return None
+
+            def finish_reply(self, *, emitted_text):
+                return None
+
+            def close_reply(self):
+                return None
+
+        monkeypatch.setattr("mlxs.chat.cli.ChatShell", DummyShell)
+        monkeypatch.setattr(
+            "mlxs.product_surfaces.chat._run_turn",
+            lambda *args, **kwargs: "interrupt",
+        )
+
+        module = __import__("mlxs.product_surfaces.chat", fromlist=["_InteractiveChatController"])
+        controller = module._InteractiveChatController(
+            deps,
+            GenerateOptions(max_tokens=32, temperature=1.0, stream=True),
+            "default",
+        )
+
+        controller._run_generation()
+
+        assert captured["statuses"] == []
+        assert captured["states"][-1] == ("idle", "Generation interrupted")
+
     def test_help_command_prints_commands_without_generating(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:

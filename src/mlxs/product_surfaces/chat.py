@@ -274,13 +274,11 @@ class _InteractiveChatController:
             return
         if status == "cancel":
             self._sync_shell()
-            self._shell.set_state("idle", "Cancelled")
-            self._shell.show_status("Generation cancelled.")
+            self._shell.set_state("idle", "Generation cancelled")
             return
         if status == "interrupt":
             self._sync_shell()
-            self._shell.set_state("idle", "Interrupted")
-            self._shell.show_status("Generation interrupted.")
+            self._shell.set_state("idle", "Generation interrupted")
             return
         self._sync_shell()
         self._shell.set_state("error", "Last turn failed")

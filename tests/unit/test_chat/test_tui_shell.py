@@ -57,6 +57,7 @@ def test_chat_shell_renders_compact_context_rail_summary() -> None:
         model_path="z-lab/Qwen3.5-2B-PARO",
     )
     session.add_user_message("Check current context")
+    session.updated_at = "2026-04-12T12:34:00+00:00"
     shell = ChatShell(
         "z-lab/Qwen3.5-2B-PARO",
         session,
@@ -70,8 +71,26 @@ def test_chat_shell_renders_compact_context_rail_summary() -> None:
 
     assert "Context" in rendered
     assert "Latency hypothesis" in rendered
+    assert "updated" in rendered
+    assert "turns" in rendered
     assert "Running" in rendered
     assert "Streaming reply" in rendered
+
+
+def test_chat_shell_run_does_not_append_startup_status_notice() -> None:
+    session = ChatSession(model_path="z-lab/Qwen3.5-2B-PARO")
+    shell = ChatShell(
+        "z-lab/Qwen3.5-2B-PARO",
+        session,
+        max_tokens=256,
+        temperature=0.7,
+        repo=RepoContext(cwd=Path("/tmp/project"), cwd_label="~/project", branch="main"),
+    )
+
+    shell._application.run = lambda *args, **kwargs: None
+    shell.run(on_submit=lambda text: None, on_cancel=lambda: None)
+
+    assert shell._notice_entries == []
 
 
 def test_chat_shell_renders_passive_session_rail_items() -> None:

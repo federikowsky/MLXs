@@ -258,7 +258,6 @@ class ChatShell:
         self._cancel_callback = on_cancel
         self._previous_session_callback = on_previous_session
         self._next_session_callback = on_next_session
-        self.show_status("Ready. Use /help for commands and @ to attach files.")
         self._application.run()
 
     def request_exit(self) -> None:

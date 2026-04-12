@@ -19,3 +19,7 @@ def test_chat_style_contains_core_shell_regions() -> None:
     assert "composer.prompt" in selectors
     assert "progress.state" in selectors
     assert "statusbar.state" in selectors
+    assert "label.status" in selectors
+    assert "label.help" in selectors
+    assert "body.status" in selectors
+    assert "body.help" in selectors
