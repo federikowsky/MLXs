@@ -35,6 +35,7 @@ from mlxs.chat.present.chrome import (
     short_model_name,
     truncate_text,
 )
+from mlxs.chat.present.context import build_context_rail_summary
 from mlxs.chat.present.commands import command_context, command_names, help_card
 from mlxs.chat.present.progress import build_progress_fragments, progress_visible
 from mlxs.chat.present.sessions import SessionListItem, item_from_session
@@ -46,6 +47,7 @@ from mlxs.chat.present.transcript import (
 )
 from mlxs.chat.session import ChatSession
 from mlxs.chat.tui.completion import ChatCompleter
+from mlxs.chat.tui.context import ContextRail
 from mlxs.chat.tui.keymap import build_chat_key_bindings
 from mlxs.chat.tui.rail import SessionRail
 from mlxs.chat.tui.scaffold import (
@@ -144,6 +146,8 @@ class ChatShell:
         )
         self._session_rail = SessionRail()
         self._session_list_window = self._session_rail.container
+        self._context_rail = ContextRail()
+        self._context_window = self._context_rail.window
         self._header_window = Window(
             content=FormattedTextControl(self._header_fragments),
             height=2,
@@ -208,6 +212,7 @@ class ChatShell:
                     BodyScaffoldParts(
                         left=self._session_list_window,
                         center=self._transcript_window,
+                        right=self._context_window,
                     )
                 ),
                 progress=self._progress_window,
@@ -278,6 +283,7 @@ class ChatShell:
             self._session = session
             self._message_entries = [entry_from_message(message) for message in session.messages]
             self._session_rail.set_items(session_items or [item_from_session(session)])
+            self._context_rail.set_summary(self._build_context_summary_locked())
             self._pending_assistant = ""
             if clear_notices:
                 self._notice_entries.clear()
@@ -287,6 +293,7 @@ class ChatShell:
         with self._lock:
             self._state = state
             self._state_detail = detail
+            self._context_rail.set_summary(self._build_context_summary_locked())
         self._invalidate()
 
     def show_help(self) -> None:
@@ -457,6 +464,14 @@ class ChatShell:
             state = self._state
             detail = self._state_detail
         return build_progress_fragments(state=state, detail=detail)
+
+    def _build_context_summary_locked(self):
+        return build_context_rail_summary(
+            session=self._session,
+            model_id=self._model_id,
+            state=self._state,
+            detail=self._state_detail,
+        )
 
     def _transcript_fragments(self) -> list[tuple[str, str]]:
         with self._lock:

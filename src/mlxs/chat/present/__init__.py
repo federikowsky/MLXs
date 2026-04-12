@@ -1,5 +1,12 @@
 """Presentation-layer helpers for chat product surfaces."""
 
+from mlxs.chat.present.context import (
+    ContextRailRow,
+    ContextRailSummary,
+    build_context_rail_summary,
+    empty_context_rail_fragments,
+    render_context_rail_fragments,
+)
 from mlxs.chat.present.chrome import (
     build_composer_context_fragments,
     build_composer_shortcuts_fragments,
@@ -27,8 +34,11 @@ from mlxs.chat.present.transcript import TranscriptEntry, empty_state_fragments,
 __all__ = [
     "COMMANDS",
     "CommandSpec",
+    "ContextRailRow",
+    "ContextRailSummary",
     "SessionListItem",
     "TranscriptEntry",
+    "build_context_rail_summary",
     "build_composer_context_fragments",
     "build_composer_shortcuts_fragments",
     "build_footer_left_fragments",
@@ -38,6 +48,7 @@ __all__ = [
     "command_context",
     "command_names",
     "display_path",
+    "empty_context_rail_fragments",
     "empty_state_fragments",
     "empty_session_list_fragments",
     "entry_from_message",
@@ -48,6 +59,7 @@ __all__ = [
     "item_from_session",
     "items_from_summaries",
     "progress_visible",
+    "render_context_rail_fragments",
     "render_session_list_fragments",
     "render_entry",
     "short_model_name",

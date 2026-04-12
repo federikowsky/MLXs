@@ -51,6 +51,29 @@ def test_chat_shell_progress_fragments_reflect_generating_state() -> None:
     assert "Streaming reply" in rendered
 
 
+def test_chat_shell_renders_compact_context_rail_summary() -> None:
+    session = ChatSession(
+        title="Latency hypothesis",
+        model_path="z-lab/Qwen3.5-2B-PARO",
+    )
+    session.add_user_message("Check current context")
+    shell = ChatShell(
+        "z-lab/Qwen3.5-2B-PARO",
+        session,
+        max_tokens=256,
+        temperature=0.7,
+        repo=RepoContext(cwd=Path("/tmp/project"), cwd_label="~/project", branch="main"),
+    )
+
+    shell.set_state("generating", "Streaming reply")
+    rendered = "".join(part for _, part in shell._context_rail.fragments())
+
+    assert "Context" in rendered
+    assert "Latency hypothesis" in rendered
+    assert "Running" in rendered
+    assert "Streaming reply" in rendered
+
+
 def test_chat_shell_renders_passive_session_rail_items() -> None:
     session = ChatSession(model_path="z-lab/Qwen3.5-2B-PARO")
     shell = ChatShell(
