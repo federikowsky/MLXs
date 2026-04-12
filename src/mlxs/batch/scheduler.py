@@ -166,57 +166,145 @@ class BatchScheduler:
     ) -> None:
         """Prefill pending sequences while there is decode capacity."""
         while self._pending and len(self._active) < self._completion_batch_size:
+            if fill_capacity:
+                cohort = self._take_prefill_cohort()
+                if len(cohort) > 1:
+                    self._prefill_cohort(cohort, results)
+                    continue
+
             request_id, seq = next(iter(self._pending.items()))
             del self._pending[request_id]
+            self._prefill_one(request_id, seq, results)
 
+            if not fill_capacity:
+                break
+
+    def _prefill_one(
+        self,
+        request_id: str,
+        seq: _Sequence,
+        results: dict[str, list[TokenEvent]],
+    ) -> None:
+        """Prefill and sample the first token for one sequence."""
+        seq.state = _SeqState.PREFILLING
+        seq.setup()
+        seq.cache = seq.model.make_cache()
+
+        prompt_array = mx.array(seq.prompt_tokens)
+        total = len(seq.prompt_tokens)
+
+        offset = 0
+        while total - offset > 1:
+            remaining = (total - offset) - 1
+            n = min(self._prefill_step_size, remaining)
+            chunk = prompt_array[offset : offset + n]
+            seq.model(chunk[None], cache=seq.cache)
+            mx.eval([c.state for c in seq.cache if c.state is not None])
+            offset += n
+            mx.clear_cache()
+
+        last_token = prompt_array[offset:]
+        logits = seq.model(last_token[None], cache=seq.cache)
+        logits = logits[:, -1, :]
+        logprobs = logits - mx.logsumexp(logits, keepdims=True)
+        y = seq.sampler(logprobs)
+        mx.eval(y)
+
+        self._finalize_prefill_sample(request_id, seq, y, results)
+
+    def _take_prefill_cohort(self) -> list[tuple[str, _Sequence]]:
+        """Take a pending cohort with the same model and prompt length."""
+        capacity = self._completion_batch_size - len(self._active)
+        cohort: list[tuple[str, _Sequence]] = []
+        anchor_key: tuple[int, int] | None = None
+        for request_id, seq in self._pending.items():
+            key = (id(seq.model), len(seq.prompt_tokens))
+            if anchor_key is None:
+                anchor_key = key
+            if key != anchor_key:
+                continue
+            cohort.append((request_id, seq))
+            if len(cohort) >= capacity:
+                break
+
+        if len(cohort) <= 1:
+            return []
+
+        for request_id, _ in cohort:
+            del self._pending[request_id]
+        return cohort
+
+    def _prefill_cohort(
+        self,
+        cohort: list[tuple[str, _Sequence]],
+        results: dict[str, list[TokenEvent]],
+    ) -> None:
+        """Prefill and sample the first token for a same-length cohort."""
+        for _, seq in cohort:
             seq.state = _SeqState.PREFILLING
             seq.setup()
             seq.cache = seq.model.make_cache()
 
-            prompt_array = mx.array(seq.prompt_tokens)
-            total = len(seq.prompt_tokens)
+        prompt_batch = mx.array([seq.prompt_tokens for _, seq in cohort])
+        total = len(cohort[0][1].prompt_tokens)
+        merged_cache = cohort[0][1].model.make_cache()
 
-            offset = 0
-            while total - offset > 1:
-                remaining = (total - offset) - 1
-                n = min(self._prefill_step_size, remaining)
-                chunk = prompt_array[offset : offset + n]
-                seq.model(chunk[None], cache=seq.cache)
-                mx.eval([c.state for c in seq.cache if c.state is not None])
-                offset += n
-                mx.clear_cache()
+        offset = 0
+        while total - offset > 1:
+            remaining = (total - offset) - 1
+            n = min(self._prefill_step_size, remaining)
+            chunk = prompt_batch[:, offset : offset + n]
+            cohort[0][1].model(chunk, cache=merged_cache)
+            mx.eval([c.state for c in merged_cache if c.state is not None])
+            offset += n
+            mx.clear_cache()
 
-            last_token = prompt_array[offset:]
-            logits = seq.model(last_token[None], cache=seq.cache)
-            logits = logits[:, -1, :]
-            logprobs = logits - mx.logsumexp(logits, keepdims=True)
-            y = seq.sampler(logprobs)
-            mx.eval(y)
+        last_token = prompt_batch[:, offset:]
+        logits = cohort[0][1].model(last_token, cache=merged_cache)
+        logits = logits[:, -1, :]
 
-            token_id = y.item()
-            text = seq.tokenizer.decode(token_id)
-            finish_reason = seq.stop.check(token_id, text)
+        next_tokens: list[mx.array] = []
+        for idx, (_, seq) in enumerate(cohort):
+            seq_logits = logits[idx : idx + 1]
+            logprobs = seq_logits - mx.logsumexp(seq_logits, keepdims=True)
+            next_tokens.append(seq.sampler(logprobs))
 
-            event = TokenEvent(
-                token_id=token_id,
-                text=text,
-                finish_reason=finish_reason,
-                prompt_tokens=seq.prompt_token_count,
-                generation_tokens=1,
-            )
-            seq.events.append(event)
-            results[request_id] = [event]
+        merged_states = [layer.state for layer in merged_cache if layer.state is not None]
+        mx.eval([*next_tokens, *merged_states])
+        self._scatter_group_cache(merged_cache, cohort)
 
-            if finish_reason is not None:
-                seq.state = _SeqState.FINISHED
-                self._finished[request_id] = seq
-            else:
-                seq.current_token = y
-                seq.state = _SeqState.DECODING
-                self._active[request_id] = seq
+        for y, (request_id, seq) in zip(next_tokens, cohort, strict=True):
+            self._finalize_prefill_sample(request_id, seq, y, results)
 
-            if not fill_capacity:
-                break
+    def _finalize_prefill_sample(
+        self,
+        request_id: str,
+        seq: _Sequence,
+        y: mx.array,
+        results: dict[str, list[TokenEvent]],
+    ) -> None:
+        """Convert a sampled first token into a TokenEvent and next state."""
+        token_id = y.item()
+        text = seq.tokenizer.decode(token_id)
+        finish_reason = seq.stop.check(token_id, text)
+
+        event = TokenEvent(
+            token_id=token_id,
+            text=text,
+            finish_reason=finish_reason,
+            prompt_tokens=seq.prompt_token_count,
+            generation_tokens=1,
+        )
+        seq.events.append(event)
+        results[request_id] = [event]
+
+        if finish_reason is not None:
+            seq.state = _SeqState.FINISHED
+            self._finished[request_id] = seq
+        else:
+            seq.current_token = y
+            seq.state = _SeqState.DECODING
+            self._active[request_id] = seq
 
     def _decode_active(self, results: dict[str, list[TokenEvent]]) -> None:
         """Run one decode step for each active sequence."""

@@ -63,5 +63,6 @@ def test_scheduler_batches_aligned_decode_sequences() -> None:
         scheduler.step()
         list(scheduler.drain())
 
+    assert any(shape[0] == 2 and shape[1] > 1 for shape in model.calls)
     assert (2, 1) in model.calls
     assert max(shape[0] for shape in model.calls) == 2
