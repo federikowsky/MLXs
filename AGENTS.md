@@ -637,6 +637,53 @@ Everything else is **not** a stop condition.
 
 ---
 
+## Local decision autonomy rule
+
+Autonomous agents are expected to resolve **local sequencing and bounded product/refactor forks by themselves**.
+
+They should **not** stop for human input when the choice is between multiple next steps that are all:
+- compatible with the current architecture,
+- compatible with the accepted guardrails,
+- bounded in scope,
+- reversible if rejected,
+- and locally decidable from repository state, prior validated work, and current evidence.
+
+This includes decisions such as:
+- which bounded slice should come next,
+- ordering of refactor extractions,
+- ordering of scaffold steps,
+- ordering of local UX refinements,
+- choosing between two nearby interaction paths when both remain within the accepted product direction,
+- deciding which already-prepared surface should become active first.
+
+In these cases, the agent must:
+1. choose the most coherent option,
+2. explain the reasoning briefly,
+3. execute the bounded slice,
+4. validate it,
+5. continue autonomously.
+
+### Do not stop for local forks like:
+- sequencing of nearby refactor slices,
+- sequencing of local UI scaffold steps,
+- choosing which already-supported persistent region to activate first,
+- choosing whether selection or filtering comes first when both are within the same accepted UX direction,
+- similar bounded next-step choices.
+
+### Stop only for higher-order forks
+The agent should stop only when the next decision is **not** local anymore, for example when it would:
+- alter architecture boundaries,
+- change the product model materially,
+- introduce a new durable semantic model,
+- expand scope into a new workstream,
+- or choose between directions with materially different long-term strategic implications.
+
+In short:
+- **local forks must be decided autonomously**
+- **strategic forks may justify stopping**
+
+---
+
 ## GPT-5.4-class autonomy expectations
 
 This repository expects strong autonomous agents to be capable of:
