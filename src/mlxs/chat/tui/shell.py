@@ -37,7 +37,7 @@ from mlxs.chat.present.chrome import (
 )
 from mlxs.chat.present.commands import command_context, command_names, help_card
 from mlxs.chat.present.progress import build_progress_fragments, progress_visible
-from mlxs.chat.present.sessions import SessionListItem, item_from_session, render_session_list_fragments
+from mlxs.chat.present.sessions import SessionListItem, item_from_session
 from mlxs.chat.present.transcript import (
     TranscriptEntry,
     empty_state_fragments,
@@ -47,6 +47,7 @@ from mlxs.chat.present.transcript import (
 from mlxs.chat.session import ChatSession
 from mlxs.chat.tui.completion import ChatCompleter
 from mlxs.chat.tui.keymap import build_chat_key_bindings
+from mlxs.chat.tui.rail import SessionRail
 from mlxs.chat.tui.scaffold import (
     BodyScaffoldParts,
     ShellScaffoldParts,
@@ -110,7 +111,6 @@ class ChatShell:
         self._temperature = temperature
         self._message_entries: list[TranscriptEntry] = []
         self._notice_entries: list[TranscriptEntry] = []
-        self._session_items: list[SessionListItem] = []
         self._pending_assistant = ""
         self._submitted_inputs: list[str] = []
         self._history_index = 0
@@ -119,6 +119,8 @@ class ChatShell:
         self._state_detail = "Ready"
         self._submit_callback: Callable[[str], None] | None = None
         self._cancel_callback: Callable[[], None] | None = None
+        self._previous_session_callback: Callable[[], None] | None = None
+        self._next_session_callback: Callable[[], None] | None = None
 
         self._history = InMemoryHistory()
         self._buffer = Buffer(
@@ -140,13 +142,8 @@ class ChatShell:
             style="class:transcript",
             dont_extend_height=False,
         )
-        self._session_list_window = Window(
-            content=FormattedTextControl(self._session_list_fragments),
-            wrap_lines=True,
-            style="class:rail",
-            width=Dimension(min=22, preferred=28, max=32),
-            dont_extend_height=False,
-        )
+        self._session_rail = SessionRail()
+        self._session_list_window = self._session_rail.container
         self._header_window = Window(
             content=FormattedTextControl(self._header_fragments),
             height=2,
@@ -227,6 +224,12 @@ class ChatShell:
                 buffer=self._buffer,
                 get_state=lambda: self._state,
                 get_cancel_callback=lambda: self._cancel_callback,
+                is_filter_focused=lambda: self._application.layout.current_window
+                is self._session_rail.filter_window,
+                focus_filter=self._focus_filter,
+                focus_composer=self._focus_composer,
+                get_previous_session_callback=lambda: self._previous_session_callback,
+                get_next_session_callback=lambda: self._next_session_callback,
                 submit_buffer=self._submit_buffer,
                 history_previous=self._history_previous,
                 history_next=self._history_next,
@@ -243,14 +246,26 @@ class ChatShell:
         *,
         on_submit: Callable[[str], None],
         on_cancel: Callable[[], None],
+        on_previous_session: Callable[[], None] | None = None,
+        on_next_session: Callable[[], None] | None = None,
     ) -> None:
         self._submit_callback = on_submit
         self._cancel_callback = on_cancel
+        self._previous_session_callback = on_previous_session
+        self._next_session_callback = on_next_session
         self.show_status("Ready. Use /help for commands and @ to attach files.")
         self._application.run()
 
     def request_exit(self) -> None:
         self._application.exit()
+
+    def _focus_filter(self) -> None:
+        self._application.layout.focus(self._session_rail.filter_window)
+        self._invalidate()
+
+    def _focus_composer(self) -> None:
+        self._application.layout.focus(self._input_window)
+        self._invalidate()
 
     def sync_session(
         self,
@@ -262,7 +277,7 @@ class ChatShell:
         with self._lock:
             self._session = session
             self._message_entries = [entry_from_message(message) for message in session.messages]
-            self._session_items = session_items or [item_from_session(session)]
+            self._session_rail.set_items(session_items or [item_from_session(session)])
             self._pending_assistant = ""
             if clear_notices:
                 self._notice_entries.clear()
@@ -469,9 +484,7 @@ class ChatShell:
         return fragments
 
     def _session_list_fragments(self) -> list[tuple[str, str]]:
-        with self._lock:
-            items = list(self._session_items)
-        return render_session_list_fragments(items)
+        return self._session_rail.fragments()
 
     def _transcript_cursor(self) -> Point:
         text = "".join(part for _, part in self._transcript_fragments())

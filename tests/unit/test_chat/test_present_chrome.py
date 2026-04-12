@@ -91,6 +91,7 @@ def test_footer_helpers_and_small_utilities_preserve_existing_strings() -> None:
     assert "/ commands" in shortcuts
     assert "Enter newline" in shortcuts
     assert "Ctrl+J send" in shortcuts
+    assert "Ctrl+↑/↓ switch" in shortcuts
     assert short_model_name("z-lab/Qwen3.5-2B-PARO") == "Qwen3.5-2B-PARO"
     assert truncate_text("abcdef", 5) == "ab..."
     assert display_path(Path.home()) == "~"

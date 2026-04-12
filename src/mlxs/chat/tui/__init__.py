@@ -2,6 +2,7 @@
 
 from mlxs.chat.tui.completion import ChatCompleter, build_completions
 from mlxs.chat.tui.keymap import build_chat_key_bindings
+from mlxs.chat.tui.rail import SessionRail, build_session_rail_window, session_rail_fragments
 from mlxs.chat.tui.scaffold import (
     BodyScaffoldParts,
     ShellScaffoldParts,
@@ -17,10 +18,13 @@ __all__ = [
     "ChatCompleter",
     "ChatShell",
     "RepoContext",
+    "SessionRail",
+    "build_session_rail_window",
     "ShellScaffoldParts",
     "build_body_scaffold",
     "build_chat_key_bindings",
     "build_completions",
+    "session_rail_fragments",
     "build_transcript_first_scaffold",
     "discover_repo_context",
 ]

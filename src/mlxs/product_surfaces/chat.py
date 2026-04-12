@@ -124,7 +124,31 @@ class _InteractiveChatController:
         )
 
     def run(self) -> None:
-        self._shell.run(on_submit=self._submit, on_cancel=self._cancel_generation)
+        self._shell.run(
+            on_submit=self._submit,
+            on_cancel=self._cancel_generation,
+            on_previous_session=self._switch_previous_session,
+            on_next_session=self._switch_next_session,
+        )
+
+    def _switch_previous_session(self) -> None:
+        self._switch_session_by_offset(-1)
+
+    def _switch_next_session(self) -> None:
+        self._switch_session_by_offset(1)
+
+    def _switch_session_by_offset(self, offset: int) -> None:
+        summaries = self._store.list_summaries()
+        if len(summaries) <= 1:
+            return
+        active_id = self._store.active_session_id
+        current_index = next(
+            (index for index, summary in enumerate(summaries) if summary.session_id == active_id),
+            0,
+        )
+        next_index = (current_index + offset) % len(summaries)
+        self._store.switch_session(summaries[next_index].session_id)
+        self._sync_shell(clear_notices=True)
 
     def _submit(self, raw_text: str) -> None:
         text = raw_text.strip()

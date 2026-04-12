@@ -75,6 +75,15 @@ def items_from_summaries(
 ) -> list[SessionListItem]:
     """Map and optionally filter session summaries for future list UIs."""
     items = [item_from_summary(summary) for summary in summaries]
+    return filter_session_items(items, query=query)
+
+
+def filter_session_items(
+    items: list[SessionListItem],
+    *,
+    query: str = "",
+) -> list[SessionListItem]:
+    """Filter existing session items by search text."""
     text = query.strip().lower()
     if not text:
         return items

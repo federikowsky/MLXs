@@ -486,6 +486,70 @@ class TestPlainCommandActions:
         assert session_items is not None
         assert len(session_items) == 1
 
+    def test_interactive_controller_cycles_sessions_through_store(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        deps = _make_deps(generate_events=[])
+
+        class DummyShell:
+            def __init__(self, model_id, session, *, max_tokens, temperature):
+                self.synced_session_ids: list[str] = []
+
+            def sync_session(self, session, *, session_items=None, clear_notices=False):
+                self.synced_session_ids.append(session.session_id)
+
+            def run(self, *, on_submit, on_cancel, on_previous_session=None, on_next_session=None):
+                self.on_previous_session = on_previous_session
+                self.on_next_session = on_next_session
+
+            def show_status(self, text):
+                return None
+
+            def set_state(self, state, detail):
+                return None
+
+            def request_exit(self):
+                return None
+
+            def show_help(self):
+                return None
+
+            def show_runtime(self, *, max_tokens, temperature):
+                return None
+
+            def show_error(self, text):
+                return None
+
+            def show_history(self, session, limit):
+                return None
+
+            def show_stats(self, session):
+                return None
+
+            def stream_reply(self, text):
+                return None
+
+            def finish_reply(self, *, emitted_text):
+                return None
+
+            def close_reply(self):
+                return None
+
+        monkeypatch.setattr("mlxs.chat.cli.ChatShell", DummyShell)
+        module = __import__("mlxs.product_surfaces.chat", fromlist=["_InteractiveChatController"])
+        controller = module._InteractiveChatController(
+            deps,
+            GenerateOptions(max_tokens=32, temperature=1.0, stream=True),
+            "default",
+        )
+        first_session_id = controller._session.session_id
+        controller._session = ChatSession(model_path="default")
+        second_session_id = controller._session.session_id
+
+        controller._switch_previous_session()
+        assert controller._session.session_id == first_session_id
+
+        controller._switch_next_session()
+        assert controller._session.session_id == second_session_id
+
     def test_system_history_export_and_unknown_commands(self, tmp_path) -> None:
         deps = _make_deps(generate_events=[])
         console = _RecordingConsole()

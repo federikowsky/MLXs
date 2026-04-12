@@ -10,6 +10,8 @@ def test_chat_style_contains_core_shell_regions() -> None:
     assert "header.brand" in selectors
     assert "rail.title" in selectors
     assert "rail.item.active" in selectors
+    assert "rail.filter" in selectors
+    assert "rail.filter_prompt" in selectors
     assert "transcript" in selectors
     assert "composer.prompt" in selectors
     assert "progress.state" in selectors

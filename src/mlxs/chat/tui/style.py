@@ -20,6 +20,8 @@ CHAT_STYLE = Style.from_dict(
         "rail.item": "bg:#0d1218 #c9d1d9",
         "rail.item.active": "bg:#101923 #f0f6fc bold",
         "rail.meta": "bg:#0d1218 #7d8590",
+        "rail.filter": "bg:#0d1218 #c9d1d9",
+        "rail.filter_prompt": "bg:#0d1218 #7d8590 bold",
         "transcript": "bg:#0b0f14 #e6edf3",
         "label.user": "#cbd5e1 bold",
         "label.assistant": "bg:#163225 #b8f7c0 bold",

@@ -15,6 +15,7 @@ from mlxs.chat.present.progress import build_progress_fragments, progress_visibl
 from mlxs.chat.present.sessions import (
     SessionListItem,
     empty_session_list_fragments,
+    filter_session_items,
     format_updated_label,
     item_from_summary,
     item_from_session,
@@ -40,6 +41,7 @@ __all__ = [
     "empty_state_fragments",
     "empty_session_list_fragments",
     "entry_from_message",
+    "filter_session_items",
     "format_updated_label",
     "help_card",
     "item_from_summary",

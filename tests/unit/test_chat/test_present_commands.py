@@ -14,6 +14,7 @@ def test_help_card_contains_expected_commands_and_shortcuts() -> None:
     assert "/retry" in text
     assert "Enter          insert newline" in text
     assert "Ctrl+J         submit current input" in text
+    assert "Ctrl+Up/Down   switch active conversation" in text
     assert "Ctrl+C" in text
 
 
