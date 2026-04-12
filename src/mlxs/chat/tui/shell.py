@@ -23,6 +23,16 @@ from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.processors import BeforeInput
 
 from mlxs.chat.input import parse_file_mentions
+from mlxs.chat.present.chrome import (
+    build_composer_context_fragments,
+    build_composer_shortcuts_fragments,
+    build_footer_left_fragments,
+    build_footer_right_fragments,
+    build_header_fragments,
+    display_path,
+    short_model_name,
+    truncate_text,
+)
 from mlxs.chat.present.commands import command_context, command_names, help_card
 from mlxs.chat.present.transcript import (
     TranscriptEntry,
@@ -66,7 +76,7 @@ def discover_repo_context(cwd: Path | None = None) -> RepoContext:
 
     return RepoContext(
         cwd=workdir,
-        cwd_label=_display_path(workdir),
+        cwd_label=display_path(workdir),
         branch=branch,
     )
 
@@ -256,7 +266,7 @@ class ChatShell:
             f"system prompt: {'on' if system_prompt else 'off'}",
         ]
         if system_prompt:
-            lines.append(f"system preview: {_truncate(system_prompt, 100)}")
+            lines.append(f"system preview: {truncate_text(system_prompt, 100)}")
         self._append_notice("status", "Session", "\n".join(lines))
 
     def show_runtime(self, *, max_tokens: int, temperature: float) -> None:
@@ -280,7 +290,7 @@ class ChatShell:
                 "assistant": "assistant",
                 "user": "user",
             }.get(message.role, message.role)
-            lines.append(f"{role}: {_truncate(message.content, 120)}")
+            lines.append(f"{role}: {truncate_text(message.content, 120)}")
         self._append_notice("status", f"History ({min(limit, len(transcript))})", "\n".join(lines))
 
     def stream_reply(self, text: str) -> None:
@@ -348,103 +358,54 @@ class ChatShell:
     def _header_fragments(self) -> list[tuple[str, str]]:
         with self._lock:
             title = self._session.title
-            system_on = "system on" if self._session.system_message() else "system off"
             turns = sum(1 for msg in self._session.messages if msg.role == "user")
-
-        model = _short_model_name(self._model_id)
-        branch = self._repo.branch or "-"
-        return [
-            ("class:header.brand", " MLXs "),
-            ("class:header.model", f"  {model}  "),
-            ("class:header.path", f"  {self._repo.cwd_label}\n"),
-            ("class:header.badge", f" {branch} "),
-            ("class:header.meta", f"  {title}  "),
-            ("class:header.meta", f"{turns} turns  "),
-            ("class:header.badge", f" {system_on} "),
-        ]
+            system_on = self._session.system_message() is not None
+        return build_header_fragments(
+            model_id=self._model_id,
+            title=title,
+            cwd_label=self._repo.cwd_label,
+            branch=self._repo.branch,
+            turns=turns,
+            system_on=system_on,
+        )
 
     def _composer_context_fragments(self) -> list[tuple[str, str]]:
         with self._lock:
             text = self._buffer.text
             state = self._state
             title = self._session.title
-            system_prompt = self._session.system_message()
-
-        if state == "generating":
-            return [("class:composer.context", " assistant is responding live")]
-        if state == "cancelling":
-            return [("class:composer.context", " stopping the current turn cleanly")]
-
-        stripped = text.strip()
-        if not stripped:
-            context = (
-                f" working in {title} · system {'on' if system_prompt else 'off'}"
-                " · ask anything or attach files with @path"
-            )
-            return [("class:composer.context", context)]
-
-        if stripped == "?":
-            return [
-                (
-                    "class:composer.context",
-                    " help shortcut ready · press Enter to open commands and keys",
-                )
-            ]
-
-        if stripped.startswith("/"):
-            context = command_context(stripped)
-            return [("class:composer.context", f" {context}")]
-
+            system_on = self._session.system_message() is not None
         mentions = parse_file_mentions(text)
-        if mentions:
-            preview = ", ".join(match.path for match in mentions[:3])
-            extra = f" +{len(mentions) - 3}" if len(mentions) > 3 else ""
-            return [
-                (
-                    "class:composer.context",
-                    f" {len(mentions)} file reference(s) ready · {preview}{extra}",
-                )
-            ]
-
-        return [("class:composer.context", f" drafting a request in {title}")]
+        return build_composer_context_fragments(
+            text=text,
+            state=state,
+            title=title,
+            system_on=system_on,
+            command_context=command_context(text.strip()) if text.strip().startswith("/") else None,
+            mention_paths=[match.path for match in mentions],
+        )
 
     def _composer_shortcuts_fragments(self) -> list[tuple[str, str]]:
-        if self._state == "generating":
-            text = "Esc cancel · Ctrl+C stop"
-        elif self._state == "cancelling":
-            text = "Waiting for generation to stop..."
-        else:
-            text = "/ commands · @ files · Tab complete"
-        return [("class:composer.shortcuts", f" {text}")]
+        return build_composer_shortcuts_fragments(state=self._state)
 
     def _footer_left_fragments(self) -> list[tuple[str, str]]:
         with self._lock:
             turns = sum(1 for msg in self._session.messages if msg.role == "user")
             system_on = self._session.system_message() is not None
-        left = (
-            f" {_short_model_name(self._model_id)}"
-            f" · {self._repo.branch or '-'}"
-            f" · {turns} turns"
-            f" · system {'on' if system_on else 'off'}"
-            f" · max {self._max_tokens}"
-            f" · temp {self._temperature}"
+        return build_footer_left_fragments(
+            model_id=self._model_id,
+            branch=self._repo.branch,
+            turns=turns,
+            system_on=system_on,
+            max_tokens=self._max_tokens,
+            temperature=self._temperature,
         )
-        return [("class:statusbar", left)]
 
     def _footer_right_fragments(self) -> list[tuple[str, str]]:
         with self._lock:
             state = self._state
             detail = self._state_detail
-        state_label = {
-            "idle": "Ready",
-            "generating": "Streaming",
-            "cancelling": "Stopping",
-            "error": "Attention",
-        }.get(state, state.replace("_", " ").title())
-        return [
-            ("class:statusbar.meta", detail + "  "),
-            ("class:statusbar.state", state_label),
-        ]
+        return build_footer_right_fragments(state=state, detail=detail)
 
     def _transcript_fragments(self) -> list[tuple[str, str]]:
         with self._lock:
@@ -481,29 +442,4 @@ class ChatShell:
             self._application.invalidate()
         except Exception:
             return
-
-
-def _display_path(path: Path) -> str:
-    home = Path.home()
-    try:
-        relative = path.relative_to(home)
-    except ValueError:
-        return str(path)
-    if not relative.parts:
-        return "~"
-    return f"~/{relative}"
-
-
-def _short_model_name(model_id: str) -> str:
-    if not model_id:
-        return "default"
-    return model_id.split("/")[-1]
-
-
-def _truncate(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3].rstrip() + "..."
-
-
 __all__ = ["ChatShell", "RepoContext", "discover_repo_context"]
