@@ -11,11 +11,18 @@ from mlxs.chat.present.chrome import (
     truncate_text,
 )
 from mlxs.chat.present.commands import COMMANDS, CommandSpec, command_context, command_names, help_card
+from mlxs.chat.present.sessions import (
+    SessionListItem,
+    empty_session_list_fragments,
+    item_from_summary,
+    items_from_summaries,
+)
 from mlxs.chat.present.transcript import TranscriptEntry, empty_state_fragments, entry_from_message, render_entry
 
 __all__ = [
     "COMMANDS",
     "CommandSpec",
+    "SessionListItem",
     "TranscriptEntry",
     "build_composer_context_fragments",
     "build_composer_shortcuts_fragments",
@@ -26,8 +33,11 @@ __all__ = [
     "command_names",
     "display_path",
     "empty_state_fragments",
+    "empty_session_list_fragments",
     "entry_from_message",
     "help_card",
+    "item_from_summary",
+    "items_from_summaries",
     "render_entry",
     "short_model_name",
     "truncate_text",
