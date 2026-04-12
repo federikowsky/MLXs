@@ -12,6 +12,7 @@ from mlxs.advanced_engines.prompt_cache import PromptCachePlan
 from mlxs._types import FinishReason, GenerateOptions
 from mlxs.chat.input import AttachmentResolutionError, resolve_attachments
 from mlxs.chat.session import ChatSession
+from mlxs.chat.store import ChatSessionStore
 from mlxs.chat.template import (
     StreamingTextSanitizer,
     build_prompt_ids,
@@ -94,15 +95,24 @@ class _InteractiveChatController:
         self._deps = deps
         self._gen_opts = gen_opts
         self._model_id = model_id
-        self._session = ChatSession(model_path=model_id)
+        self._store = ChatSessionStore()
+        initial_session = self._store.create_session(model_path=model_id)
         self._shell = ChatShell(
             model_id,
-            self._session,
+            initial_session,
             max_tokens=gen_opts.max_tokens,
             temperature=gen_opts.temperature,
         )
         self._cancel_event = threading.Event()
         self._worker: threading.Thread | None = None
+
+    @property
+    def _session(self) -> ChatSession:
+        return self._store.get_active_session()
+
+    @_session.setter
+    def _session(self, session: ChatSession) -> None:
+        self._store.update_session(session, make_active=True)
 
     def run(self) -> None:
         self._shell.run(on_submit=self._submit, on_cancel=self._cancel_generation)
@@ -354,12 +364,14 @@ def _run_plain_chat_loop(
     *,
     initial_query: str | None,
 ) -> None:
-    session = ChatSession(model_path=model_id)
+    store = ChatSessionStore()
+    session = store.create_session(model_path=model_id)
     console = _PlainConsole()
 
     if initial_query is not None:
         session.add_user_message(initial_query)
         session.auto_title()
+        store.update_session(session, make_active=True)
         _run_turn(deps, session, gen_opts, model_id, console)
         return
 
@@ -388,6 +400,7 @@ def _run_plain_chat_loop(
                 gen_opts,
                 model_id,
                 console,
+                store=store,
             )
             if should_exit:
                 break
@@ -405,6 +418,7 @@ def _run_plain_chat_loop(
         )
         session.add_user_message(line, metadata=metadata)
         session.auto_title()
+        store.update_session(session, make_active=True)
         status = _run_turn(deps, session, gen_opts, model_id, console)
         if status == "interrupt":
             break
@@ -553,6 +567,8 @@ def _handle_plain_command(
     gen_opts: GenerateOptions,
     model_id: str,
     console: _PlainConsole,
+    *,
+    store: ChatSessionStore | None = None,
 ) -> tuple[ChatSession, bool]:
     """Handle a slash command in the plain chat path."""
     name, arg = command
@@ -571,7 +587,10 @@ def _handle_plain_command(
         )
         return session, False
     if name == "new":
-        new_session = ChatSession(model_path=model_id)
+        if store is not None:
+            new_session = store.create_session(model_path=model_id)
+        else:
+            new_session = ChatSession(model_path=model_id)
         console.show_status(f"Started a new chat: {new_session.session_id}")
         return new_session, False
     if name == "clear":
@@ -579,10 +598,14 @@ def _handle_plain_command(
         session.clear_messages()
         if system_prompt:
             session.set_system_message(system_prompt)
+        if store is not None:
+            store.update_session(session, make_active=True)
         console.show_status("Conversation cleared.")
         return session, False
     if name == "undo":
         removed = session.delete_last_turn()
+        if store is not None:
+            store.update_session(session, make_active=True)
         if removed:
             console.show_status(f"Removed {removed} message(s).")
         else:
@@ -590,15 +613,22 @@ def _handle_plain_command(
         return session, False
     if name == "retry":
         status = _retry_last_turn(deps, session, gen_opts, model_id, console)
+        if store is not None:
+            store.update_session(session, make_active=True)
         return session, status == "interrupt"
     if name == "system":
-        return _handle_system_command(session, arg, console), False
+        session = _handle_system_command(session, arg, console)
+        if store is not None:
+            store.update_session(session, make_active=True)
+        return session, False
     if name == "title":
         title = arg.strip()
         if not title:
             console.show_error("Usage: /title <text>")
             return session, False
         session.title = title
+        if store is not None:
+            store.update_session(session, make_active=True)
         console.show_status(f"Renamed chat to: {title}")
         return session, False
     if name == "history":

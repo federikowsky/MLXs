@@ -10,6 +10,7 @@ import pytest
 from mlxs.advanced_engines.prompt_cache import PromptCacheOrchestrator
 from mlxs._types import FinishReason, GenerateOptions, TokenEvent
 from mlxs.chat.session import ChatSession
+from mlxs.chat.store import ChatSessionStore
 from mlxs.config.schema import AppConfig
 from mlxs.product_surfaces.chat import _handle_plain_command, run_chat_loop
 
@@ -399,6 +400,27 @@ class TestPlainCommandActions:
         )
         assert new_session is not session
         assert new_session.messages == []
+
+    def test_new_command_updates_store_active_session(self) -> None:
+        deps = _make_deps(generate_events=[])
+        console = _RecordingConsole()
+        store = ChatSessionStore()
+        session = store.create_session(model_path="default")
+
+        new_session, should_exit = _handle_plain_command(
+            ("new", ""),
+            deps,
+            session,
+            self._gen_opts(),
+            "default",
+            console,
+            store=store,
+        )
+
+        assert should_exit is False
+        assert store.active_session_id == new_session.session_id
+        assert store.get_active_session() is new_session
+        assert len(store.list_summaries()) == 2
 
     def test_system_history_export_and_unknown_commands(self, tmp_path) -> None:
         deps = _make_deps(generate_events=[])
