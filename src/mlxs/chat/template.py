@@ -33,7 +33,12 @@ _KNOWN_STOP_MARKERS: tuple[str, ...] = (
 _MARKER_RE = re.compile(r"<\|[^|>]+\|>")
 
 
-def build_prompt_ids(tokenizer: Any, messages: list[dict[str, str]]) -> list[int]:
+def build_prompt_ids(
+    tokenizer: Any,
+    messages: list[dict[str, str]],
+    *,
+    add_generation_prompt: bool = True,
+) -> list[int]:
     """Build prompt token ids from messages using tokenize=True (no intermediate string).
 
     This is the correct pipeline for the CLI chat: apply_chat_template returns
@@ -44,7 +49,9 @@ def build_prompt_ids(tokenizer: Any, messages: list[dict[str, str]]) -> list[int
     if hasattr(tokenizer, "apply_chat_template"):
         try:
             result = tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=True,
+                messages,
+                tokenize=True,
+                add_generation_prompt=add_generation_prompt,
             )
             if isinstance(result, list) and result:
                 return list(result)
@@ -52,7 +59,11 @@ def build_prompt_ids(tokenizer: Any, messages: list[dict[str, str]]) -> list[int
             logger.warning("apply_chat_template(tokenize=True) failed: %s; using fallback", exc)
 
     # Fallback: structured prompt
-    return _build_fallback_ids(tokenizer, messages)
+    return _build_fallback_ids(
+        tokenizer,
+        messages,
+        add_generation_prompt=add_generation_prompt,
+    )
 
 
 def build_prompt_str(tokenizer: Any, messages: list[dict[str, str]]) -> str:
@@ -152,20 +163,33 @@ class StreamingTextSanitizer:
         return tail
 
 
-def _build_fallback_ids(tokenizer: Any, messages: list[dict[str, str]]) -> list[int]:
+def _build_fallback_ids(
+    tokenizer: Any,
+    messages: list[dict[str, str]],
+    *,
+    add_generation_prompt: bool = True,
+) -> list[int]:
     """Structured fallback: build prompt string then tokenize."""
-    prompt_str = _build_fallback_str(messages)
+    prompt_str = _build_fallback_str(
+        messages,
+        add_generation_prompt=add_generation_prompt,
+    )
     return list(tokenizer.encode(prompt_str))
 
 
-def _build_fallback_str(messages: list[dict[str, str]]) -> str:
+def _build_fallback_str(
+    messages: list[dict[str, str]],
+    *,
+    add_generation_prompt: bool = True,
+) -> str:
     """Structured fallback prompt: User:/Assistant: format."""
     parts: list[str] = []
     for msg in messages:
         role = msg.get("role", "user").capitalize()
         content = msg.get("content", "")
         parts.append(f"{role}: {content}")
-    parts.append("Assistant:")
+    if add_generation_prompt:
+        parts.append("Assistant:")
     return "\n".join(parts)
 
 

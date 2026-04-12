@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from mlxs.advanced_engines.prompt_cache import PromptCachePlan
 from mlxs._types import FinishReason, GenerateOptions
 from mlxs.chat.input import AttachmentResolutionError, resolve_attachments
 from mlxs.chat.session import ChatSession
@@ -488,15 +489,32 @@ def _run_turn(
         emitted_text = True
     console.finish_reply(emitted_text=emitted_text)
 
-    deps.prompt_cache_orchestrator.commit(
-        cache_plan,
-        generated_ids=generated_ids,
-        final_cache_out=final_cache_ref,
-    )
-
     full_response = sanitize_assistant_text(deps.tokenizer.decode(generated_ids))
     metadata = {"finish_reason": finish_reason.name.lower()} if finish_reason is not None else None
     session.add_assistant_message(full_response, metadata=metadata)
+
+    try:
+        committed_prompt_ids = tuple(
+            build_prompt_ids(
+                deps.tokenizer,
+                session.prompt_messages(),
+                add_generation_prompt=False,
+            )
+        )
+    except Exception:
+        committed_prompt_ids = cache_plan.full_prompt_token_ids + tuple(generated_ids)
+
+    deps.prompt_cache_orchestrator.commit(
+        PromptCachePlan(
+            model_id=cache_plan.model_id,
+            full_prompt_token_ids=committed_prompt_ids,
+            prompt_for_generation=cache_plan.prompt_for_generation,
+            cache_for_generation=cache_plan.cache_for_generation,
+            prefix_length=cache_plan.prefix_length,
+        ),
+        generated_ids=[],
+        final_cache_out=final_cache_ref,
+    )
     return "ok"
 
 

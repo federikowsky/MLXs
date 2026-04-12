@@ -64,6 +64,10 @@ class TestChatLoopHappyPath:
             TokenEvent(token_id=11, text=" world", finish_reason=FinishReason.STOP),
         ]
         deps = _make_deps(generate_events=events, tokenizer_encode=[1, 2, 3, 4])
+        deps.tokenizer.encode.side_effect = [
+            [1, 2, 3, 4],
+            [9, 9, 9],
+        ]
         lines_iter = iter(["hi", ""])
 
         def fake_read_line(prompt: str | None = None) -> str | None:
@@ -81,7 +85,7 @@ class TestChatLoopHappyPath:
         deps.prompt_cache.put.assert_called_once()
         put_args = deps.prompt_cache.put.call_args
         assert put_args[0][0] == "default"
-        assert put_args[0][1] == (1, 2, 3, 4, 10, 11)
+        assert put_args[0][1] == (9, 9, 9)
 
     def test_generate_fn_receives_final_cache_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
         events = [
