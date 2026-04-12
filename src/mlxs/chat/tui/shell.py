@@ -43,6 +43,7 @@ from mlxs.chat.present.transcript import (
 from mlxs.chat.session import ChatSession
 from mlxs.chat.tui.completion import ChatCompleter
 from mlxs.chat.tui.keymap import build_chat_key_bindings
+from mlxs.chat.tui.scaffold import ShellScaffoldParts, build_transcript_first_scaffold
 from mlxs.chat.tui.style import CHAT_STYLE
 
 
@@ -178,24 +179,15 @@ class ChatShell:
             style="class:composer",
         )
 
-        container = FloatContainer(
-            content=HSplit(
-                [
-                    self._header_window,
-                    self._transcript_window,
-                    Window(height=1, char=" ", style="class:surface"),
-                    self._input_window,
-                    self._meta_row,
-                    self._footer,
-                ]
-            ),
-            floats=[
-                Float(
-                    xcursor=True,
-                    ycursor=True,
-                    content=CompletionsMenu(max_height=10),
-                ),
-            ],
+        container = build_transcript_first_scaffold(
+            ShellScaffoldParts(
+                header=self._header_window,
+                transcript=self._transcript_window,
+                composer=self._input_window,
+                composer_meta=self._meta_row,
+                footer=self._footer,
+                completion_menu=CompletionsMenu(max_height=10),
+            )
         )
 
         self._application = Application(

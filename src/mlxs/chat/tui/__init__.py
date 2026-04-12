@@ -2,6 +2,7 @@
 
 from mlxs.chat.tui.completion import ChatCompleter, build_completions
 from mlxs.chat.tui.keymap import build_chat_key_bindings
+from mlxs.chat.tui.scaffold import ShellScaffoldParts, build_transcript_first_scaffold
 from mlxs.chat.tui.shell import ChatShell, RepoContext, discover_repo_context
 from mlxs.chat.tui.style import CHAT_STYLE
 
@@ -10,7 +11,9 @@ __all__ = [
     "ChatCompleter",
     "ChatShell",
     "RepoContext",
+    "ShellScaffoldParts",
     "build_chat_key_bindings",
     "build_completions",
+    "build_transcript_first_scaffold",
     "discover_repo_context",
 ]
