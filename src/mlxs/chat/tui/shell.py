@@ -203,7 +203,7 @@ class ChatShell:
             ),
             style=CHAT_STYLE,
             mouse_support=True,
-            full_screen=False,
+            full_screen=True,
         )
         self.sync_session(session, clear_notices=True)
 
