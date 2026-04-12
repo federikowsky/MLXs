@@ -19,6 +19,7 @@ def _make_keymap(
     is_reference_picker_open=lambda: False,
     is_reference_picker_focused=lambda: False,
     is_help_open=lambda: False,
+    is_confirmation_open=lambda: False,
     focus_filter=lambda: None,
     focus_composer=lambda: None,
     focus_palette=lambda: None,
@@ -26,6 +27,8 @@ def _make_keymap(
     open_reference_picker=lambda: None,
     close_reference_picker=lambda: None,
     close_help=lambda: None,
+    confirm_accept=lambda: None,
+    confirm_cancel=lambda: None,
     get_previous_session_callback=lambda: None,
     get_next_session_callback=lambda: None,
     palette_previous=lambda: None,
@@ -49,6 +52,7 @@ def _make_keymap(
         is_reference_picker_open=is_reference_picker_open,
         is_reference_picker_focused=is_reference_picker_focused,
         is_help_open=is_help_open,
+        is_confirmation_open=is_confirmation_open,
         focus_filter=focus_filter,
         focus_composer=focus_composer,
         focus_palette=focus_palette,
@@ -56,6 +60,8 @@ def _make_keymap(
         open_reference_picker=open_reference_picker,
         close_reference_picker=close_reference_picker,
         close_help=close_help,
+        confirm_accept=confirm_accept,
+        confirm_cancel=confirm_cancel,
         get_previous_session_callback=get_previous_session_callback,
         get_next_session_callback=get_next_session_callback,
         palette_previous=palette_previous,
@@ -117,6 +123,30 @@ def test_escape_closes_help_overlay_before_other_overlays() -> None:
     _binding(kb, ("Keys.Escape",)).handler(SimpleNamespace(app=None))
 
     assert called == ["close-help"]
+
+
+def test_enter_accepts_confirmation_when_open() -> None:
+    called: list[str] = []
+    kb = _make_keymap(
+        is_confirmation_open=lambda: True,
+        confirm_accept=lambda: called.append("accept-confirm"),
+    )
+
+    _binding(kb, ("Keys.ControlM",)).handler(SimpleNamespace(app=None))
+
+    assert called == ["accept-confirm"]
+
+
+def test_escape_cancels_confirmation_when_open() -> None:
+    called: list[str] = []
+    kb = _make_keymap(
+        is_confirmation_open=lambda: True,
+        confirm_cancel=lambda: called.append("cancel-confirm"),
+    )
+
+    _binding(kb, ("Keys.Escape",)).handler(SimpleNamespace(app=None))
+
+    assert called == ["cancel-confirm"]
 
 
 def test_enter_inserts_newline_when_idle() -> None:

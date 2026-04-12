@@ -34,6 +34,7 @@ def build_composer_context_fragments(
     state: str,
     title: str,
     system_on: bool,
+    confirmation_open: bool = False,
     help_open: bool = False,
     palette_open: bool = False,
     reference_picker_open: bool = False,
@@ -44,6 +45,8 @@ def build_composer_context_fragments(
         return [("class:composer.context", " assistant is responding live")]
     if state == "cancelling":
         return [("class:composer.context", " stopping the current turn cleanly")]
+    if confirmation_open:
+        return [("class:composer.context", " confirmation open · review the action, then press Enter or Esc")]
     if help_open:
         return [("class:composer.context", " help overlay open · review commands and keys, then press Esc to return")]
     if reference_picker_open:
@@ -87,6 +90,7 @@ def build_composer_context_fragments(
 def build_composer_shortcuts_fragments(
     *,
     state: str,
+    confirmation_open: bool = False,
     help_open: bool = False,
     palette_open: bool = False,
     reference_picker_open: bool = False,
@@ -95,6 +99,8 @@ def build_composer_shortcuts_fragments(
         text = "Esc cancel · Ctrl+C stop"
     elif state == "cancelling":
         text = "Waiting for generation to stop..."
+    elif confirmation_open:
+        text = "Enter confirm · Esc cancel"
     elif help_open:
         text = "Esc close help"
     elif reference_picker_open:

@@ -15,6 +15,8 @@ def test_chat_style_contains_core_shell_regions() -> None:
     assert "context.title" in selectors
     assert "context.label" in selectors
     assert "context.value" in selectors
+    assert "confirm.title" in selectors
+    assert "confirm.body" in selectors
     assert "transcript" in selectors
     assert "composer.prompt" in selectors
     assert "palette.title" in selectors

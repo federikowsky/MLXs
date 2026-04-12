@@ -82,6 +82,15 @@ def test_build_composer_context_fragments_for_commands_mentions_and_idle() -> No
             reference_picker_open=True,
         )
     )
+    confirmation = _join(
+        build_composer_context_fragments(
+            text="",
+            state="idle",
+            title="New chat",
+            system_on=False,
+            confirmation_open=True,
+        )
+    )
     help_overlay = _join(
         build_composer_context_fragments(
             text="",
@@ -99,6 +108,7 @@ def test_build_composer_context_fragments_for_commands_mentions_and_idle() -> No
     assert "command palette open" in palette
     assert "reference picker open" in reference_picker
     assert "help overlay open" in help_overlay
+    assert "confirmation open" in confirmation
 
 
 def test_footer_helpers_and_small_utilities_preserve_existing_strings() -> None:
@@ -119,6 +129,9 @@ def test_footer_helpers_and_small_utilities_preserve_existing_strings() -> None:
     reference_shortcuts = _join(
         build_composer_shortcuts_fragments(state="idle", reference_picker_open=True)
     )
+    confirmation_shortcuts = _join(
+        build_composer_shortcuts_fragments(state="idle", confirmation_open=True)
+    )
 
     assert "0 turns" in left
     assert "max 256" in left
@@ -134,6 +147,7 @@ def test_footer_helpers_and_small_utilities_preserve_existing_strings() -> None:
     assert "Enter insert" in palette_shortcuts
     assert "Type to filter" in reference_shortcuts
     assert "Enter insert" in reference_shortcuts
+    assert "Enter confirm" in confirmation_shortcuts
     assert short_model_name("z-lab/Qwen3.5-2B-PARO") == "Qwen3.5-2B-PARO"
     assert truncate_text("abcdef", 5) == "ab..."
     assert display_path(Path.home()) == "~"

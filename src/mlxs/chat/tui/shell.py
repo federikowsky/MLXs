@@ -35,6 +35,7 @@ from mlxs.chat.present.chrome import (
     short_model_name,
     truncate_text,
 )
+from mlxs.chat.present.confirmation import ConfirmationSpec
 from mlxs.chat.present.context import build_context_rail_summary
 from mlxs.chat.present.commands import command_context, command_names, help_card
 from mlxs.chat.present.progress import build_progress_fragments, progress_visible
@@ -47,6 +48,7 @@ from mlxs.chat.present.transcript import (
 )
 from mlxs.chat.session import ChatSession
 from mlxs.chat.tui.completion import ChatCompleter, mention_completion_token
+from mlxs.chat.tui.confirmation import ConfirmationDialog
 from mlxs.chat.tui.context import ContextRail
 from mlxs.chat.tui.help_overlay import HelpOverlay
 from mlxs.chat.tui.keymap import build_chat_key_bindings
@@ -152,6 +154,9 @@ class ChatShell:
         self._session_list_window = self._session_rail.container
         self._context_rail = ContextRail()
         self._context_window = self._context_rail.window
+        self._confirmation_dialog = ConfirmationDialog(invalidate=self._invalidate)
+        self._confirm_accept_callback: Callable[[], None] | None = None
+        self._confirm_cancel_callback: Callable[[], None] | None = None
         self._help_overlay = HelpOverlay(invalidate=self._invalidate)
         self._command_palette = CommandPalette(invalidate=self._invalidate)
         self._reference_picker = ReferencePicker(cwd=lambda: self._repo.cwd, invalidate=self._invalidate)
@@ -245,6 +250,12 @@ class ChatShell:
                         right=8,
                     ),
                     positioned_overlay(
+                        self._confirmation_dialog.container,
+                        top=4,
+                        left=18,
+                        right=18,
+                    ),
+                    positioned_overlay(
                         self._help_overlay.container,
                         top=2,
                         left=10,
@@ -269,6 +280,7 @@ class ChatShell:
                 is_reference_picker_focused=lambda: self._application.layout.current_window
                 is self._reference_picker.filter_window,
                 is_help_open=lambda: self._help_overlay.visible,
+                is_confirmation_open=lambda: self._confirmation_dialog.visible,
                 focus_filter=self._focus_filter,
                 focus_composer=self._focus_composer,
                 focus_palette=self._focus_palette,
@@ -276,6 +288,8 @@ class ChatShell:
                 open_reference_picker=self._open_reference_picker,
                 close_reference_picker=self._close_reference_picker,
                 close_help=self._close_help,
+                confirm_accept=self._accept_confirmation,
+                confirm_cancel=self._cancel_confirmation,
                 get_previous_session_callback=lambda: self._previous_session_callback,
                 get_next_session_callback=lambda: self._next_session_callback,
                 palette_previous=self._palette_previous,
@@ -313,6 +327,8 @@ class ChatShell:
         self._application.exit()
 
     def _focus_filter(self) -> None:
+        if self._confirmation_dialog.visible:
+            self._confirmation_dialog.close()
         if self._help_overlay.visible:
             self._help_overlay.close()
         if self._command_palette.visible:
@@ -323,6 +339,8 @@ class ChatShell:
         self._invalidate()
 
     def _focus_composer(self) -> None:
+        if self._confirmation_dialog.visible:
+            self._confirmation_dialog.close()
         if self._help_overlay.visible:
             self._help_overlay.close()
         if self._command_palette.visible:
@@ -334,6 +352,8 @@ class ChatShell:
 
     def _focus_palette(self) -> None:
         self._buffer.complete_state = None
+        if self._confirmation_dialog.visible:
+            self._confirmation_dialog.close()
         if self._help_overlay.visible:
             self._help_overlay.close()
         if self._reference_picker.visible:
@@ -351,6 +371,8 @@ class ChatShell:
         mention_token = mention_completion_token(self._buffer.document.text_before_cursor)
         if mention_token is not None:
             self._buffer.complete_state = None
+            if self._confirmation_dialog.visible:
+                self._confirmation_dialog.close()
             if self._help_overlay.visible:
                 self._help_overlay.close()
             if self._command_palette.visible:
@@ -371,6 +393,8 @@ class ChatShell:
             self._buffer.document = Document(new_text, cursor_position=cursor + 1)
             return
         self._buffer.complete_state = None
+        if self._confirmation_dialog.visible:
+            self._confirmation_dialog.close()
         if self._help_overlay.visible:
             self._help_overlay.close()
         if self._command_palette.visible:
@@ -387,10 +411,57 @@ class ChatShell:
         self._application.layout.focus(self._input_window)
         self._invalidate()
 
+    def show_confirmation(
+        self,
+        *,
+        title: str,
+        body: str,
+        confirm_label: str = "Confirm",
+        on_confirm: Callable[[], None],
+        on_cancel: Callable[[], None] | None = None,
+    ) -> None:
+        self._confirm_accept_callback = on_confirm
+        self._confirm_cancel_callback = on_cancel
+        if self._command_palette.visible:
+            self._command_palette.close()
+        if self._reference_picker.visible:
+            self._reference_picker.close()
+        if self._help_overlay.visible:
+            self._help_overlay.close()
+        self._confirmation_dialog.open(
+            ConfirmationSpec(
+                title=title,
+                body=body,
+                confirm_label=confirm_label,
+            )
+        )
+        self._application.layout.focus(self._confirmation_dialog.window)
+        self._invalidate()
+
     def _close_help(self) -> None:
         self._help_overlay.close()
         self._application.layout.focus(self._input_window)
         self._invalidate()
+
+    def _accept_confirmation(self) -> None:
+        callback = self._confirm_accept_callback
+        self._confirmation_dialog.close()
+        self._confirm_accept_callback = None
+        self._confirm_cancel_callback = None
+        self._application.layout.focus(self._input_window)
+        self._invalidate()
+        if callback is not None:
+            callback()
+
+    def _cancel_confirmation(self) -> None:
+        callback = self._confirm_cancel_callback
+        self._confirmation_dialog.close()
+        self._confirm_accept_callback = None
+        self._confirm_cancel_callback = None
+        self._application.layout.focus(self._input_window)
+        self._invalidate()
+        if callback is not None:
+            callback()
 
     def _palette_previous(self) -> None:
         self._command_palette.move_selection(-1)
@@ -601,6 +672,7 @@ class ChatShell:
             state=state,
             title=title,
             system_on=system_on,
+            confirmation_open=self._confirmation_dialog.visible,
             help_open=self._help_overlay.visible,
             palette_open=self._command_palette.visible,
             reference_picker_open=self._reference_picker.visible,
@@ -611,6 +683,7 @@ class ChatShell:
     def _composer_shortcuts_fragments(self) -> list[tuple[str, str]]:
         return build_composer_shortcuts_fragments(
             state=self._state,
+            confirmation_open=self._confirmation_dialog.visible,
             help_open=self._help_overlay.visible,
             palette_open=self._command_palette.visible,
             reference_picker_open=self._reference_picker.visible,

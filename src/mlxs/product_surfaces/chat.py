@@ -161,7 +161,7 @@ class _InteractiveChatController:
             self._shell.show_status("Generation already in progress. Press Esc to cancel it.")
             return
         if text.lower() == "/quit":
-            self._shell.request_exit()
+            self._confirm_exit_if_needed()
             return
 
         command = parse_command(text)
@@ -192,7 +192,7 @@ class _InteractiveChatController:
             self._shell.show_error("Empty command. Use /help.")
             return
         if name in {"quit", "exit"}:
-            self._shell.request_exit()
+            self._confirm_exit_if_needed()
             return
         if name == "help":
             self._shell.show_help()
@@ -209,12 +209,15 @@ class _InteractiveChatController:
             self._shell.show_status(f"Started a new chat: {self._session.session_id}")
             return
         if name == "clear":
-            system_prompt = self._session.system_message()
-            self._session.clear_messages()
-            if system_prompt:
-                self._session.set_system_message(system_prompt)
-            self._sync_shell(clear_notices=True)
-            self._shell.show_status("Conversation cleared.")
+            if any(message.role != "system" for message in self._session.messages):
+                self._shell.show_confirmation(
+                    title="Clear conversation?",
+                    body="This removes the current transcript from this chat. The system prompt is kept.",
+                    confirm_label="Clear",
+                    on_confirm=self._confirm_clear_current_session,
+                )
+            else:
+                self._confirm_clear_current_session()
             return
         if name == "undo":
             removed = self._session.delete_last_turn()
@@ -304,6 +307,25 @@ class _InteractiveChatController:
         self._session.auto_title()
         self._sync_shell()
         self._start_generation()
+
+    def _confirm_clear_current_session(self) -> None:
+        system_prompt = self._session.system_message()
+        self._session.clear_messages()
+        if system_prompt:
+            self._session.set_system_message(system_prompt)
+        self._sync_shell(clear_notices=True)
+        self._shell.show_status("Conversation cleared.")
+
+    def _confirm_exit_if_needed(self) -> None:
+        if any(summary.message_count > 0 for summary in self._store.list_summaries()):
+            self._shell.show_confirmation(
+                title="Exit chat?",
+                body="This closes the current in-memory chats. Nothing is persisted yet.",
+                confirm_label="Exit",
+                on_confirm=self._shell.request_exit,
+            )
+            return
+        self._shell.request_exit()
 
     def _is_generating(self) -> bool:
         return self._worker is not None and self._worker.is_alive()

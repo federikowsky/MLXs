@@ -633,6 +633,7 @@ class TestPlainCommandActions:
         class DummyShell:
             def __init__(self, model_id, session, *, max_tokens, temperature):
                 self.synced_session_ids: list[str] = []
+                self.confirmations: list[tuple[str, str, str]] = []
 
             def sync_session(self, session, *, session_items=None, clear_notices=False):
                 self.synced_session_ids.append(session.session_id)
@@ -649,6 +650,11 @@ class TestPlainCommandActions:
 
             def request_exit(self):
                 return None
+
+            def show_confirmation(self, *, title, body, confirm_label="Confirm", on_confirm, on_cancel=None):
+                self.confirmations.append((title, body, confirm_label))
+                self.on_confirm = on_confirm
+                self.on_cancel = on_cancel
 
             def show_help(self):
                 return None
@@ -690,6 +696,229 @@ class TestPlainCommandActions:
 
         controller._switch_next_session()
         assert controller._session.session_id == second_session_id
+
+    def test_interactive_clear_command_opens_confirmation_for_nonempty_chat(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        deps = _make_deps(generate_events=[])
+
+        class DummyShell:
+            def __init__(self, model_id, session, *, max_tokens, temperature):
+                self.confirmations: list[tuple[str, str, str]] = []
+                self.statuses: list[str] = []
+
+            def sync_session(self, session, *, session_items=None, clear_notices=False):
+                self.session = session
+
+            def run(self, *, on_submit, on_cancel, on_previous_session=None, on_next_session=None):
+                return None
+
+            def show_status(self, text):
+                self.statuses.append(text)
+
+            def set_state(self, state, detail):
+                return None
+
+            def request_exit(self):
+                return None
+
+            def show_confirmation(self, *, title, body, confirm_label="Confirm", on_confirm, on_cancel=None):
+                self.confirmations.append((title, body, confirm_label))
+                self.on_confirm = on_confirm
+                self.on_cancel = on_cancel
+
+            def show_help(self):
+                return None
+
+            def show_runtime(self, *, max_tokens, temperature):
+                return None
+
+            def show_error(self, text):
+                return None
+
+            def show_history(self, session, limit):
+                return None
+
+            def show_stats(self, session):
+                return None
+
+            def stream_reply(self, text):
+                return None
+
+            def finish_reply(self, *, emitted_text):
+                return None
+
+            def close_reply(self):
+                return None
+
+        monkeypatch.setattr("mlxs.chat.cli.ChatShell", DummyShell)
+        module = __import__("mlxs.product_surfaces.chat", fromlist=["_InteractiveChatController"])
+        controller = module._InteractiveChatController(
+            deps,
+            GenerateOptions(max_tokens=32, temperature=1.0, stream=True),
+            "default",
+        )
+        controller._session.add_user_message("hello")
+        controller._session.add_assistant_message("world")
+
+        controller._handle_command(("clear", ""))
+
+        assert controller._shell.confirmations == [
+            (
+                "Clear conversation?",
+                "This removes the current transcript from this chat. The system prompt is kept.",
+                "Clear",
+            )
+        ]
+        controller._shell.on_confirm()
+        assert controller._session.messages == []
+        assert controller._shell.statuses[-1] == "Conversation cleared."
+
+    def test_interactive_quit_command_opens_confirmation_when_store_has_messages(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        deps = _make_deps(generate_events=[])
+        captured: dict[str, object] = {"requested_exit": 0}
+
+        class DummyShell:
+            def __init__(self, model_id, session, *, max_tokens, temperature):
+                self.confirmations: list[tuple[str, str, str]] = []
+
+            def sync_session(self, session, *, session_items=None, clear_notices=False):
+                self.session = session
+
+            def run(self, *, on_submit, on_cancel, on_previous_session=None, on_next_session=None):
+                return None
+
+            def show_status(self, text):
+                return None
+
+            def set_state(self, state, detail):
+                return None
+
+            def request_exit(self):
+                captured["requested_exit"] = int(captured["requested_exit"]) + 1
+
+            def show_confirmation(self, *, title, body, confirm_label="Confirm", on_confirm, on_cancel=None):
+                self.confirmations.append((title, body, confirm_label))
+                self.on_confirm = on_confirm
+                self.on_cancel = on_cancel
+
+            def show_help(self):
+                return None
+
+            def show_runtime(self, *, max_tokens, temperature):
+                return None
+
+            def show_error(self, text):
+                return None
+
+            def show_history(self, session, limit):
+                return None
+
+            def show_stats(self, session):
+                return None
+
+            def stream_reply(self, text):
+                return None
+
+            def finish_reply(self, *, emitted_text):
+                return None
+
+            def close_reply(self):
+                return None
+
+        monkeypatch.setattr("mlxs.chat.cli.ChatShell", DummyShell)
+        module = __import__("mlxs.product_surfaces.chat", fromlist=["_InteractiveChatController"])
+        controller = module._InteractiveChatController(
+            deps,
+            GenerateOptions(max_tokens=32, temperature=1.0, stream=True),
+            "default",
+        )
+        controller._session.add_user_message("hello")
+
+        controller._handle_command(("quit", ""))
+
+        assert controller._shell.confirmations == [
+            (
+                "Exit chat?",
+                "This closes the current in-memory chats. Nothing is persisted yet.",
+                "Exit",
+            )
+        ]
+        assert captured["requested_exit"] == 0
+
+        controller._shell.on_confirm()
+
+        assert captured["requested_exit"] == 1
+
+    def test_interactive_quit_command_exits_immediately_when_store_is_empty(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        deps = _make_deps(generate_events=[])
+        captured: dict[str, object] = {"requested_exit": 0}
+
+        class DummyShell:
+            def __init__(self, model_id, session, *, max_tokens, temperature):
+                self.confirmations: list[tuple[str, str, str]] = []
+
+            def sync_session(self, session, *, session_items=None, clear_notices=False):
+                self.session = session
+
+            def run(self, *, on_submit, on_cancel, on_previous_session=None, on_next_session=None):
+                return None
+
+            def show_status(self, text):
+                return None
+
+            def set_state(self, state, detail):
+                return None
+
+            def request_exit(self):
+                captured["requested_exit"] = int(captured["requested_exit"]) + 1
+
+            def show_confirmation(self, *, title, body, confirm_label="Confirm", on_confirm, on_cancel=None):
+                self.confirmations.append((title, body, confirm_label))
+
+            def show_help(self):
+                return None
+
+            def show_runtime(self, *, max_tokens, temperature):
+                return None
+
+            def show_error(self, text):
+                return None
+
+            def show_history(self, session, limit):
+                return None
+
+            def show_stats(self, session):
+                return None
+
+            def stream_reply(self, text):
+                return None
+
+            def finish_reply(self, *, emitted_text):
+                return None
+
+            def close_reply(self):
+                return None
+
+        monkeypatch.setattr("mlxs.chat.cli.ChatShell", DummyShell)
+        module = __import__("mlxs.product_surfaces.chat", fromlist=["_InteractiveChatController"])
+        controller = module._InteractiveChatController(
+            deps,
+            GenerateOptions(max_tokens=32, temperature=1.0, stream=True),
+            "default",
+        )
+
+        controller._handle_command(("quit", ""))
+
+        assert controller._shell.confirmations == []
+        assert captured["requested_exit"] == 1
 
     def test_system_history_export_and_unknown_commands(self, tmp_path) -> None:
         deps = _make_deps(generate_events=[])

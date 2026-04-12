@@ -18,6 +18,7 @@ def build_chat_key_bindings(
     is_reference_picker_open: Callable[[], bool],
     is_reference_picker_focused: Callable[[], bool],
     is_help_open: Callable[[], bool],
+    is_confirmation_open: Callable[[], bool],
     focus_filter: Callable[[], None],
     focus_composer: Callable[[], None],
     focus_palette: Callable[[], None],
@@ -25,6 +26,8 @@ def build_chat_key_bindings(
     open_reference_picker: Callable[[], None],
     close_reference_picker: Callable[[], None],
     close_help: Callable[[], None],
+    confirm_accept: Callable[[], None],
+    confirm_cancel: Callable[[], None],
     get_previous_session_callback: Callable[[], Callable[[], None] | None],
     get_next_session_callback: Callable[[], Callable[[], None] | None],
     palette_previous: Callable[[], None],
@@ -43,6 +46,8 @@ def build_chat_key_bindings(
 
     @kb.add("/")
     def _slash(event) -> None:
+        if is_confirmation_open():
+            return
         if (
             is_palette_focused()
             or is_reference_picker_focused()
@@ -58,6 +63,8 @@ def build_chat_key_bindings(
 
     @kb.add("@")
     def _at(event) -> None:
+        if is_confirmation_open():
+            return
         if (
             is_palette_focused()
             or is_reference_picker_focused()
@@ -73,6 +80,9 @@ def build_chat_key_bindings(
 
     @kb.add("enter")
     def _newline(event) -> None:
+        if is_confirmation_open():
+            confirm_accept()
+            return
         if is_reference_picker_focused():
             reference_accept()
             return
@@ -90,6 +100,9 @@ def build_chat_key_bindings(
 
     @kb.add("c-j")
     def _submit(event) -> None:
+        if is_confirmation_open():
+            confirm_accept()
+            return
         if is_reference_picker_focused():
             reference_accept()
             return
@@ -121,6 +134,9 @@ def build_chat_key_bindings(
 
     @kb.add("escape")
     def _escape(event) -> None:
+        if is_confirmation_open():
+            confirm_cancel()
+            return
         if is_help_open():
             close_help()
             return
@@ -157,6 +173,8 @@ def build_chat_key_bindings(
     def _focus_filter(event) -> None:
         if get_state() != "idle":
             return
+        if is_confirmation_open():
+            return
         if is_reference_picker_open():
             focus_composer()
             return
@@ -167,6 +185,8 @@ def build_chat_key_bindings(
 
     @kb.add("up")
     def _history_up(event) -> None:
+        if is_confirmation_open():
+            return
         if is_reference_picker_focused():
             reference_previous()
             return
@@ -179,6 +199,8 @@ def build_chat_key_bindings(
 
     @kb.add("down")
     def _history_down(event) -> None:
+        if is_confirmation_open():
+            return
         if is_reference_picker_focused():
             reference_next()
             return
@@ -193,6 +215,8 @@ def build_chat_key_bindings(
     def _previous_session(event) -> None:
         if get_state() != "idle":
             return
+        if is_confirmation_open():
+            return
         callback = get_previous_session_callback()
         if callback is not None:
             callback()
@@ -200,6 +224,8 @@ def build_chat_key_bindings(
     @kb.add("c-down")
     def _next_session(event) -> None:
         if get_state() != "idle":
+            return
+        if is_confirmation_open():
             return
         callback = get_next_session_callback()
         if callback is not None:

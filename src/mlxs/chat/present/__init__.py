@@ -17,6 +17,7 @@ from mlxs.chat.present.chrome import (
     short_model_name,
     truncate_text,
 )
+from mlxs.chat.present.confirmation import ConfirmationSpec, render_confirmation_fragments
 from mlxs.chat.present.commands import (
     COMMANDS,
     CommandPaletteItem,
@@ -46,6 +47,7 @@ __all__ = [
     "COMMANDS",
     "CommandPaletteItem",
     "CommandSpec",
+    "ConfirmationSpec",
     "ContextRailRow",
     "ContextRailSummary",
     "ReferencePickerItem",
@@ -75,6 +77,7 @@ __all__ = [
     "progress_visible",
     "render_help_overlay_fragments",
     "render_command_palette_fragments",
+    "render_confirmation_fragments",
     "render_context_rail_fragments",
     "render_reference_picker_fragments",
     "render_session_list_fragments",
