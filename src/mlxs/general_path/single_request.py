@@ -53,16 +53,24 @@ def _build_top_logprobs(
         return ()
 
     top_indices = mx.argpartition(logprobs_row, kth=-top_n)[-top_n:]
-    top_indices = top_indices[mx.argsort(logprobs_row[top_indices])[::-1]]
-    mx.eval(top_indices)
+    top_logprobs = logprobs_row[top_indices]
+    order = mx.argsort(top_logprobs)[::-1]
+    top_indices = top_indices[order]
+    top_logprobs = top_logprobs[order]
+    mx.eval(top_indices, top_logprobs)
+
+    token_ids = [int(token_id) for token_id in top_indices.tolist()]
+    logprob_values = [float(logprob) for logprob in top_logprobs.tolist()]
+
+    inner = getattr(tokenizer, "inner", None)
+    if inner is not None and hasattr(inner, "batch_decode"):
+        tokens = inner.batch_decode([[token_id] for token_id in token_ids])
+    else:
+        tokens = [tokenizer.decode(token_id) for token_id in token_ids]
 
     return tuple(
-        TopLogprob(
-            token_id=int(idx.item()),
-            token=tokenizer.decode(int(idx.item())),
-            logprob=float(logprobs_row[int(idx.item())].item()),
-        )
-        for idx in top_indices
+        TopLogprob(token_id=token_id, token=token, logprob=logprob)
+        for token_id, token, logprob in zip(token_ids, tokens, logprob_values, strict=True)
     )
 
 
