@@ -88,7 +88,7 @@ def test_footer_helpers_and_small_utilities_preserve_existing_strings() -> None:
     assert "max 256" in left
     assert "Streaming reply" in right
     assert "Streaming" in right
-    assert "/ commands" in shortcuts
+    assert "/ palette" in shortcuts
     assert "Enter newline" in shortcuts
     assert "Ctrl+J send" in shortcuts
     assert "Ctrl+↑/↓ switch" in shortcuts

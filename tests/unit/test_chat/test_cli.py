@@ -128,4 +128,4 @@ def test_chat_shell_renders_empty_state_and_dynamic_context() -> None:
 
     assert "1 file reference(s) ready" in attachment_context
     assert "0 turns" in footer
-    assert "/ commands" in shortcuts
+    assert "/ palette" in shortcuts

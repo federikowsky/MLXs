@@ -684,6 +684,40 @@ In short:
 
 ---
 
+## Forced local-fork autonomy rule
+
+For this repository, autonomous agents must not stop for local product, UX, scaffold, or sequencing forks once the active direction is already established.
+
+This is a hard rule.
+
+When the current workstream direction is already known, the agent is required to decide autonomously among bounded local alternatives that remain:
+- within the approved architecture,
+- within the current product direction,
+- within the active phase/workstream,
+- and within the accepted guardrails.
+
+This includes choices such as:
+- which bounded UX refinement comes first,
+- which prepared surface becomes active next,
+- whether to continue refinement on the current surface or move to the next already-compatible surface,
+- the ordering of overlay consumers,
+- local interaction sequencing,
+- and similar product-sequencing forks.
+
+The agent must not stop for these cases.
+It must choose the most coherent option, execute it, validate it, and continue.
+
+Stopping is allowed only for:
+- strategic forks,
+- architecture-boundary changes,
+- product-model changes,
+- durable semantic changes,
+- or scope expansions into a genuinely new direction.
+
+Repeatedly stopping on local forks is considered incorrect autonomous behavior.
+
+---
+
 ## GPT-5.4-class autonomy expectations
 
 This repository expects strong autonomous agents to be capable of:

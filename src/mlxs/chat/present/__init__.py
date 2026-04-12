@@ -17,7 +17,16 @@ from mlxs.chat.present.chrome import (
     short_model_name,
     truncate_text,
 )
-from mlxs.chat.present.commands import COMMANDS, CommandSpec, command_context, command_names, help_card
+from mlxs.chat.present.commands import (
+    COMMANDS,
+    CommandPaletteItem,
+    CommandSpec,
+    command_context,
+    command_names,
+    command_palette_items,
+    help_card,
+    render_command_palette_fragments,
+)
 from mlxs.chat.present.progress import build_progress_fragments, progress_visible
 from mlxs.chat.present.sessions import (
     SessionListItem,
@@ -33,6 +42,7 @@ from mlxs.chat.present.transcript import TranscriptEntry, empty_state_fragments,
 
 __all__ = [
     "COMMANDS",
+    "CommandPaletteItem",
     "CommandSpec",
     "ContextRailRow",
     "ContextRailSummary",
@@ -47,6 +57,7 @@ __all__ = [
     "build_progress_fragments",
     "command_context",
     "command_names",
+    "command_palette_items",
     "display_path",
     "empty_context_rail_fragments",
     "empty_state_fragments",
@@ -59,6 +70,7 @@ __all__ = [
     "item_from_session",
     "items_from_summaries",
     "progress_visible",
+    "render_command_palette_fragments",
     "render_context_rail_fragments",
     "render_session_list_fragments",
     "render_entry",

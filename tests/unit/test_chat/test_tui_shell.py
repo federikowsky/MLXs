@@ -93,6 +93,25 @@ def test_chat_shell_run_does_not_append_startup_status_notice() -> None:
     assert shell._notice_entries == []
 
 
+def test_chat_shell_opens_palette_and_inserts_selected_command() -> None:
+    session = ChatSession(model_path="z-lab/Qwen3.5-2B-PARO")
+    shell = ChatShell(
+        "z-lab/Qwen3.5-2B-PARO",
+        session,
+        max_tokens=256,
+        temperature=0.7,
+        repo=RepoContext(cwd=Path("/tmp/project"), cwd_label="~/project", branch="main"),
+    )
+
+    shell._focus_palette()
+    shell._command_palette.filter_buffer.text = "hist"
+    shell._accept_palette()
+
+    assert shell._command_palette.visible is False
+    assert shell._buffer.text == "/history "
+    assert shell._application.layout.current_window is shell._input_window
+
+
 def test_chat_shell_renders_passive_session_rail_items() -> None:
     session = ChatSession(model_path="z-lab/Qwen3.5-2B-PARO")
     shell = ChatShell(

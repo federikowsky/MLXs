@@ -27,6 +27,17 @@ class CommandSpec:
     description: str
 
 
+@dataclass(frozen=True)
+class CommandPaletteItem:
+    """Presentation item for one command in the palette."""
+
+    name: str
+    usage: str
+    description: str
+    insert_text: str
+    search_text: str
+
+
 COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("help",    "/help",                   "Show commands and keyboard shortcuts."),
     CommandSpec("model",   "/model",                  "Show the active model and runtime settings."),
@@ -53,6 +64,7 @@ def help_card() -> str:
         (
             "",
             "keyboard:",
+            "  /              open command palette when composer is empty",
             "  Enter          insert newline",
             "  Ctrl+J         submit current input",
             "  Ctrl+Up/Down   switch active conversation",
@@ -72,7 +84,7 @@ def command_context(text: str) -> str:
     Called on every keystroke when the composer text starts with ``/``.
     """
     if text == "/":
-        return "command mode · Tab shows the full command menu"
+        return "command palette trigger · press / from an empty composer to browse commands"
     matches = [spec for spec in COMMANDS if f"/{spec.name}".startswith(text)]
     if not matches:
         return "unknown command · press Tab to inspect available commands"
@@ -88,3 +100,55 @@ def command_context(text: str) -> str:
 def command_names() -> tuple[str, ...]:
     """Return slash-command names in the format expected by completers."""
     return tuple(f"/{spec.name}" for spec in COMMANDS)
+
+
+def command_palette_items(query: str = "") -> list[CommandPaletteItem]:
+    """Return palette items filtered by the current query."""
+    text = query.strip().lower()
+    items = [
+        CommandPaletteItem(
+            name=spec.name,
+            usage=spec.usage,
+            description=spec.description,
+            insert_text=_command_insert_text(spec),
+            search_text=f"{spec.name} {spec.usage} {spec.description}".lower(),
+        )
+        for spec in COMMANDS
+    ]
+    if not text:
+        return items
+    return [item for item in items if text in item.search_text]
+
+
+def render_command_palette_fragments(
+    items: list[CommandPaletteItem],
+    *,
+    selected_index: int = 0,
+    query: str = "",
+) -> list[tuple[str, str]]:
+    """Render a calm, compact command palette list."""
+    fragments: list[tuple[str, str]] = [
+        ("class:palette.title", " Commands "),
+        ("class:palette.meta", "  Type to filter · Enter to insert · Esc to close"),
+    ]
+    if not items:
+        fragments.append(("", "\n"))
+        message = "  No matching commands" if query.strip() else "  No commands available"
+        fragments.append(("class:palette.empty", message))
+        return fragments
+
+    index = min(max(selected_index, 0), len(items) - 1)
+    for position, item in enumerate(items):
+        title_style = "class:palette.item.active" if position == index else "class:palette.item"
+        meta_style = "class:palette.meta.active" if position == index else "class:palette.meta"
+        prefix = "> " if position == index else "  "
+        fragments.append(("", "\n"))
+        fragments.append((title_style, f"{prefix}{item.usage}\n"))
+        fragments.append((meta_style, f"  {item.description}"))
+    return fragments
+
+
+def _command_insert_text(spec: CommandSpec) -> str:
+    if " " in spec.usage:
+        return f"/{spec.name} "
+    return f"/{spec.name}"

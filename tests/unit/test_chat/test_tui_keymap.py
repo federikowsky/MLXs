@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.document import Document
 
 from mlxs.chat.tui.keymap import build_chat_key_bindings
 
@@ -13,10 +14,17 @@ def test_build_chat_key_bindings_registers_expected_keys() -> None:
         get_state=lambda: "idle",
         get_cancel_callback=lambda: None,
         is_filter_focused=lambda: False,
+        is_palette_open=lambda: False,
+        is_palette_focused=lambda: False,
         focus_filter=lambda: None,
         focus_composer=lambda: None,
+        focus_palette=lambda: None,
+        close_palette=lambda: None,
         get_previous_session_callback=lambda: None,
         get_next_session_callback=lambda: None,
+        palette_previous=lambda: None,
+        palette_next=lambda: None,
+        palette_accept=lambda: None,
         submit_buffer=lambda: None,
         history_previous=lambda: None,
         history_next=lambda: None,
@@ -36,6 +44,7 @@ def test_build_chat_key_bindings_registers_expected_keys() -> None:
     assert ("Keys.ControlDown",) in bindings
     assert ("Keys.Up",) in bindings
     assert ("Keys.Down",) in bindings
+    assert ("/",) in bindings
 
 
 def test_escape_invokes_cancel_when_generating() -> None:
@@ -46,10 +55,17 @@ def test_escape_invokes_cancel_when_generating() -> None:
         get_state=lambda: "generating",
         get_cancel_callback=lambda: lambda: called.append("cancel"),
         is_filter_focused=lambda: False,
+        is_palette_open=lambda: False,
+        is_palette_focused=lambda: False,
         focus_filter=lambda: None,
         focus_composer=lambda: None,
+        focus_palette=lambda: None,
+        close_palette=lambda: None,
         get_previous_session_callback=lambda: None,
         get_next_session_callback=lambda: None,
+        palette_previous=lambda: None,
+        palette_next=lambda: None,
+        palette_accept=lambda: None,
         submit_buffer=lambda: None,
         history_previous=lambda: None,
         history_next=lambda: None,
@@ -71,10 +87,17 @@ def test_enter_inserts_newline_when_idle() -> None:
         get_state=lambda: "idle",
         get_cancel_callback=lambda: None,
         is_filter_focused=lambda: False,
+        is_palette_open=lambda: False,
+        is_palette_focused=lambda: False,
         focus_filter=lambda: None,
         focus_composer=lambda: None,
+        focus_palette=lambda: None,
+        close_palette=lambda: None,
         get_previous_session_callback=lambda: None,
         get_next_session_callback=lambda: None,
+        palette_previous=lambda: None,
+        palette_next=lambda: None,
+        palette_accept=lambda: None,
         submit_buffer=lambda: None,
         history_previous=lambda: None,
         history_next=lambda: None,
@@ -97,10 +120,17 @@ def test_ctrl_j_submits_buffer() -> None:
         get_state=lambda: "idle",
         get_cancel_callback=lambda: None,
         is_filter_focused=lambda: False,
+        is_palette_open=lambda: False,
+        is_palette_focused=lambda: False,
         focus_filter=lambda: None,
         focus_composer=lambda: None,
+        focus_palette=lambda: None,
+        close_palette=lambda: None,
         get_previous_session_callback=lambda: None,
         get_next_session_callback=lambda: None,
+        palette_previous=lambda: None,
+        palette_next=lambda: None,
+        palette_accept=lambda: None,
         submit_buffer=lambda: called.append("submit"),
         history_previous=lambda: None,
         history_next=lambda: None,
@@ -123,10 +153,17 @@ def test_ctrl_up_and_ctrl_down_invoke_session_callbacks_only_when_idle() -> None
         get_state=lambda: "idle",
         get_cancel_callback=lambda: None,
         is_filter_focused=lambda: False,
+        is_palette_open=lambda: False,
+        is_palette_focused=lambda: False,
         focus_filter=lambda: None,
         focus_composer=lambda: None,
+        focus_palette=lambda: None,
+        close_palette=lambda: None,
         get_previous_session_callback=lambda: lambda: called.append("prev"),
         get_next_session_callback=lambda: lambda: called.append("next"),
+        palette_previous=lambda: None,
+        palette_next=lambda: None,
+        palette_accept=lambda: None,
         submit_buffer=lambda: None,
         history_previous=lambda: None,
         history_next=lambda: None,
@@ -153,10 +190,17 @@ def test_ctrl_up_does_not_switch_sessions_while_generating() -> None:
         get_state=lambda: "generating",
         get_cancel_callback=lambda: None,
         is_filter_focused=lambda: False,
+        is_palette_open=lambda: False,
+        is_palette_focused=lambda: False,
         focus_filter=lambda: None,
         focus_composer=lambda: None,
+        focus_palette=lambda: None,
+        close_palette=lambda: None,
         get_previous_session_callback=lambda: lambda: called.append("prev"),
         get_next_session_callback=lambda: lambda: called.append("next"),
+        palette_previous=lambda: None,
+        palette_next=lambda: None,
+        palette_accept=lambda: None,
         submit_buffer=lambda: None,
         history_previous=lambda: None,
         history_next=lambda: None,
@@ -179,10 +223,17 @@ def test_ctrl_f_focuses_filter_when_idle() -> None:
         get_state=lambda: "idle",
         get_cancel_callback=lambda: None,
         is_filter_focused=lambda: False,
+        is_palette_open=lambda: False,
+        is_palette_focused=lambda: False,
         focus_filter=lambda: called.append("focus-filter"),
         focus_composer=lambda: called.append("focus-composer"),
+        focus_palette=lambda: called.append("focus-palette"),
+        close_palette=lambda: called.append("close-palette"),
         get_previous_session_callback=lambda: None,
         get_next_session_callback=lambda: None,
+        palette_previous=lambda: None,
+        palette_next=lambda: None,
+        palette_accept=lambda: None,
         submit_buffer=lambda: None,
         history_previous=lambda: None,
         history_next=lambda: None,
@@ -205,10 +256,17 @@ def test_escape_returns_focus_from_filter_to_composer() -> None:
         get_state=lambda: "idle",
         get_cancel_callback=lambda: None,
         is_filter_focused=lambda: True,
+        is_palette_open=lambda: False,
+        is_palette_focused=lambda: False,
         focus_filter=lambda: called.append("focus-filter"),
         focus_composer=lambda: called.append("focus-composer"),
+        focus_palette=lambda: called.append("focus-palette"),
+        close_palette=lambda: called.append("close-palette"),
         get_previous_session_callback=lambda: None,
         get_next_session_callback=lambda: None,
+        palette_previous=lambda: None,
+        palette_next=lambda: None,
+        palette_accept=lambda: None,
         submit_buffer=lambda: None,
         history_previous=lambda: None,
         history_next=lambda: None,
@@ -221,3 +279,66 @@ def test_escape_returns_focus_from_filter_to_composer() -> None:
     binding.handler(SimpleNamespace(app=None))
 
     assert called == ["focus-composer"]
+
+
+def test_slash_opens_palette_when_composer_is_empty() -> None:
+    buffer = Buffer()
+    called: list[str] = []
+    kb = build_chat_key_bindings(
+        buffer=buffer,
+        get_state=lambda: "idle",
+        get_cancel_callback=lambda: None,
+        is_filter_focused=lambda: False,
+        is_palette_open=lambda: False,
+        is_palette_focused=lambda: False,
+        focus_filter=lambda: called.append("focus-filter"),
+        focus_composer=lambda: called.append("focus-composer"),
+        focus_palette=lambda: called.append("focus-palette"),
+        close_palette=lambda: called.append("close-palette"),
+        get_previous_session_callback=lambda: None,
+        get_next_session_callback=lambda: None,
+        palette_previous=lambda: None,
+        palette_next=lambda: None,
+        palette_accept=lambda: called.append("accept-palette"),
+        submit_buffer=lambda: None,
+        history_previous=lambda: None,
+        history_next=lambda: None,
+        invalidate=lambda: None,
+    )
+
+    binding = next(binding for binding in kb.bindings if tuple(str(key) for key in binding.keys) == ("/",))
+    binding.handler(SimpleNamespace(app=SimpleNamespace(current_buffer=buffer)))
+
+    assert called == ["focus-palette"]
+    assert buffer.text == ""
+
+
+def test_slash_inserts_text_when_composer_is_not_empty() -> None:
+    buffer = Buffer()
+    buffer.document = Document("he", cursor_position=2)
+    kb = build_chat_key_bindings(
+        buffer=buffer,
+        get_state=lambda: "idle",
+        get_cancel_callback=lambda: None,
+        is_filter_focused=lambda: False,
+        is_palette_open=lambda: False,
+        is_palette_focused=lambda: False,
+        focus_filter=lambda: None,
+        focus_composer=lambda: None,
+        focus_palette=lambda: None,
+        close_palette=lambda: None,
+        get_previous_session_callback=lambda: None,
+        get_next_session_callback=lambda: None,
+        palette_previous=lambda: None,
+        palette_next=lambda: None,
+        palette_accept=lambda: None,
+        submit_buffer=lambda: None,
+        history_previous=lambda: None,
+        history_next=lambda: None,
+        invalidate=lambda: None,
+    )
+
+    binding = next(binding for binding in kb.bindings if tuple(str(key) for key in binding.keys) == ("/",))
+    binding.handler(SimpleNamespace(app=SimpleNamespace(current_buffer=buffer)))
+
+    assert buffer.text == "he/"

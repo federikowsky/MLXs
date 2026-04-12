@@ -49,7 +49,8 @@ from mlxs.chat.session import ChatSession
 from mlxs.chat.tui.completion import ChatCompleter
 from mlxs.chat.tui.context import ContextRail
 from mlxs.chat.tui.keymap import build_chat_key_bindings
-from mlxs.chat.tui.overlay import anchored_overlay
+from mlxs.chat.tui.overlay import anchored_overlay, positioned_overlay
+from mlxs.chat.tui.palette import CommandPalette
 from mlxs.chat.tui.rail import SessionRail
 from mlxs.chat.tui.scaffold import (
     BodyScaffoldParts,
@@ -149,6 +150,7 @@ class ChatShell:
         self._session_list_window = self._session_rail.container
         self._context_rail = ContextRail()
         self._context_window = self._context_rail.window
+        self._command_palette = CommandPalette(invalidate=self._invalidate)
         self._header_window = Window(
             content=FormattedTextControl(self._header_fragments),
             height=2,
@@ -226,6 +228,12 @@ class ChatShell:
                         xcursor=True,
                         ycursor=True,
                     ),
+                    positioned_overlay(
+                        self._command_palette.container,
+                        top=2,
+                        left=8,
+                        right=8,
+                    ),
                 ),
             )
         )
@@ -238,10 +246,18 @@ class ChatShell:
                 get_cancel_callback=lambda: self._cancel_callback,
                 is_filter_focused=lambda: self._application.layout.current_window
                 is self._session_rail.filter_window,
+                is_palette_open=lambda: self._command_palette.visible,
+                is_palette_focused=lambda: self._application.layout.current_window
+                is self._command_palette.filter_window,
                 focus_filter=self._focus_filter,
                 focus_composer=self._focus_composer,
+                focus_palette=self._focus_palette,
+                close_palette=self._close_palette,
                 get_previous_session_callback=lambda: self._previous_session_callback,
                 get_next_session_callback=lambda: self._next_session_callback,
+                palette_previous=self._palette_previous,
+                palette_next=self._palette_next,
+                palette_accept=self._accept_palette,
                 submit_buffer=self._submit_buffer,
                 history_previous=self._history_previous,
                 history_next=self._history_next,
@@ -271,12 +287,42 @@ class ChatShell:
         self._application.exit()
 
     def _focus_filter(self) -> None:
+        if self._command_palette.visible:
+            self._command_palette.close()
         self._application.layout.focus(self._session_rail.filter_window)
         self._invalidate()
 
     def _focus_composer(self) -> None:
+        if self._command_palette.visible:
+            self._command_palette.close()
         self._application.layout.focus(self._input_window)
         self._invalidate()
+
+    def _focus_palette(self) -> None:
+        self._buffer.complete_state = None
+        self._command_palette.open()
+        self._application.layout.focus(self._command_palette.filter_window)
+        self._invalidate()
+
+    def _close_palette(self) -> None:
+        self._command_palette.close()
+        self._application.layout.focus(self._input_window)
+        self._invalidate()
+
+    def _palette_previous(self) -> None:
+        self._command_palette.move_selection(-1)
+
+    def _palette_next(self) -> None:
+        self._command_palette.move_selection(1)
+
+    def _accept_palette(self) -> None:
+        item = self._command_palette.selected_item()
+        if item is None:
+            self._close_palette()
+            return
+        text = item.insert_text
+        self._buffer.document = Document(text, cursor_position=len(text))
+        self._close_palette()
 
     def sync_session(
         self,

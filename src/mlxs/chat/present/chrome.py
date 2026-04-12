@@ -81,7 +81,7 @@ def build_composer_shortcuts_fragments(*, state: str) -> list[tuple[str, str]]:
     elif state == "cancelling":
         text = "Waiting for generation to stop..."
     else:
-        text = "/ commands · @ files · Enter newline · Ctrl+J send · Ctrl+↑/↓ switch"
+        text = "/ palette · @ files · Enter newline · Ctrl+J send · Ctrl+↑/↓ switch"
     return [("class:composer.shortcuts", f" {text}")]
 
 
