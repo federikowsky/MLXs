@@ -20,6 +20,7 @@ def test_help_card_contains_expected_commands_and_shortcuts() -> None:
     assert "/help" in text
     assert "/retry" in text
     assert "/              open command palette when composer is empty" in text
+    assert "@              open reference picker at a mention boundary" in text
     assert "Enter          insert newline" in text
     assert "Ctrl+J         submit current input" in text
     assert "Ctrl+Up/Down   switch active conversation" in text
@@ -36,6 +37,7 @@ def test_command_palette_items_filter_and_insert_text() -> None:
     items = command_palette_items("hist")
 
     assert [item.name for item in items] == ["history"]
+    assert items[0].category == "Session"
     assert items[0].insert_text == "/history "
 
 
@@ -47,4 +49,5 @@ def test_render_command_palette_fragments_marks_selected_item() -> None:
     )
 
     assert "Commands" in rendered
+    assert "Conversation" in rendered
     assert "/retry" in rendered

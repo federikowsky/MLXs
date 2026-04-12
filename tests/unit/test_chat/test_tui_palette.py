@@ -16,7 +16,9 @@ def test_command_palette_opens_filters_and_selects_items() -> None:
     assert palette.visible is True
     assert selected is not None
     assert selected.name == "retry"
+    assert selected.category == "Conversation"
     assert "/retry" in rendered
+    assert "Conversation" in rendered
     assert "Regenerate the last user turn." in rendered
     assert invalidate_calls
 

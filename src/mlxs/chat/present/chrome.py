@@ -34,6 +34,8 @@ def build_composer_context_fragments(
     state: str,
     title: str,
     system_on: bool,
+    palette_open: bool = False,
+    reference_picker_open: bool = False,
     command_context: str | None = None,
     mention_paths: list[str] | None = None,
 ) -> list[tuple[str, str]]:
@@ -41,12 +43,16 @@ def build_composer_context_fragments(
         return [("class:composer.context", " assistant is responding live")]
     if state == "cancelling":
         return [("class:composer.context", " stopping the current turn cleanly")]
+    if reference_picker_open:
+        return [("class:composer.context", " reference picker open · filter files and insert one into the composer")]
+    if palette_open:
+        return [("class:composer.context", " command palette open · filter commands and insert one into the composer")]
 
     stripped = text.strip()
     if not stripped:
         context = (
             f" working in {title} · system {'on' if system_on else 'off'}"
-            " · ask anything or attach files with @path"
+            " · ask anything or insert files with @"
         )
         return [("class:composer.context", context)]
 
@@ -75,13 +81,22 @@ def build_composer_context_fragments(
     return [("class:composer.context", f" drafting a request in {title}")]
 
 
-def build_composer_shortcuts_fragments(*, state: str) -> list[tuple[str, str]]:
+def build_composer_shortcuts_fragments(
+    *,
+    state: str,
+    palette_open: bool = False,
+    reference_picker_open: bool = False,
+) -> list[tuple[str, str]]:
     if state == "generating":
         text = "Esc cancel · Ctrl+C stop"
     elif state == "cancelling":
         text = "Waiting for generation to stop..."
+    elif reference_picker_open:
+        text = "Type to filter · Up/Down move · Enter insert · Esc close"
+    elif palette_open:
+        text = "Type to filter · Up/Down move · Enter insert · Esc close"
     else:
-        text = "/ palette · @ files · Enter newline · Ctrl+J send · Ctrl+↑/↓ switch"
+        text = "/ palette · @ picker · Enter newline · Ctrl+J send · Ctrl+↑/↓ switch"
     return [("class:composer.shortcuts", f" {text}")]
 
 

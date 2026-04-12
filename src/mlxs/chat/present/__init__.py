@@ -28,6 +28,7 @@ from mlxs.chat.present.commands import (
     render_command_palette_fragments,
 )
 from mlxs.chat.present.progress import build_progress_fragments, progress_visible
+from mlxs.chat.present.references import ReferencePickerItem, render_reference_picker_fragments
 from mlxs.chat.present.sessions import (
     SessionListItem,
     empty_session_list_fragments,
@@ -46,6 +47,7 @@ __all__ = [
     "CommandSpec",
     "ContextRailRow",
     "ContextRailSummary",
+    "ReferencePickerItem",
     "SessionListItem",
     "TranscriptEntry",
     "build_context_rail_summary",
@@ -72,6 +74,7 @@ __all__ = [
     "progress_visible",
     "render_command_palette_fragments",
     "render_context_rail_fragments",
+    "render_reference_picker_fragments",
     "render_session_list_fragments",
     "render_entry",
     "short_model_name",

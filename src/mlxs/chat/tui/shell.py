@@ -46,11 +46,12 @@ from mlxs.chat.present.transcript import (
     render_entry,
 )
 from mlxs.chat.session import ChatSession
-from mlxs.chat.tui.completion import ChatCompleter
+from mlxs.chat.tui.completion import ChatCompleter, mention_completion_token
 from mlxs.chat.tui.context import ContextRail
 from mlxs.chat.tui.keymap import build_chat_key_bindings
 from mlxs.chat.tui.overlay import anchored_overlay, positioned_overlay
 from mlxs.chat.tui.palette import CommandPalette
+from mlxs.chat.tui.reference_picker import ReferencePicker
 from mlxs.chat.tui.rail import SessionRail
 from mlxs.chat.tui.scaffold import (
     BodyScaffoldParts,
@@ -151,6 +152,7 @@ class ChatShell:
         self._context_rail = ContextRail()
         self._context_window = self._context_rail.window
         self._command_palette = CommandPalette(invalidate=self._invalidate)
+        self._reference_picker = ReferencePicker(cwd=lambda: self._repo.cwd, invalidate=self._invalidate)
         self._header_window = Window(
             content=FormattedTextControl(self._header_fragments),
             height=2,
@@ -234,6 +236,12 @@ class ChatShell:
                         left=8,
                         right=8,
                     ),
+                    positioned_overlay(
+                        self._reference_picker.container,
+                        top=2,
+                        left=8,
+                        right=8,
+                    ),
                 ),
             )
         )
@@ -249,15 +257,23 @@ class ChatShell:
                 is_palette_open=lambda: self._command_palette.visible,
                 is_palette_focused=lambda: self._application.layout.current_window
                 is self._command_palette.filter_window,
+                is_reference_picker_open=lambda: self._reference_picker.visible,
+                is_reference_picker_focused=lambda: self._application.layout.current_window
+                is self._reference_picker.filter_window,
                 focus_filter=self._focus_filter,
                 focus_composer=self._focus_composer,
                 focus_palette=self._focus_palette,
                 close_palette=self._close_palette,
+                open_reference_picker=self._open_reference_picker,
+                close_reference_picker=self._close_reference_picker,
                 get_previous_session_callback=lambda: self._previous_session_callback,
                 get_next_session_callback=lambda: self._next_session_callback,
                 palette_previous=self._palette_previous,
                 palette_next=self._palette_next,
                 palette_accept=self._accept_palette,
+                reference_previous=self._reference_previous,
+                reference_next=self._reference_next,
+                reference_accept=self._accept_reference,
                 submit_buffer=self._submit_buffer,
                 history_previous=self._history_previous,
                 history_next=self._history_next,
@@ -289,23 +305,65 @@ class ChatShell:
     def _focus_filter(self) -> None:
         if self._command_palette.visible:
             self._command_palette.close()
+        if self._reference_picker.visible:
+            self._reference_picker.close()
         self._application.layout.focus(self._session_rail.filter_window)
         self._invalidate()
 
     def _focus_composer(self) -> None:
         if self._command_palette.visible:
             self._command_palette.close()
+        if self._reference_picker.visible:
+            self._reference_picker.close()
         self._application.layout.focus(self._input_window)
         self._invalidate()
 
     def _focus_palette(self) -> None:
         self._buffer.complete_state = None
+        if self._reference_picker.visible:
+            self._reference_picker.close()
         self._command_palette.open()
         self._application.layout.focus(self._command_palette.filter_window)
         self._invalidate()
 
     def _close_palette(self) -> None:
         self._command_palette.close()
+        self._application.layout.focus(self._input_window)
+        self._invalidate()
+
+    def _open_reference_picker(self) -> None:
+        mention_token = mention_completion_token(self._buffer.document.text_before_cursor)
+        if mention_token is not None:
+            self._buffer.complete_state = None
+            if self._command_palette.visible:
+                self._command_palette.close()
+            cursor = self._buffer.cursor_position
+            self._reference_picker.open(
+                replace_start=cursor - len(mention_token),
+                replace_end=cursor,
+                initial_query=mention_token[1:],
+            )
+            self._application.layout.focus(self._reference_picker.filter_window)
+            self._invalidate()
+            return
+        if not self._reference_trigger_allowed():
+            text = self._buffer.text
+            cursor = self._buffer.cursor_position
+            new_text = f"{text[:cursor]}@{text[cursor:]}"
+            self._buffer.document = Document(new_text, cursor_position=cursor + 1)
+            return
+        self._buffer.complete_state = None
+        if self._command_palette.visible:
+            self._command_palette.close()
+        self._reference_picker.open(
+            replace_start=self._buffer.cursor_position,
+            replace_end=self._buffer.cursor_position,
+        )
+        self._application.layout.focus(self._reference_picker.filter_window)
+        self._invalidate()
+
+    def _close_reference_picker(self) -> None:
+        self._reference_picker.close()
         self._application.layout.focus(self._input_window)
         self._invalidate()
 
@@ -323,6 +381,38 @@ class ChatShell:
         text = item.insert_text
         self._buffer.document = Document(text, cursor_position=len(text))
         self._close_palette()
+
+    def _reference_previous(self) -> None:
+        self._reference_picker.move_selection(-1)
+
+    def _reference_next(self) -> None:
+        self._reference_picker.move_selection(1)
+
+    def _accept_reference(self) -> None:
+        item = self._reference_picker.selected_item()
+        if item is None:
+            self._close_reference_picker()
+            return
+        start = self._reference_picker.replace_start
+        end = self._reference_picker.replace_end
+        text = self._buffer.text
+        insert_text = item.insert_text
+        if end == len(text) or (end < len(text) and not text[end].isspace()):
+            insert_text = f"{insert_text} "
+        new_text = f"{text[:start]}{insert_text}{text[end:]}"
+        cursor = start + len(insert_text)
+        self._buffer.document = Document(new_text, cursor_position=cursor)
+        self._close_reference_picker()
+
+    def _reference_trigger_allowed(self) -> bool:
+        if self._application.layout.current_window is not self._input_window:
+            return False
+        if self._buffer.text == "":
+            return True
+        before = self._buffer.document.text_before_cursor
+        if not before:
+            return True
+        return before[-1].isspace()
 
     def sync_session(
         self,
@@ -485,12 +575,18 @@ class ChatShell:
             state=state,
             title=title,
             system_on=system_on,
+            palette_open=self._command_palette.visible,
+            reference_picker_open=self._reference_picker.visible,
             command_context=command_context(text.strip()) if text.strip().startswith("/") else None,
             mention_paths=[match.path for match in mentions],
         )
 
     def _composer_shortcuts_fragments(self) -> list[tuple[str, str]]:
-        return build_composer_shortcuts_fragments(state=self._state)
+        return build_composer_shortcuts_fragments(
+            state=self._state,
+            palette_open=self._command_palette.visible,
+            reference_picker_open=self._reference_picker.visible,
+        )
 
     def _footer_left_fragments(self) -> list[tuple[str, str]]:
         with self._lock:

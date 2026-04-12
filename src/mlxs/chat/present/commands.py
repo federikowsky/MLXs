@@ -25,6 +25,7 @@ class CommandSpec:
     name: str
     usage: str
     description: str
+    category: str
 
 
 @dataclass(frozen=True)
@@ -34,24 +35,25 @@ class CommandPaletteItem:
     name: str
     usage: str
     description: str
+    category: str
     insert_text: str
     search_text: str
 
 
 COMMANDS: tuple[CommandSpec, ...] = (
-    CommandSpec("help",    "/help",                   "Show commands and keyboard shortcuts."),
-    CommandSpec("model",   "/model",                  "Show the active model and runtime settings."),
-    CommandSpec("new",     "/new",                    "Start a fresh chat session."),
-    CommandSpec("clear",   "/clear",                  "Clear the current conversation."),
-    CommandSpec("undo",    "/undo",                   "Remove the last user/assistant turn."),
-    CommandSpec("retry",   "/retry",                  "Regenerate the last user turn."),
-    CommandSpec("system",  "/system <text>|clear",    "Set, inspect, or clear the system prompt."),
-    CommandSpec("title",   "/title <text>",           "Rename the current chat session."),
-    CommandSpec("history", "/history [n]",            "Show recent transcript lines."),
-    CommandSpec("export",  "/export [path]",          "Write the current transcript to Markdown."),
-    CommandSpec("status",  "/status",                 "Alias for /stats."),
-    CommandSpec("stats",   "/stats",                  "Show the current session summary."),
-    CommandSpec("quit",    "/quit",                   "Exit the chat."),
+    CommandSpec("help",    "/help",                   "Show commands and keyboard shortcuts.", "General"),
+    CommandSpec("quit",    "/quit",                   "Exit the chat.", "General"),
+    CommandSpec("new",     "/new",                    "Start a fresh chat session.", "Conversation"),
+    CommandSpec("clear",   "/clear",                  "Clear the current conversation.", "Conversation"),
+    CommandSpec("undo",    "/undo",                   "Remove the last user/assistant turn.", "Conversation"),
+    CommandSpec("retry",   "/retry",                  "Regenerate the last user turn.", "Conversation"),
+    CommandSpec("title",   "/title <text>",           "Rename the current chat session.", "Conversation"),
+    CommandSpec("system",  "/system <text>|clear",    "Set, inspect, or clear the system prompt.", "Session"),
+    CommandSpec("history", "/history [n]",            "Show recent transcript lines.", "Session"),
+    CommandSpec("export",  "/export [path]",          "Write the current transcript to Markdown.", "Session"),
+    CommandSpec("status",  "/status",                 "Alias for /stats.", "Session"),
+    CommandSpec("stats",   "/stats",                  "Show the current session summary.", "Session"),
+    CommandSpec("model",   "/model",                  "Show the active model and runtime settings.", "Runtime"),
 )
 
 
@@ -65,6 +67,7 @@ def help_card() -> str:
             "",
             "keyboard:",
             "  /              open command palette when composer is empty",
+            "  @              open reference picker at a mention boundary",
             "  Enter          insert newline",
             "  Ctrl+J         submit current input",
             "  Ctrl+Up/Down   switch active conversation",
@@ -110,8 +113,9 @@ def command_palette_items(query: str = "") -> list[CommandPaletteItem]:
             name=spec.name,
             usage=spec.usage,
             description=spec.description,
+            category=spec.category,
             insert_text=_command_insert_text(spec),
-            search_text=f"{spec.name} {spec.usage} {spec.description}".lower(),
+            search_text=f"{spec.name} {spec.usage} {spec.description} {spec.category}".lower(),
         )
         for spec in COMMANDS
     ]
@@ -138,7 +142,12 @@ def render_command_palette_fragments(
         return fragments
 
     index = min(max(selected_index, 0), len(items) - 1)
+    current_category: str | None = None
     for position, item in enumerate(items):
+        if item.category != current_category:
+            current_category = item.category
+            fragments.append(("", "\n"))
+            fragments.append(("class:palette.section", f" {current_category}"))
         title_style = "class:palette.item.active" if position == index else "class:palette.item"
         meta_style = "class:palette.meta.active" if position == index else "class:palette.meta"
         prefix = "> " if position == index else "  "

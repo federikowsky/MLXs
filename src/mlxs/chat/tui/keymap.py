@@ -15,15 +15,22 @@ def build_chat_key_bindings(
     is_filter_focused: Callable[[], bool],
     is_palette_open: Callable[[], bool],
     is_palette_focused: Callable[[], bool],
+    is_reference_picker_open: Callable[[], bool],
+    is_reference_picker_focused: Callable[[], bool],
     focus_filter: Callable[[], None],
     focus_composer: Callable[[], None],
     focus_palette: Callable[[], None],
     close_palette: Callable[[], None],
+    open_reference_picker: Callable[[], None],
+    close_reference_picker: Callable[[], None],
     get_previous_session_callback: Callable[[], Callable[[], None] | None],
     get_next_session_callback: Callable[[], Callable[[], None] | None],
     palette_previous: Callable[[], None],
     palette_next: Callable[[], None],
     palette_accept: Callable[[], None],
+    reference_previous: Callable[[], None],
+    reference_next: Callable[[], None],
+    reference_accept: Callable[[], None],
     submit_buffer: Callable[[], None],
     history_previous: Callable[[], None],
     history_next: Callable[[], None],
@@ -34,16 +41,39 @@ def build_chat_key_bindings(
 
     @kb.add("/")
     def _slash(event) -> None:
-        if is_palette_focused():
+        if (
+            is_palette_focused()
+            or is_reference_picker_focused()
+            or is_filter_focused()
+            or event.app.current_buffer is not buffer
+        ):
             event.app.current_buffer.insert_text("/")
             return
-        if get_state() == "idle" and not is_palette_open() and not is_filter_focused() and buffer.text == "":
+        if get_state() == "idle" and not is_palette_open() and buffer.text == "":
             focus_palette()
             return
         buffer.insert_text("/")
 
+    @kb.add("@")
+    def _at(event) -> None:
+        if (
+            is_palette_focused()
+            or is_reference_picker_focused()
+            or is_filter_focused()
+            or event.app.current_buffer is not buffer
+        ):
+            event.app.current_buffer.insert_text("@")
+            return
+        if get_state() == "idle" and not is_palette_open() and not is_reference_picker_open():
+            open_reference_picker()
+            return
+        buffer.insert_text("@")
+
     @kb.add("enter")
     def _newline(event) -> None:
+        if is_reference_picker_focused():
+            reference_accept()
+            return
         if is_palette_focused():
             palette_accept()
             return
@@ -58,6 +88,9 @@ def build_chat_key_bindings(
 
     @kb.add("c-j")
     def _submit(event) -> None:
+        if is_reference_picker_focused():
+            reference_accept()
+            return
         if is_palette_focused():
             palette_accept()
             return
@@ -86,6 +119,9 @@ def build_chat_key_bindings(
 
     @kb.add("escape")
     def _escape(event) -> None:
+        if is_reference_picker_open():
+            close_reference_picker()
+            return
         if is_palette_open():
             close_palette()
             return
@@ -116,10 +152,19 @@ def build_chat_key_bindings(
     def _focus_filter(event) -> None:
         if get_state() != "idle":
             return
+        if is_reference_picker_open():
+            focus_composer()
+            return
+        if is_palette_open():
+            focus_palette()
+            return
         focus_filter()
 
     @kb.add("up")
     def _history_up(event) -> None:
+        if is_reference_picker_focused():
+            reference_previous()
+            return
         if is_palette_focused():
             palette_previous()
             return
@@ -129,6 +174,9 @@ def build_chat_key_bindings(
 
     @kb.add("down")
     def _history_down(event) -> None:
+        if is_reference_picker_focused():
+            reference_next()
+            return
         if is_palette_focused():
             palette_next()
             return

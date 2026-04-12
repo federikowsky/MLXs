@@ -18,8 +18,12 @@ def test_chat_style_contains_core_shell_regions() -> None:
     assert "transcript" in selectors
     assert "composer.prompt" in selectors
     assert "palette.title" in selectors
+    assert "palette.section" in selectors
     assert "palette.item.active" in selectors
     assert "palette.filter" in selectors
+    assert "picker.title" in selectors
+    assert "picker.item.active" in selectors
+    assert "picker.filter" in selectors
     assert "progress.state" in selectors
     assert "statusbar.state" in selectors
     assert "label.status" in selectors

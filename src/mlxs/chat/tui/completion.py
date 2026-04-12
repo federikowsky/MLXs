@@ -48,11 +48,11 @@ class ChatCompleter(Completer):
                 )
             return
 
-        mention_token = _mention_completion_token(before)
+        mention_token = mention_completion_token(before)
         if mention_token is None:
             return
         mention_prefix = mention_token[1:]
-        for candidate in _path_completion_values(mention_prefix, Path.cwd()):
+        for candidate in reference_candidate_values(mention_prefix, Path.cwd()):
             yield Completion(
                 f"@{candidate}",
                 start_position=-len(mention_token),
@@ -78,9 +78,9 @@ def build_completions(
     if export_prefix is not None:
         return _path_completion_values(export_prefix, workdir)
 
-    mention_token = _mention_completion_token(buffer)
+    mention_token = mention_completion_token(buffer)
     if mention_token is not None:
-        return [f"@{value}" for value in _path_completion_values(mention_token[1:], workdir)]
+        return [f"@{value}" for value in reference_candidate_values(mention_token[1:], workdir)]
 
     return []
 
@@ -116,6 +116,12 @@ def _path_completion_values(raw_prefix: str, cwd: Path) -> list[str]:
     return matches
 
 
+def reference_candidate_values(raw_prefix: str, cwd: Path) -> list[str]:
+    """Return file-only candidate values for @ reference insertion."""
+    values = _path_completion_values(raw_prefix, cwd)
+    return [value for value in values if not value.endswith("/")]
+
+
 def _export_completion_prefix(buffer: str) -> str | None:
     stripped = buffer.lstrip()
     if not stripped.startswith("/export "):
@@ -123,7 +129,7 @@ def _export_completion_prefix(buffer: str) -> str | None:
     return stripped[len("/export ") :]
 
 
-def _mention_completion_token(buffer: str) -> str | None:
+def mention_completion_token(buffer: str) -> str | None:
     before = buffer.rstrip("\n")
     for start in range(len(before) - 1, -1, -1):
         if before[start] != "@":
@@ -137,3 +143,11 @@ def _mention_completion_token(buffer: str) -> str | None:
             return None
         return token
     return None
+
+
+__all__ = [
+    "ChatCompleter",
+    "build_completions",
+    "mention_completion_token",
+    "reference_candidate_values",
+]
