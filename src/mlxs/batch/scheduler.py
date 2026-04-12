@@ -149,98 +149,52 @@ class BatchScheduler:
         """
         results: dict[str, list[TokenEvent]] = {}
 
-        # Prefill pending sequences (one at a time for simplicity)
-        self._prefill_pending(results)
+        # When the batch is empty, admit a full cohort before the first decode
+        # step so aligned requests can batch together immediately.
+        self._prefill_pending(results, fill_capacity=not self._active)
 
         # Decode active sequences
         self._decode_active(results)
 
         return results
 
-    def _prefill_pending(self, results: dict[str, list[TokenEvent]]) -> None:
-        """Prefill one pending sequence if there's capacity."""
-        if not self._pending:
-            return
-        if len(self._active) >= self._completion_batch_size:
-            return
+    def _prefill_pending(
+        self,
+        results: dict[str, list[TokenEvent]],
+        *,
+        fill_capacity: bool = False,
+    ) -> None:
+        """Prefill pending sequences while there is decode capacity."""
+        while self._pending and len(self._active) < self._completion_batch_size:
+            request_id, seq = next(iter(self._pending.items()))
+            del self._pending[request_id]
 
-        # Take the first pending sequence
-        request_id, seq = next(iter(self._pending.items()))
-        del self._pending[request_id]
+            seq.state = _SeqState.PREFILLING
+            seq.setup()
+            seq.cache = seq.model.make_cache()
 
-        seq.state = _SeqState.PREFILLING
-        seq.setup()
-        seq.cache = seq.model.make_cache()
+            prompt_array = mx.array(seq.prompt_tokens)
+            total = len(seq.prompt_tokens)
 
-        prompt_array = mx.array(seq.prompt_tokens)
-        total = len(seq.prompt_tokens)
+            offset = 0
+            while total - offset > 1:
+                remaining = (total - offset) - 1
+                n = min(self._prefill_step_size, remaining)
+                chunk = prompt_array[offset : offset + n]
+                seq.model(chunk[None], cache=seq.cache)
+                mx.eval([c.state for c in seq.cache if c.state is not None])
+                offset += n
+                mx.clear_cache()
 
-        # Chunked prefill
-        offset = 0
-        while total - offset > 1:
-            remaining = (total - offset) - 1
-            n = min(self._prefill_step_size, remaining)
-            chunk = prompt_array[offset : offset + n]
-            seq.model(chunk[None], cache=seq.cache)
-            mx.eval([c.state for c in seq.cache if c.state is not None])
-            offset += n
-            mx.clear_cache()
-
-        # Last token — get logits and sample first token
-        last_token = prompt_array[offset:]
-        logits = seq.model(last_token[None], cache=seq.cache)
-        logits = logits[:, -1, :]
-        logprobs = logits - mx.logsumexp(logits, keepdims=True)
-        y = seq.sampler(logprobs)
-        mx.eval(y)
-
-        token_id = y.item()
-        text = seq.tokenizer.decode(token_id)
-        finish_reason = seq.stop.check(token_id, text)
-
-        event = TokenEvent(
-            token_id=token_id,
-            text=text,
-            finish_reason=finish_reason,
-            prompt_tokens=seq.prompt_token_count,
-            generation_tokens=1,
-        )
-        seq.events.append(event)
-        results[request_id] = [event]
-
-        if finish_reason is not None:
-            seq.state = _SeqState.FINISHED
-            self._finished[request_id] = seq
-        else:
-            seq.current_token = y
-            seq.state = _SeqState.DECODING
-            self._active[request_id] = seq
-
-    def _decode_active(self, results: dict[str, list[TokenEvent]]) -> None:
-        """Run one decode step for each active sequence."""
-        finished_ids: list[str] = []
-
-        for request_id, seq in self._active.items():
-            if seq.current_token is None:
-                continue
-
-            logits = seq.model(seq.current_token[None], cache=seq.cache)
+            last_token = prompt_array[offset:]
+            logits = seq.model(last_token[None], cache=seq.cache)
             logits = logits[:, -1, :]
-
-            # Apply logits processors
-            if seq.logits_processors:
-                gen_tokens = [e.token_id for e in seq.events]
-                all_tokens = mx.array(gen_tokens) if gen_tokens else mx.array([], dtype=mx.int32)
-                for processor in seq.logits_processors:
-                    logits = processor(all_tokens, logits)
-
             logprobs = logits - mx.logsumexp(logits, keepdims=True)
             y = seq.sampler(logprobs)
             mx.eval(y)
 
             token_id = y.item()
             text = seq.tokenizer.decode(token_id)
-            gen_count = len(seq.events) + 1
             finish_reason = seq.stop.check(token_id, text)
 
             event = TokenEvent(
@@ -248,21 +202,178 @@ class BatchScheduler:
                 text=text,
                 finish_reason=finish_reason,
                 prompt_tokens=seq.prompt_token_count,
-                generation_tokens=gen_count,
+                generation_tokens=1,
             )
             seq.events.append(event)
-            results.setdefault(request_id, []).append(event)
+            results[request_id] = [event]
 
             if finish_reason is not None:
                 seq.state = _SeqState.FINISHED
-                finished_ids.append(request_id)
+                self._finished[request_id] = seq
             else:
                 seq.current_token = y
+                seq.state = _SeqState.DECODING
+                self._active[request_id] = seq
+
+            if not fill_capacity:
+                break
+
+    def _decode_active(self, results: dict[str, list[TokenEvent]]) -> None:
+        """Run one decode step for each active sequence."""
+        finished_ids: list[str] = []
+
+        for group in self._decode_groups():
+            if len(group) == 1:
+                request_id, seq = group[0]
+                if seq.current_token is None:
+                    continue
+
+                logits = seq.model(seq.current_token[None], cache=seq.cache)
+                logits = logits[:, -1, :]
+
+                if seq.logits_processors:
+                    gen_tokens = [e.token_id for e in seq.events]
+                    all_tokens = mx.array(gen_tokens) if gen_tokens else mx.array([], dtype=mx.int32)
+                    for processor in seq.logits_processors:
+                        logits = processor(all_tokens, logits)
+
+                logprobs = logits - mx.logsumexp(logits, keepdims=True)
+                y = seq.sampler(logprobs)
+                mx.eval(y)
+
+                token_id = y.item()
+                text = seq.tokenizer.decode(token_id)
+                gen_count = len(seq.events) + 1
+                finish_reason = seq.stop.check(token_id, text)
+
+                event = TokenEvent(
+                    token_id=token_id,
+                    text=text,
+                    finish_reason=finish_reason,
+                    prompt_tokens=seq.prompt_token_count,
+                    generation_tokens=gen_count,
+                )
+                seq.events.append(event)
+                results.setdefault(request_id, []).append(event)
+
+                if finish_reason is not None:
+                    seq.state = _SeqState.FINISHED
+                    finished_ids.append(request_id)
+                else:
+                    seq.current_token = y
+                continue
+
+            merged_cache = self._merge_group_cache(group)
+            current_tokens = mx.stack([seq.current_token for _, seq in group], axis=0)
+            logits = group[0][1].model(current_tokens, cache=merged_cache)
+            logits = logits[:, -1, :]
+
+            next_tokens: list[mx.array] = []
+            for idx, (_, seq) in enumerate(group):
+                seq_logits = logits[idx : idx + 1]
+                if seq.logits_processors:
+                    gen_tokens = [e.token_id for e in seq.events]
+                    all_tokens = mx.array(gen_tokens) if gen_tokens else mx.array([], dtype=mx.int32)
+                    for processor in seq.logits_processors:
+                        seq_logits = processor(all_tokens, seq_logits)
+
+                logprobs = seq_logits - mx.logsumexp(seq_logits, keepdims=True)
+                next_tokens.append(seq.sampler(logprobs))
+
+            merged_states = [layer.state for layer in merged_cache if layer.state is not None]
+            mx.eval([*next_tokens, *merged_states])
+            self._scatter_group_cache(merged_cache, group)
+
+            for y, (request_id, seq) in zip(next_tokens, group, strict=True):
+                token_id = y.item()
+                text = seq.tokenizer.decode(token_id)
+                gen_count = len(seq.events) + 1
+                finish_reason = seq.stop.check(token_id, text)
+
+                event = TokenEvent(
+                    token_id=token_id,
+                    text=text,
+                    finish_reason=finish_reason,
+                    prompt_tokens=seq.prompt_token_count,
+                    generation_tokens=gen_count,
+                )
+                seq.events.append(event)
+                results.setdefault(request_id, []).append(event)
+
+                if finish_reason is not None:
+                    seq.state = _SeqState.FINISHED
+                    finished_ids.append(request_id)
+                else:
+                    seq.current_token = y
 
         # Move finished sequences out of active
         for rid in finished_ids:
             seq = self._active.pop(rid)
             self._finished[rid] = seq
+
+    def _decode_groups(self) -> list[list[tuple[str, _Sequence]]]:
+        """Group active sequences that can share a single decode forward."""
+        grouped: OrderedDict[tuple[Any, tuple[Any, ...]] | tuple[str, str], list[tuple[str, _Sequence]]] = (
+            OrderedDict()
+        )
+        for request_id, seq in self._active.items():
+            signature = self._batch_signature(seq)
+            key: tuple[Any, tuple[Any, ...]] | tuple[str, str]
+            if signature is None:
+                key = ("single", request_id)
+            else:
+                key = signature
+            grouped.setdefault(key, []).append((request_id, seq))
+        return list(grouped.values())
+
+    def _batch_signature(self, seq: _Sequence) -> tuple[Any, tuple[Any, ...]] | None:
+        """Return a decode-batching signature for compatible KV-cache states."""
+        if seq.current_token is None or seq.cache is None:
+            return None
+        signature: list[Any] = []
+        for layer in seq.cache:
+            if not isinstance(layer, KVCache):
+                return None
+            state = layer.state
+            if state is None:
+                return None
+            keys, values = state
+            signature.append(
+                (
+                    tuple(int(x) for x in keys.shape[1:]),
+                    tuple(int(x) for x in values.shape[1:]),
+                )
+            )
+        return (id(seq.model), tuple(signature))
+
+    def _merge_group_cache(self, group: list[tuple[str, _Sequence]]) -> list[KVCache]:
+        """Merge compatible KV caches into a temporary batched cache."""
+        merged: list[KVCache] = []
+        caches = [seq.cache for _, seq in group]
+        assert caches and caches[0] is not None
+        n_layers = len(caches[0])
+        for layer_idx in range(n_layers):
+            layer = KVCache()
+            keys = mx.concatenate([cache[layer_idx].state[0] for cache in caches], axis=0)
+            values = mx.concatenate([cache[layer_idx].state[1] for cache in caches], axis=0)
+            layer.state = (keys, values)
+            merged.append(layer)
+        return merged
+
+    def _scatter_group_cache(
+        self,
+        merged_cache: list[KVCache],
+        group: list[tuple[str, _Sequence]],
+    ) -> None:
+        """Write temporary batched cache state back into per-sequence caches."""
+        for batch_idx, (_, seq) in enumerate(group):
+            assert seq.cache is not None
+            for layer_idx, layer in enumerate(merged_cache):
+                keys, values = layer.state
+                seq.cache[layer_idx].state = (
+                    keys[batch_idx : batch_idx + 1],
+                    values[batch_idx : batch_idx + 1],
+                )
 
     def drain(self) -> Iterator[tuple[str, list[TokenEvent]]]:
         """Drain all finished sequences."""
