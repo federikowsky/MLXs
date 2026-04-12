@@ -36,6 +36,26 @@ def test_chat_shell_uses_multiline_composer_buffer() -> None:
     assert shell._buffer.multiline() is True
 
 
+def test_chat_shell_show_help_opens_overlay_without_transcript_notice() -> None:
+    session = ChatSession(model_path="z-lab/Qwen3.5-2B-PARO")
+    shell = ChatShell(
+        "z-lab/Qwen3.5-2B-PARO",
+        session,
+        max_tokens=256,
+        temperature=0.7,
+        repo=RepoContext(cwd=Path("/tmp/project"), cwd_label="~/project", branch="main"),
+    )
+
+    shell.show_help()
+
+    transcript = "".join(part for _, part in shell._transcript_fragments())
+    help_overlay = "".join(part for _, part in shell._help_overlay.fragments())
+
+    assert "slash commands:" not in transcript
+    assert "slash commands:" in help_overlay
+    assert shell._help_overlay.visible is True
+
+
 def test_chat_shell_progress_fragments_reflect_generating_state() -> None:
     session = ChatSession(model_path="z-lab/Qwen3.5-2B-PARO")
     shell = ChatShell(

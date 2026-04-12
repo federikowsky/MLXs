@@ -25,6 +25,7 @@ from mlxs.chat.present.commands import (
     command_names,
     command_palette_items,
     help_card,
+    render_help_overlay_fragments,
     render_command_palette_fragments,
 )
 from mlxs.chat.present.progress import build_progress_fragments, progress_visible
@@ -72,6 +73,7 @@ __all__ = [
     "item_from_session",
     "items_from_summaries",
     "progress_visible",
+    "render_help_overlay_fragments",
     "render_command_palette_fragments",
     "render_context_rail_fragments",
     "render_reference_picker_fragments",

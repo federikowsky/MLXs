@@ -88,8 +88,10 @@ def test_chat_shell_renders_help_and_pending_stream() -> None:
 
     transcript = "".join(part for _, part in shell._transcript_fragments())
     footer = "".join(part for _, part in shell._footer_right_fragments())
+    help_overlay = "".join(part for _, part in shell._help_overlay.fragments())
 
-    assert "slash commands:" in transcript
+    assert "slash commands:" not in transcript
+    assert "slash commands:" in help_overlay
     assert "live" in transcript
     assert "Hello world" in transcript
     assert "Streaming reply" in footer

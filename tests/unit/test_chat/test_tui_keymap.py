@@ -18,12 +18,14 @@ def _make_keymap(
     is_palette_focused=lambda: False,
     is_reference_picker_open=lambda: False,
     is_reference_picker_focused=lambda: False,
+    is_help_open=lambda: False,
     focus_filter=lambda: None,
     focus_composer=lambda: None,
     focus_palette=lambda: None,
     close_palette=lambda: None,
     open_reference_picker=lambda: None,
     close_reference_picker=lambda: None,
+    close_help=lambda: None,
     get_previous_session_callback=lambda: None,
     get_next_session_callback=lambda: None,
     palette_previous=lambda: None,
@@ -46,12 +48,14 @@ def _make_keymap(
         is_palette_focused=is_palette_focused,
         is_reference_picker_open=is_reference_picker_open,
         is_reference_picker_focused=is_reference_picker_focused,
+        is_help_open=is_help_open,
         focus_filter=focus_filter,
         focus_composer=focus_composer,
         focus_palette=focus_palette,
         close_palette=close_palette,
         open_reference_picker=open_reference_picker,
         close_reference_picker=close_reference_picker,
+        close_help=close_help,
         get_previous_session_callback=get_previous_session_callback,
         get_next_session_callback=get_next_session_callback,
         palette_previous=palette_previous,
@@ -101,6 +105,18 @@ def test_escape_invokes_cancel_when_generating() -> None:
     _binding(kb, ("Keys.Escape",)).handler(SimpleNamespace(app=None))
 
     assert called == ["cancel"]
+
+
+def test_escape_closes_help_overlay_before_other_overlays() -> None:
+    called: list[str] = []
+    kb = _make_keymap(
+        is_help_open=lambda: True,
+        close_help=lambda: called.append("close-help"),
+    )
+
+    _binding(kb, ("Keys.Escape",)).handler(SimpleNamespace(app=None))
+
+    assert called == ["close-help"]
 
 
 def test_enter_inserts_newline_when_idle() -> None:

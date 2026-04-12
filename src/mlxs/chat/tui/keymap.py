@@ -17,12 +17,14 @@ def build_chat_key_bindings(
     is_palette_focused: Callable[[], bool],
     is_reference_picker_open: Callable[[], bool],
     is_reference_picker_focused: Callable[[], bool],
+    is_help_open: Callable[[], bool],
     focus_filter: Callable[[], None],
     focus_composer: Callable[[], None],
     focus_palette: Callable[[], None],
     close_palette: Callable[[], None],
     open_reference_picker: Callable[[], None],
     close_reference_picker: Callable[[], None],
+    close_help: Callable[[], None],
     get_previous_session_callback: Callable[[], Callable[[], None] | None],
     get_next_session_callback: Callable[[], Callable[[], None] | None],
     palette_previous: Callable[[], None],
@@ -119,6 +121,9 @@ def build_chat_key_bindings(
 
     @kb.add("escape")
     def _escape(event) -> None:
+        if is_help_open():
+            close_help()
+            return
         if is_reference_picker_open():
             close_reference_picker()
             return

@@ -6,6 +6,7 @@ from mlxs.chat.present.commands import (
     command_names,
     command_palette_items,
     help_card,
+    render_help_overlay_fragments,
     render_command_palette_fragments,
 )
 
@@ -51,3 +52,11 @@ def test_render_command_palette_fragments_marks_selected_item() -> None:
     assert "Commands" in rendered
     assert "Conversation" in rendered
     assert "/retry" in rendered
+
+
+def test_render_help_overlay_fragments_contains_help_card_content() -> None:
+    rendered = "".join(text for _, text in render_help_overlay_fragments())
+
+    assert "Help" in rendered
+    assert "slash commands:" in rendered
+    assert "/help" in rendered

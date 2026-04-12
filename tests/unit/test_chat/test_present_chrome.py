@@ -82,6 +82,15 @@ def test_build_composer_context_fragments_for_commands_mentions_and_idle() -> No
             reference_picker_open=True,
         )
     )
+    help_overlay = _join(
+        build_composer_context_fragments(
+            text="",
+            state="idle",
+            title="New chat",
+            system_on=False,
+            help_open=True,
+        )
+    )
 
     assert "working in New chat" in idle
     assert "insert files with @" in idle
@@ -89,6 +98,7 @@ def test_build_composer_context_fragments_for_commands_mentions_and_idle() -> No
     assert "1 file reference(s) ready" in mention
     assert "command palette open" in palette
     assert "reference picker open" in reference_picker
+    assert "help overlay open" in help_overlay
 
 
 def test_footer_helpers_and_small_utilities_preserve_existing_strings() -> None:
@@ -104,6 +114,7 @@ def test_footer_helpers_and_small_utilities_preserve_existing_strings() -> None:
     )
     right = _join(build_footer_right_fragments(state="generating", detail="Streaming reply"))
     shortcuts = _join(build_composer_shortcuts_fragments(state="idle"))
+    help_shortcuts = _join(build_composer_shortcuts_fragments(state="idle", help_open=True))
     palette_shortcuts = _join(build_composer_shortcuts_fragments(state="idle", palette_open=True))
     reference_shortcuts = _join(
         build_composer_shortcuts_fragments(state="idle", reference_picker_open=True)
@@ -118,6 +129,7 @@ def test_footer_helpers_and_small_utilities_preserve_existing_strings() -> None:
     assert "Enter newline" in shortcuts
     assert "Ctrl+J send" in shortcuts
     assert "Ctrl+↑/↓ switch" in shortcuts
+    assert "Esc close help" in help_shortcuts
     assert "Type to filter" in palette_shortcuts
     assert "Enter insert" in palette_shortcuts
     assert "Type to filter" in reference_shortcuts

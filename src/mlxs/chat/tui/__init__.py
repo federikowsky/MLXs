@@ -2,6 +2,7 @@
 
 from mlxs.chat.tui.completion import ChatCompleter, build_completions
 from mlxs.chat.tui.context import ContextRail
+from mlxs.chat.tui.help_overlay import HelpOverlay
 from mlxs.chat.tui.keymap import build_chat_key_bindings
 from mlxs.chat.tui.overlay import OverlaySpec, anchored_overlay, build_overlay_host, positioned_overlay
 from mlxs.chat.tui.palette import CommandPalette
@@ -23,6 +24,7 @@ __all__ = [
     "ChatShell",
     "CommandPalette",
     "ContextRail",
+    "HelpOverlay",
     "OverlaySpec",
     "RepoContext",
     "ReferencePicker",

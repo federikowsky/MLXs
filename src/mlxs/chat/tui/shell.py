@@ -48,6 +48,7 @@ from mlxs.chat.present.transcript import (
 from mlxs.chat.session import ChatSession
 from mlxs.chat.tui.completion import ChatCompleter, mention_completion_token
 from mlxs.chat.tui.context import ContextRail
+from mlxs.chat.tui.help_overlay import HelpOverlay
 from mlxs.chat.tui.keymap import build_chat_key_bindings
 from mlxs.chat.tui.overlay import anchored_overlay, positioned_overlay
 from mlxs.chat.tui.palette import CommandPalette
@@ -151,6 +152,7 @@ class ChatShell:
         self._session_list_window = self._session_rail.container
         self._context_rail = ContextRail()
         self._context_window = self._context_rail.window
+        self._help_overlay = HelpOverlay(invalidate=self._invalidate)
         self._command_palette = CommandPalette(invalidate=self._invalidate)
         self._reference_picker = ReferencePicker(cwd=lambda: self._repo.cwd, invalidate=self._invalidate)
         self._header_window = Window(
@@ -242,6 +244,12 @@ class ChatShell:
                         left=8,
                         right=8,
                     ),
+                    positioned_overlay(
+                        self._help_overlay.container,
+                        top=2,
+                        left=10,
+                        right=10,
+                    ),
                 ),
             )
         )
@@ -260,12 +268,14 @@ class ChatShell:
                 is_reference_picker_open=lambda: self._reference_picker.visible,
                 is_reference_picker_focused=lambda: self._application.layout.current_window
                 is self._reference_picker.filter_window,
+                is_help_open=lambda: self._help_overlay.visible,
                 focus_filter=self._focus_filter,
                 focus_composer=self._focus_composer,
                 focus_palette=self._focus_palette,
                 close_palette=self._close_palette,
                 open_reference_picker=self._open_reference_picker,
                 close_reference_picker=self._close_reference_picker,
+                close_help=self._close_help,
                 get_previous_session_callback=lambda: self._previous_session_callback,
                 get_next_session_callback=lambda: self._next_session_callback,
                 palette_previous=self._palette_previous,
@@ -303,6 +313,8 @@ class ChatShell:
         self._application.exit()
 
     def _focus_filter(self) -> None:
+        if self._help_overlay.visible:
+            self._help_overlay.close()
         if self._command_palette.visible:
             self._command_palette.close()
         if self._reference_picker.visible:
@@ -311,6 +323,8 @@ class ChatShell:
         self._invalidate()
 
     def _focus_composer(self) -> None:
+        if self._help_overlay.visible:
+            self._help_overlay.close()
         if self._command_palette.visible:
             self._command_palette.close()
         if self._reference_picker.visible:
@@ -320,6 +334,8 @@ class ChatShell:
 
     def _focus_palette(self) -> None:
         self._buffer.complete_state = None
+        if self._help_overlay.visible:
+            self._help_overlay.close()
         if self._reference_picker.visible:
             self._reference_picker.close()
         self._command_palette.open()
@@ -335,6 +351,8 @@ class ChatShell:
         mention_token = mention_completion_token(self._buffer.document.text_before_cursor)
         if mention_token is not None:
             self._buffer.complete_state = None
+            if self._help_overlay.visible:
+                self._help_overlay.close()
             if self._command_palette.visible:
                 self._command_palette.close()
             cursor = self._buffer.cursor_position
@@ -353,6 +371,8 @@ class ChatShell:
             self._buffer.document = Document(new_text, cursor_position=cursor + 1)
             return
         self._buffer.complete_state = None
+        if self._help_overlay.visible:
+            self._help_overlay.close()
         if self._command_palette.visible:
             self._command_palette.close()
         self._reference_picker.open(
@@ -364,6 +384,11 @@ class ChatShell:
 
     def _close_reference_picker(self) -> None:
         self._reference_picker.close()
+        self._application.layout.focus(self._input_window)
+        self._invalidate()
+
+    def _close_help(self) -> None:
+        self._help_overlay.close()
         self._application.layout.focus(self._input_window)
         self._invalidate()
 
@@ -439,7 +464,8 @@ class ChatShell:
         self._invalidate()
 
     def show_help(self) -> None:
-        self._append_notice("help", "Commands", help_card())
+        self._help_overlay.open()
+        self._invalidate()
 
     def show_status(self, text: str) -> None:
         self._append_notice("status", "Status", text)
@@ -575,6 +601,7 @@ class ChatShell:
             state=state,
             title=title,
             system_on=system_on,
+            help_open=self._help_overlay.visible,
             palette_open=self._command_palette.visible,
             reference_picker_open=self._reference_picker.visible,
             command_context=command_context(text.strip()) if text.strip().startswith("/") else None,
@@ -584,6 +611,7 @@ class ChatShell:
     def _composer_shortcuts_fragments(self) -> list[tuple[str, str]]:
         return build_composer_shortcuts_fragments(
             state=self._state,
+            help_open=self._help_overlay.visible,
             palette_open=self._command_palette.visible,
             reference_picker_open=self._reference_picker.visible,
         )

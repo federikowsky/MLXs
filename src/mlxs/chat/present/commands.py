@@ -81,6 +81,20 @@ def help_card() -> str:
     return "\n".join(lines)
 
 
+def render_help_overlay_fragments() -> list[tuple[str, str]]:
+    """Render the help card as overlay fragments."""
+    lines = help_card().splitlines()
+    fragments: list[tuple[str, str]] = [
+        ("class:help.overlay.title", " Help "),
+        ("class:help.overlay.meta", "  Commands and keys · Esc to close"),
+    ]
+    for line in lines:
+        fragments.append(("", "\n"))
+        style = "class:help.overlay.section" if line.endswith(":") else "class:help.overlay.body"
+        fragments.append((style, f"  {line}" if line else ""))
+    return fragments
+
+
 def command_context(text: str) -> str:
     """Return the live context hint string for *text* as typed in the composer.
 
