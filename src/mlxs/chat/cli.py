@@ -1,4 +1,19 @@
-"""Prompt-toolkit shell, command helpers, and attachment parsing for MLXs chat."""
+"""Prompt-toolkit shell host and public compatibility re-exports for MLXs chat.
+
+This module owns:
+  - ``ChatShell`` — the docked prompt-toolkit shell widget/layout.
+  - ``RepoContext`` — stable repo info shown in the shell chrome.
+  - ``discover_repo_context`` — collect cwd + git branch once at startup.
+  - ``parse_command`` — parse a ``/command`` line for the shell controller.
+
+Pure helpers that have been extracted to dedicated modules are re-exported
+here for backwards compatibility with existing callers and tests:
+
+  Attachment parsing   → ``mlxs.chat.input``
+  Command metadata     → ``mlxs.chat.present.commands``
+  Transcript rendering → ``mlxs.chat.present.transcript``
+  Completion logic     → ``mlxs.chat.tui.completion``
+"""
 
 from __future__ import annotations
 
@@ -11,7 +26,7 @@ from pathlib import Path
 from prompt_toolkit import Application
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.completion import CompleteEvent, Completer, Completion, ThreadedCompleter
+from prompt_toolkit.completion import ThreadedCompleter
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import InMemoryHistory
@@ -24,76 +39,34 @@ from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.processors import BeforeInput
 from prompt_toolkit.styles import Style
 
-from mlxs.chat.session import ChatMessage, ChatSession
-
-
-@dataclass(frozen=True)
-class CommandSpec:
-    """Declarative description for a slash command."""
-
-    name: str
-    usage: str
-    description: str
-
-
-@dataclass(frozen=True)
-class ResolvedAttachment:
-    """Resolved attachment payload from an `@file` mention."""
-
-    path: str
-    absolute_path: str
-    content: str
-
-    def to_metadata(self) -> dict[str, str]:
-        return {
-            "path": self.path,
-            "absolute_path": self.absolute_path,
-            "content": self.content,
-        }
-
-
-@dataclass(frozen=True)
-class MentionMatch:
-    """One parsed `@file` mention in the composer text."""
-
-    raw: str
-    path: str
-    start: int
-    end: int
-
-
-@dataclass(frozen=True)
-class RepoContext:
-    """Stable repo information shown in the shell chrome."""
-
-    cwd: Path
-    cwd_label: str
-    branch: str | None
-
-
-@dataclass(slots=True)
-class _TranscriptEntry:
-    kind: str
-    title: str
-    body: str
-    attachments: tuple[str, ...] = ()
-
-
-_COMMANDS: tuple[CommandSpec, ...] = (
-    CommandSpec("help", "/help", "Show commands and keyboard shortcuts."),
-    CommandSpec("model", "/model", "Show the active model and runtime settings."),
-    CommandSpec("new", "/new", "Start a fresh chat session."),
-    CommandSpec("clear", "/clear", "Clear the current conversation."),
-    CommandSpec("undo", "/undo", "Remove the last user/assistant turn."),
-    CommandSpec("retry", "/retry", "Regenerate the last user turn."),
-    CommandSpec("system", "/system <text>|clear", "Set, inspect, or clear the system prompt."),
-    CommandSpec("title", "/title <text>", "Rename the current chat session."),
-    CommandSpec("history", "/history [n]", "Show recent transcript lines."),
-    CommandSpec("export", "/export [path]", "Write the current transcript to Markdown."),
-    CommandSpec("status", "/status", "Alias for /stats."),
-    CommandSpec("stats", "/stats", "Show the current session summary."),
-    CommandSpec("quit", "/quit", "Exit the chat."),
+# ── Canonical modules — re-exported for backwards compatibility ───────────────
+from mlxs.chat.input import (  # noqa: F401
+    AttachmentResolutionError,
+    MentionMatch,
+    ResolvedAttachment,
+    parse_file_mentions,
+    resolve_attachments,
 )
+from mlxs.chat.present.commands import (  # noqa: F401
+    COMMANDS,
+    CommandSpec,
+    command_names,
+    command_context as _command_context,
+    help_card,
+)
+from mlxs.chat.present.transcript import (
+    TranscriptEntry as _TranscriptEntry,
+    empty_state_fragments as _empty_state_fragments,
+    entry_from_message as _entry_from_message,
+    render_entry as _render_entry,
+)
+from mlxs.chat.session import ChatMessage, ChatSession
+from mlxs.chat.tui.completion import (  # noqa: F401
+    ChatCompleter as _ChatCompleter,
+    build_completions,
+)
+
+# ── Style ─────────────────────────────────────────────────────────────────────
 
 _STYLE = Style.from_dict(
     {
@@ -130,8 +103,19 @@ _STYLE = Style.from_dict(
 )
 
 
-class AttachmentResolutionError(ValueError):
-    """Raised when an `@file` mention cannot be attached."""
+# ── Data types ────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RepoContext:
+    """Stable repo information shown in the shell chrome."""
+
+    cwd: Path
+    cwd_label: str
+    branch: str | None
+
+
+# ── ChatShell ─────────────────────────────────────────────────────────────────
 
 
 class ChatShell:
@@ -165,7 +149,7 @@ class ChatShell:
         self._history = InMemoryHistory()
         self._buffer = Buffer(
             multiline=False,
-            completer=ThreadedCompleter(_ChatCompleter(_COMMANDS)),
+            completer=ThreadedCompleter(_ChatCompleter(command_names())),
             complete_while_typing=True,
             auto_suggest=AutoSuggestFromHistory(),
             history=self._history,
@@ -290,7 +274,7 @@ class ChatShell:
         self._invalidate()
 
     def show_help(self) -> None:
-        self._append_notice("help", "Commands", _help_card())
+        self._append_notice("help", "Commands", help_card())
 
     def show_status(self, text: str) -> None:
         self._append_notice("status", "Status", text)
@@ -485,12 +469,7 @@ class ChatShell:
             system_prompt = self._session.system_message()
 
         if state == "generating":
-            return [
-                (
-                    "class:composer.context",
-                    " assistant is responding live",
-                )
-            ]
+            return [("class:composer.context", " assistant is responding live")]
         if state == "cancelling":
             return [("class:composer.context", " stopping the current turn cleanly")]
 
@@ -602,58 +581,14 @@ class ChatShell:
             return
 
 
-class _ChatCompleter(Completer):
-    """Completion menu for slash commands, /export paths, and @file mentions."""
-
-    def __init__(self, command_specs: tuple[CommandSpec, ...]) -> None:
-        self._command_specs = command_specs
-
-    def get_completions(
-        self,
-        document: Document,
-        complete_event: CompleteEvent,
-    ):
-        before = document.text_before_cursor
-        stripped = before.lstrip()
-
-        if stripped.startswith("/") and " " not in stripped[1:]:
-            for spec in self._command_specs:
-                candidate = f"/{spec.name}"
-                if candidate.startswith(stripped):
-                    yield Completion(
-                        candidate,
-                        start_position=-len(stripped),
-                        display=candidate,
-                        display_meta=spec.description,
-                    )
-            return
-
-        export_prefix = _export_completion_prefix(before)
-        if export_prefix is not None:
-            for candidate in _path_completion_values(export_prefix, Path.cwd()):
-                yield Completion(
-                    candidate,
-                    start_position=-len(export_prefix),
-                    display=candidate,
-                    display_meta="export path",
-                )
-            return
-
-        mention_token = _mention_completion_token(before)
-        if mention_token is None:
-            return
-        mention_prefix = mention_token[1:]
-        for candidate in _path_completion_values(mention_prefix, Path.cwd()):
-            yield Completion(
-                f"@{candidate}",
-                start_position=-len(mention_token),
-                display=f"@{candidate}",
-                display_meta="attach file",
-            )
+# ── Module-level helpers ──────────────────────────────────────────────────────
 
 
 def parse_command(line: str) -> tuple[str, str] | None:
-    """Parse an interactive slash command."""
+    """Parse an interactive slash command.
+
+    Returns ``(name, args)`` or ``None`` if the line does not start with ``/``.
+    """
     if not line.startswith("/"):
         return None
     body = line[1:].strip()
@@ -661,122 +596,6 @@ def parse_command(line: str) -> tuple[str, str] | None:
         return "", ""
     name, _, rest = body.partition(" ")
     return name.lower(), rest.strip()
-
-
-def command_names() -> tuple[str, ...]:
-    """Return slash commands in the format expected by chat completers."""
-    return tuple(f"/{spec.name}" for spec in _COMMANDS)
-
-
-def help_card() -> str:
-    """Return the help card text used by both interactive and plain chat."""
-    return _help_card()
-
-
-def build_completions(
-    buffer: str,
-    text: str,
-    command_names: tuple[str, ...],
-    *,
-    cwd: Path | None = None,
-) -> list[str]:
-    """Pure completion helper used by unit tests."""
-    workdir = cwd or Path.cwd()
-    stripped = buffer.lstrip()
-    if stripped.startswith("/") and " " not in stripped[1:]:
-        return [name for name in command_names if name.startswith(text)]
-
-    export_prefix = _export_completion_prefix(buffer)
-    if export_prefix is not None:
-        return _path_completion_values(export_prefix, workdir)
-
-    mention_token = _mention_completion_token(buffer)
-    if mention_token is not None:
-        return [f"@{value}" for value in _path_completion_values(mention_token[1:], workdir)]
-
-    return []
-
-
-def parse_file_mentions(text: str) -> list[MentionMatch]:
-    """Parse `@file` and `@\"quoted path\"` mentions from a composer line."""
-    matches: list[MentionMatch] = []
-    index = 0
-    while index < len(text):
-        at = text.find("@", index)
-        if at < 0:
-            break
-        if at > 0 and not text[at - 1].isspace():
-            index = at + 1
-            continue
-        if at + 1 >= len(text):
-            break
-        if text[at + 1] == '"':
-            end = at + 2
-            parts: list[str] = []
-            while end < len(text) and text[end] != '"':
-                parts.append(text[end])
-                end += 1
-            if end >= len(text):
-                index = at + 1
-                continue
-            path = "".join(parts).strip()
-            if path:
-                matches.append(
-                    MentionMatch(raw=text[at : end + 1], path=path, start=at, end=end + 1)
-                )
-            index = end + 1
-            continue
-        end = at + 1
-        while end < len(text) and not text[end].isspace():
-            end += 1
-        path = text[at + 1 : end].rstrip(",.;:")
-        if path:
-            matches.append(MentionMatch(raw=text[at:end], path=path, start=at, end=end))
-        index = end
-    return matches
-
-
-def resolve_attachments(text: str, *, cwd: Path | None = None) -> list[ResolvedAttachment]:
-    """Resolve and read all valid `@file` mentions in a composer line."""
-    workdir = cwd or Path.cwd()
-    seen: set[Path] = set()
-    attachments: list[ResolvedAttachment] = []
-    for mention in parse_file_mentions(text):
-        raw_path = Path(mention.path).expanduser()
-        resolved = raw_path if raw_path.is_absolute() else workdir / raw_path
-        resolved = resolved.resolve()
-        if resolved in seen:
-            continue
-        if not resolved.exists():
-            raise AttachmentResolutionError(f"Attachment not found: {mention.path}")
-        if not resolved.is_file():
-            raise AttachmentResolutionError(f"Attachment is not a file: {mention.path}")
-
-        data = resolved.read_bytes()
-        if b"\x00" in data:
-            raise AttachmentResolutionError(
-                f"Binary attachments are not supported: {mention.path}"
-            )
-        try:
-            content = data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise AttachmentResolutionError(
-                f"Attachment is not valid UTF-8 text: {mention.path}"
-            ) from exc
-
-        try:
-            display_path = str(resolved.relative_to(workdir))
-        except ValueError:
-            display_path = str(resolved)
-        attachments.append(
-            ResolvedAttachment(
-                path=display_path,
-                absolute_path=str(resolved),
-                content=content,
-            )
-        )
-        seen.add(resolved)
-    return attachments
 
 
 def discover_repo_context(cwd: Path | None = None) -> RepoContext:
@@ -805,195 +624,7 @@ def discover_repo_context(cwd: Path | None = None) -> RepoContext:
     )
 
 
-def _entry_from_message(message: ChatMessage) -> _TranscriptEntry:
-    attachments = tuple(
-        attachment["path"]
-        for attachment in message.metadata.get("attachments", [])
-        if isinstance(attachment, dict) and isinstance(attachment.get("path"), str)
-    )
-    kind = message.role if message.role in {"user", "assistant", "system"} else "status"
-    return _TranscriptEntry(
-        kind=kind,
-        title=kind,
-        body=message.content,
-        attachments=attachments,
-    )
-
-
-def _render_entry(entry: _TranscriptEntry, *, pending: bool = False) -> list[tuple[str, str]]:
-    if entry.kind == "user":
-        return _render_user_entry(entry)
-    if entry.kind == "assistant":
-        return _render_assistant_entry(entry, pending=pending)
-
-    label_style = {
-        "error": "class:label.error",
-        "help": "class:label.help",
-        "status": "class:label.status",
-        "system": "class:label.system",
-    }.get(entry.kind, "class:label.status")
-    body_style = {
-        "error": "class:body.error",
-        "help": "class:body.help",
-        "status": "class:body.status",
-        "system": "class:body.system",
-    }.get(entry.kind, "class:body.status")
-    title = {
-        "error": "error",
-        "help": "help",
-        "status": "note",
-        "system": "system",
-    }.get(entry.kind, entry.title)
-
-    lines = entry.body.splitlines() or [""]
-    fragments: list[tuple[str, str]] = [(label_style, f" {title} ")]
-    if len(lines) == 1 and not entry.attachments:
-        fragments.append((body_style, f"  {lines[0]}"))
-        return fragments
-
-    fragments.append(("", "\n"))
-    for line in lines:
-        fragments.append((body_style, f"  {line}\n"))
-    if entry.attachments:
-        for path in entry.attachments:
-            fragments.append(("class:attachment", f"  @ {path}\n"))
-    if fragments[-1][1].endswith("\n"):
-        fragments[-1] = (fragments[-1][0], fragments[-1][1].rstrip("\n"))
-    return fragments
-
-
-def _render_user_entry(entry: _TranscriptEntry) -> list[tuple[str, str]]:
-    lines = entry.body.splitlines() or [""]
-    fragments: list[tuple[str, str]] = [("class:label.user", f"> {lines[0]}")]
-    for line in lines[1:]:
-        fragments.append(("", "\n"))
-        fragments.append(("class:body.user", f"  {line}"))
-    for path in entry.attachments:
-        fragments.append(("", "\n"))
-        fragments.append(("class:attachment", f"  @ {path}"))
-    return fragments
-
-
-def _render_assistant_entry(
-    entry: _TranscriptEntry,
-    *,
-    pending: bool,
-) -> list[tuple[str, str]]:
-    lines = entry.body.splitlines() or [""]
-    fragments: list[tuple[str, str]] = []
-    if pending:
-        fragments.append(("class:label.assistant", " live "))
-        fragments.append(("", "\n"))
-    for index, line in enumerate(lines):
-        if index:
-            fragments.append(("", "\n"))
-        fragments.append(("class:body.assistant", line))
-    return fragments
-
-
-def _command_context(text: str) -> str:
-    if text == "/":
-        return "command mode · Tab shows the full command menu"
-    matches = [spec for spec in _COMMANDS if f"/{spec.name}".startswith(text)]
-    if not matches:
-        return "unknown command · press Tab to inspect available commands"
-    if len(matches) == 1 and f"/{matches[0].name}" == text:
-        spec = matches[0]
-        return f"{spec.usage} · {spec.description}"
-    preview = " · ".join(f"{spec.usage} {spec.description}" for spec in matches[:3])
-    if len(matches) > 3:
-        preview += " · ..."
-    return preview
-
-
-def _help_card() -> str:
-    width = max(len(spec.usage) for spec in _COMMANDS)
-    lines = ["slash commands:"]
-    lines.extend(f"  {spec.usage.ljust(width)}  {spec.description}" for spec in _COMMANDS)
-    lines.extend(
-        (
-            "",
-            "keyboard:",
-            "  Enter          submit current input",
-            "  Tab / Shift-Tab browse completion menu",
-            "  Up / Down      recall previous inputs when composer is empty",
-            "  Esc            cancel current generation",
-            "  Ctrl+L         clear and redraw terminal",
-            "  Ctrl+C         exit when idle, cancel when generating",
-        )
-    )
-    return "\n".join(lines)
-
-
-def _empty_state_fragments() -> list[tuple[str, str]]:
-    lines = [
-        ("class:label.status", " ready "),
-        ("class:body.status", "  What can I help you ship today?\n"),
-        (
-            "class:body.status",
-            "  Ask for code, inspect files with @path, or use /help to explore commands.\n",
-        ),
-        ("class:attachment", "  Examples\n"),
-        ("class:body.status", "    /help\n"),
-        ("class:body.status", "    /system You are a concise code reviewer\n"),
-        ("class:body.status", "    review @src/mlxs/server/chat.py\n"),
-        ("class:body.status", "    explain the current architecture of this repo"),
-    ]
-    return lines
-
-
-def _path_completion_values(raw_prefix: str, cwd: Path) -> list[str]:
-    prefix = raw_prefix or ""
-    quoted = prefix.startswith('"')
-    prefix = prefix[1:] if quoted else prefix
-
-    expanded = Path(prefix).expanduser()
-    if expanded.is_absolute():
-        base_dir = expanded.parent
-        stem = expanded.name
-    else:
-        base_dir = (cwd / expanded).parent
-        stem = expanded.name
-    if not base_dir.exists():
-        return []
-
-    matches: list[str] = []
-    for path in sorted(base_dir.iterdir()):
-        if not path.name.startswith(stem):
-            continue
-        try:
-            display = str(path.relative_to(cwd))
-        except ValueError:
-            display = str(path)
-        if path.is_dir():
-            display += "/"
-        if " " in display or quoted:
-            display = f'"{display}"'
-        matches.append(display)
-    return matches
-
-
-def _export_completion_prefix(buffer: str) -> str | None:
-    stripped = buffer.lstrip()
-    if not stripped.startswith("/export "):
-        return None
-    return stripped[len("/export ") :]
-
-
-def _mention_completion_token(buffer: str) -> str | None:
-    before = buffer.rstrip("\n")
-    for start in range(len(before) - 1, -1, -1):
-        if before[start] != "@":
-            continue
-        if start > 0 and not before[start - 1].isspace():
-            continue
-        token = before[start:]
-        if token == "@":
-            return None
-        if any(char.isspace() for char in token[1:]) and not token.startswith('@"'):
-            return None
-        return token
-    return None
+# ── Private utilities ─────────────────────────────────────────────────────────
 
 
 def _display_path(path: Path) -> str:
