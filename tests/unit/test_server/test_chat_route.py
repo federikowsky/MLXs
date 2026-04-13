@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -12,6 +13,7 @@ from starlette.testclient import TestClient
 from mlxs._types import FinishReason, TokenEvent
 from mlxs.config.schema import AppConfig
 from mlxs.server.app import create_app
+from mlxs.server.queue import RequestQueue
 import mlxs.server.routes.chat as chat_route
 
 
@@ -241,6 +243,51 @@ def test_chat_completions_stream_frames_sse_once() -> None:
     assert response.headers["content-type"].startswith("text/event-stream")
     assert lines[0].startswith("data: {")
     assert not lines[0].startswith("data: data:")
+    assert lines[-1] == "data: [DONE]"
+
+
+def test_chat_completions_stream_emits_error_chunk_on_timeout() -> None:
+    deps, _calls = _make_deps()
+    deps.config = deps.config.model_copy(
+        update={
+            "server": deps.config.server.model_copy(update={"request_timeout": 0.01}),
+        }
+    )
+    deps.request_queue = RequestQueue(max_size=2, max_concurrent=1, timeout=0.01)
+
+    class _SlowBatchHost:
+        async def stream_execute(self, prompt: str, options: object):  # type: ignore[no-untyped-def]
+            del prompt, options
+            await asyncio.sleep(0.02)
+            yield TokenEvent(
+                token_id=1,
+                text="late",
+                finish_reason=FinishReason.STOP,
+                prompt_tokens=5,
+                generation_tokens=1,
+            )
+
+    deps.batch_host = _SlowBatchHost()
+    client = TestClient(create_app(deps))
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "mlxs",
+            "stream": True,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "stream please"}],
+                }
+            ],
+        },
+    ) as response:
+        lines = [line for line in response.iter_lines() if line]
+
+    assert response.status_code == 200
+    assert any("Request timed out after 0.01 seconds." in line for line in lines)
     assert lines[-1] == "data: [DONE]"
 
 

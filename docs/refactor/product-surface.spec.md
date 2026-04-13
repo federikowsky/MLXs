@@ -128,6 +128,11 @@ operator-meaningful cache state snapshots such as hit/miss counts, entry count,
 and approximate resident bytes, provided those remain observational and do not
 move cache policy or ownership into Layer 4.
 
+For live serving, Layer 4 observability may also expose cheap operator-visible
+request-flow state such as active/pending request counts and outcome counters
+(completed, rejected, timed out), provided those remain observational and do
+not redefine Layer 3 scheduling or Layer 4 admission policy.
+
 3.6 Lifecycle and model/session management surfaces
 
 It owns:

@@ -56,6 +56,18 @@ def build_sse_chunk(
     return f"data: {json.dumps(chunk)}\n\n"
 
 
+def build_sse_error_chunk(
+    message: str,
+    *,
+    status_code: int | None = None,
+) -> str:
+    """Build one SSE data frame carrying an error payload."""
+    error: dict[str, Any] = {"message": message}
+    if status_code is not None:
+        error["status_code"] = status_code
+    return f"data: {json.dumps({'error': error})}\n\n"
+
+
 def _build_chunk(
     event: TokenEvent,
     *,

@@ -53,6 +53,8 @@ def metrics_snapshot(runtime: Any) -> dict[str, Any]:
     else:
         snapshot["backend"] = "noop"
     snapshot["prompt_cache"] = _prompt_cache_snapshot(runtime)
+    snapshot["request_queue"] = _request_queue_snapshot(runtime)
+    snapshot["request_outcomes"] = _request_outcomes_snapshot(snapshot)
     return snapshot
 
 
@@ -91,6 +93,53 @@ def _prompt_cache_snapshot(runtime: Any) -> dict[str, Any]:
         }
     )
     return payload
+
+
+def _request_queue_snapshot(runtime: Any) -> dict[str, Any]:
+    config = getattr(runtime, "config", None)
+    server = getattr(config, "server", None)
+    queue = getattr(runtime, "request_queue", None)
+    payload: dict[str, Any] = {
+        "configured_max_concurrent_requests": getattr(server, "max_concurrent_requests", None),
+        "configured_max_queue_size": getattr(server, "max_queue_size", None),
+        "configured_request_timeout_seconds": getattr(server, "request_timeout", None),
+        "batch_host_enabled": getattr(getattr(runtime, "batch_host", None), "enabled", False),
+    }
+    if queue is None:
+        payload["available"] = False
+        return payload
+
+    active_count = getattr(queue, "active_count", None)
+    pending_count = getattr(queue, "pending_count", None)
+    payload.update(
+        {
+            "available": True,
+            "active_count": active_count,
+            "pending_count": pending_count,
+            "inflight_count": (
+                (active_count or 0) + (pending_count or 0)
+                if active_count is not None and pending_count is not None
+                else None
+            ),
+            "is_full": getattr(queue, "is_full", None),
+        }
+    )
+    return payload
+
+
+def _request_outcomes_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    counters = snapshot.get("counters", {})
+    total = counters.get("product_requests_total{surface=http}", 0.0)
+    completed = counters.get("product_requests_completed_total{surface=http}", 0.0)
+    rejected = counters.get("product_requests_rejected_total{surface=http}", 0.0)
+    timed_out = counters.get("product_requests_timeout_total{surface=http}", 0.0)
+    return {
+        "total": total,
+        "completed": completed,
+        "rejected": rejected,
+        "timed_out": timed_out,
+        "incomplete": max(0.0, total - completed - rejected - timed_out),
+    }
 
 
 async def metrics_endpoint(request: Any) -> Any:

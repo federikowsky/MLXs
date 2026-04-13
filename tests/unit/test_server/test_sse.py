@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from mlxs._types import FinishReason, TokenEvent, TokenLogprobs, TopLogprob
-from mlxs.server.sse import build_completion_response, token_events_to_sse
+from mlxs.server.sse import build_completion_response, build_sse_error_chunk, token_events_to_sse
 
 # =============================================================================
 # token_events_to_sse — streaming
@@ -116,6 +116,14 @@ class TestSSEStreamEdgeCases:
         chunks = list(token_events_to_sse(iter(events)))
         data = json.loads(chunks[0].removeprefix("data: ").strip())
         assert data["choices"][0]["logprobs"]["content"][0]["top_logprobs"] == []
+
+    def test_build_sse_error_chunk(self) -> None:
+        chunk = build_sse_error_chunk("Request timed out after 2.4 seconds.", status_code=503)
+        assert chunk.startswith("data: ")
+        assert chunk.endswith("\n\n")
+        data = json.loads(chunk.removeprefix("data: ").strip())
+        assert data["error"]["message"] == "Request timed out after 2.4 seconds."
+        assert data["error"]["status_code"] == 503
 
 
 class TestSSEStreamBoundary:

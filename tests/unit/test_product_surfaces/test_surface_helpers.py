@@ -107,7 +107,7 @@ def test_lifecycle_payload_reports_layer4_status() -> None:
 
 def test_metrics_snapshot_main_app_mode() -> None:
     runtime = _runtime(metrics_enabled=True)
-    runtime.metrics.counter("http_requests_total", 1.0)
+    runtime.metrics.counter("product_requests_total", 1.0, surface="http")
     snapshot = metrics_snapshot(runtime)
     assert snapshot["enabled"] is True
     assert snapshot["route_mode"] == "main_app"
@@ -115,6 +115,10 @@ def test_metrics_snapshot_main_app_mode() -> None:
     assert snapshot["backend"] == "in_memory"
     assert snapshot["prompt_cache"]["available"] is True
     assert snapshot["prompt_cache"]["entry_count"] == 0
+    assert snapshot["request_queue"]["available"] is True
+    assert snapshot["request_queue"]["configured_max_concurrent_requests"] == 16
+    assert snapshot["request_queue"]["active_count"] == 0
+    assert snapshot["request_outcomes"]["total"] == 1.0
 
 
 def test_metrics_snapshot_includes_prompt_cache_stats_and_limits() -> None:
@@ -169,6 +173,45 @@ def test_metrics_endpoint_exposes_prompt_cache_section() -> None:
     assert payload["prompt_cache"]["eviction_count"] == 1
     assert payload["prompt_cache"]["entry_count"] == 4
     assert payload["prompt_cache"]["total_bytes"] == 987654
+    assert payload["request_queue"]["available"] is True
+    assert payload["request_queue"]["configured_max_queue_size"] == 64
+    assert payload["request_outcomes"]["completed"] == 0.0
+
+
+def test_metrics_snapshot_includes_request_queue_and_outcome_summary() -> None:
+    runtime = _runtime(metrics_enabled=True, max_queue_size=3, max_concurrent_requests=2)
+    runtime.metrics.counter("product_requests_total", 7.0, surface="http")
+    runtime.metrics.counter("product_requests_completed_total", 4.0, surface="http")
+    runtime.metrics.counter("product_requests_rejected_total", 2.0, surface="http")
+    runtime.metrics.counter("product_requests_timeout_total", 1.0, surface="http")
+
+    async def _seed_queue() -> None:
+        await runtime.request_queue.put({"id": "active-1"})
+        await runtime.request_queue.put({"id": "active-2"})
+        waiter = asyncio.create_task(runtime.request_queue.put({"id": "pending-1"}, timeout=1.0))
+        await asyncio.sleep(0)
+        assert runtime.request_queue.pending_count == 1
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+    asyncio.run(_seed_queue())
+    snapshot = metrics_snapshot(runtime)
+
+    queue = snapshot["request_queue"]
+    assert queue["configured_max_concurrent_requests"] == 2
+    assert queue["configured_max_queue_size"] == 3
+    assert queue["active_count"] == 2
+    assert queue["pending_count"] == 1
+    assert queue["inflight_count"] == 3
+    assert queue["is_full"] is False
+
+    outcomes = snapshot["request_outcomes"]
+    assert outcomes["total"] == 7.0
+    assert outcomes["completed"] == 4.0
+    assert outcomes["rejected"] == 2.0
+    assert outcomes["timed_out"] == 1.0
+    assert outcomes["incomplete"] == 0.0
 
 
 def test_execute_generation_rejects_when_queue_full() -> None:

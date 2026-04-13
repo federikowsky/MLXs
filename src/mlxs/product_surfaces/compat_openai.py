@@ -193,7 +193,14 @@ async def _stream_generation(
     deadline = None if timeout is None else loop.time() + timeout
     if request_queue is not None:
         queue_timeout = None if deadline is None else max(0.0, deadline - loop.time())
-        await request_queue.put({"prompt": prompt}, timeout=queue_timeout)
+        try:
+            await request_queue.put({"prompt": prompt}, timeout=queue_timeout)
+        except CapacityExceededError:
+            record_counter(runtime, "product_requests_rejected_total", 1.0, surface="http")
+            raise
+        except RequestTimeoutError:
+            record_counter(runtime, "product_requests_timeout_total", 1.0, surface="http")
+            raise
     record_counter(runtime, "product_requests_total", 1.0, surface="http")
 
     batch_host = getattr(runtime, "batch_host", None)
@@ -211,6 +218,7 @@ async def _stream_generation(
     try:
         async for event in batch_host.stream_execute(prompt, options):
             if timeout is not None and loop.time() >= deadline:
+                record_counter(runtime, "product_requests_timeout_total", 1.0, surface="http")
                 raise RequestTimeoutError(f"Request timed out after {timeout} seconds.")
             yield event
         record_counter(runtime, "product_requests_completed_total", 1.0, surface="http")
@@ -280,20 +288,27 @@ async def handle_chat_completions(
 
     if stream:
         from starlette.responses import StreamingResponse
-        from mlxs.server.sse import build_sse_chunk
+        from mlxs.server.sse import build_sse_chunk, build_sse_error_chunk
 
         request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         created = int(time.time())
 
         async def event_generator():
-            async for event in _stream_generation(runtime, prompt, options):
-                yield build_sse_chunk(
-                    event,
-                    model_id=model_id,
-                    request_id=request_id,
-                    created=created,
-                )
-            yield "data: [DONE]\n\n"
+            try:
+                async for event in _stream_generation(runtime, prompt, options):
+                    yield build_sse_chunk(
+                        event,
+                        model_id=model_id,
+                        request_id=request_id,
+                        created=created,
+                    )
+            except (CapacityExceededError, RequestTimeoutError, MLXsError) as exc:
+                yield build_sse_error_chunk(str(exc), status_code=exc.status_hint)
+            except Exception as exc:
+                logger.exception("Unhandled product-surface streaming error")
+                yield build_sse_error_chunk(f"Error: {exc}", status_code=500)
+            finally:
+                yield "data: [DONE]\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 
