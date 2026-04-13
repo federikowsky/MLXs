@@ -101,6 +101,7 @@ Confirm Layer 4 is responsible for the following and only the following categori
 	•	Confirm request/session lifecycle exposure is Layer 4-owned.
 	•	Confirm operator/user-facing management operations are Layer 4-owned.
 	•	Confirm readiness/health does not report ready before model residency is real.
+	•	Where useful, confirm low-overhead startup/lifecycle visibility exists for ready time, uptime, and boot policy.
 
 4.7 Endpoint-facing admission / rejection / timeout semantics
 	•	Reintroduce endpoint-facing admission semantics in Layer 4.

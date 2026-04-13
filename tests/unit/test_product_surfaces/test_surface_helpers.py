@@ -57,6 +57,7 @@ def _runtime(
         config=config,
         model=SimpleNamespace(),
         tokenizer=SimpleNamespace(),
+        lifecycle=RuntimeLifecycle(model_id="m"),
         prompt_cache=SimpleNamespace(
             stats=lambda: PromptCacheStats(
                 hit_count=0,
@@ -103,16 +104,29 @@ def test_lifecycle_payload_reports_layer4_status() -> None:
     assert payload["status"] == "ok"
     assert payload["ready"] is True
     assert payload["model_id"] == "m"
+    assert payload["instance_id"] is not None
+    assert payload["ready_at"] is not None
+    assert payload["startup_duration_s"] is not None
+    assert payload["uptime_s"] is not None
 
 
 def test_metrics_snapshot_main_app_mode() -> None:
     runtime = _runtime(metrics_enabled=True)
+    runtime.lifecycle.mark_ready()
     runtime.metrics.counter("product_requests_total", 1.0, surface="http")
     snapshot = metrics_snapshot(runtime)
     assert snapshot["enabled"] is True
     assert snapshot["route_mode"] == "main_app"
     assert snapshot["metrics_port_compatibility_only"] is True
     assert snapshot["backend"] == "in_memory"
+    assert snapshot["process"]["pid"] is not None
+    assert snapshot["process"]["rss_source"] == "ps"
+    assert snapshot["startup"]["available"] is True
+    assert snapshot["startup"]["ready"] is True
+    assert snapshot["startup"]["startup_duration_s"] is not None
+    assert snapshot["runtime"]["available"] is True
+    assert snapshot["runtime"]["batch_host_enabled"] is False
+    assert snapshot["memory"]["effective_wired_limit_bytes"] is not None
     assert snapshot["prompt_cache"]["available"] is True
     assert snapshot["prompt_cache"]["entry_count"] == 0
     assert snapshot["request_queue"]["available"] is True
@@ -149,6 +163,7 @@ def test_metrics_snapshot_includes_prompt_cache_stats_and_limits() -> None:
 
 def test_metrics_endpoint_exposes_prompt_cache_section() -> None:
     runtime = _runtime(metrics_enabled=True)
+    runtime.lifecycle.mark_ready()
     runtime.prompt_cache = SimpleNamespace(
         stats=lambda: PromptCacheStats(
             hit_count=2,
@@ -173,6 +188,7 @@ def test_metrics_endpoint_exposes_prompt_cache_section() -> None:
     assert payload["prompt_cache"]["eviction_count"] == 1
     assert payload["prompt_cache"]["entry_count"] == 4
     assert payload["prompt_cache"]["total_bytes"] == 987654
+    assert payload["startup"]["effective_eager_residency"] is True
     assert payload["request_queue"]["available"] is True
     assert payload["request_queue"]["configured_max_queue_size"] == 64
     assert payload["request_outcomes"]["completed"] == 0.0
@@ -196,6 +212,7 @@ def test_create_app_lifespan_awaits_async_shutdown() -> None:
 
 def test_metrics_snapshot_includes_request_queue_and_outcome_summary() -> None:
     runtime = _runtime(metrics_enabled=True, max_queue_size=3, max_concurrent_requests=2)
+    runtime.lifecycle.mark_ready()
     runtime.metrics.counter("product_requests_total", 7.0, surface="http")
     runtime.metrics.counter("product_requests_completed_total", 4.0, surface="http")
     runtime.metrics.counter("product_requests_rejected_total", 2.0, surface="http")
@@ -219,6 +236,9 @@ def test_metrics_snapshot_includes_request_queue_and_outcome_summary() -> None:
     assert queue["configured_max_queue_size"] == 3
     assert queue["active_count"] == 2
     assert queue["pending_count"] == 1
+    assert queue["peak_active_count"] == 2
+    assert queue["peak_pending_count"] == 1
+    assert queue["peak_inflight_count"] == 3
     assert queue["inflight_count"] == 3
     assert queue["is_full"] is False
 
@@ -228,6 +248,82 @@ def test_metrics_snapshot_includes_request_queue_and_outcome_summary() -> None:
     assert outcomes["rejected"] == 2.0
     assert outcomes["timed_out"] == 1.0
     assert outcomes["incomplete"] == 0.0
+
+
+def test_metrics_snapshot_includes_startup_lifecycle_and_boot_policy() -> None:
+    runtime = _runtime(metrics_enabled=True)
+    runtime.lifecycle.mark_ready()
+
+    snapshot = metrics_snapshot(runtime)
+
+    startup = snapshot["startup"]
+    assert startup["available"] is True
+    assert startup["instance_id"] is not None
+    assert startup["model_id"] == "m"
+    assert startup["ready"] is True
+    assert startup["stopped"] is False
+    assert startup["lazy_load_configured"] is True
+    assert startup["preload_configured"] is False
+    assert startup["warmup_after_load"] is False
+    assert startup["effective_eager_residency"] is True
+    assert startup["started_at"] is not None
+    assert startup["ready_at"] is not None
+    assert startup["startup_duration_s"] is not None
+    assert startup["uptime_s"] is not None
+
+
+def test_metrics_snapshot_includes_process_rss_snapshot() -> None:
+    runtime = _runtime(metrics_enabled=True)
+
+    snapshot = metrics_snapshot(runtime)
+
+    process = snapshot["process"]
+    assert process["pid"] is not None
+    assert process["rss_source"] == "ps"
+    if process["available"]:
+        assert process["rss_kb"] is not None
+        assert process["rss_bytes"] == process["rss_kb"] * 1024
+
+
+def test_metrics_snapshot_includes_memory_pressure_and_residency_summary() -> None:
+    runtime = _runtime(metrics_enabled=True)
+    runtime.prompt_cache = SimpleNamespace(
+        stats=lambda: PromptCacheStats(
+            hit_count=0,
+            miss_count=0,
+            eviction_count=0,
+            entry_count=2,
+            total_bytes=1024,
+        )
+    )
+
+    snapshot = metrics_snapshot(runtime)
+
+    memory = snapshot["memory"]
+    assert memory["prompt_cache_total_bytes"] == 1024
+    assert memory["prompt_cache_on_memory_ceiling"] == "trim_cache"
+    assert memory["prompt_cache_target_rss_ratio"] == 0.9
+    if memory["rss_bytes"] is not None:
+        assert memory["prompt_cache_to_rss_ratio"] is not None
+
+
+def test_metrics_snapshot_includes_runtime_operating_point_summary() -> None:
+    runtime = _runtime(metrics_enabled=True, max_queue_size=3, max_concurrent_requests=2)
+
+    snapshot = metrics_snapshot(runtime)
+
+    runtime_payload = snapshot["runtime"]
+    assert runtime_payload["available"] is True
+    assert runtime_payload["prefill_batch_size"] == 1
+    assert runtime_payload["completion_batch_size"] == 4
+    assert runtime_payload["prefill_step_size"] == 2048
+    assert runtime_payload["max_concurrent_requests"] == 2
+    assert runtime_payload["max_queue_size"] == 3
+    assert runtime_payload["request_timeout_seconds"] == 300.0
+    assert runtime_payload["compile_decode"] is False
+    assert runtime_payload["warmup_after_load"] is False
+    assert runtime_payload["stream_policy"] == "single"
+    assert runtime_payload["clear_cache_interval"] == 256
 
 
 def test_execute_generation_rejects_when_queue_full() -> None:

@@ -22,7 +22,15 @@ class RequestQueue:
     CapacityExceededError (maps to 503).
     """
 
-    __slots__ = ("_active", "_max_concurrent", "_max_size", "_pending", "_timeout")
+    __slots__ = (
+        "_active",
+        "_max_concurrent",
+        "_max_size",
+        "_peak_active",
+        "_peak_pending",
+        "_pending",
+        "_timeout",
+    )
 
     def __init__(
         self,
@@ -34,6 +42,8 @@ class RequestQueue:
         self._active = 0
         self._max_concurrent = max_concurrent
         self._max_size = max_size
+        self._peak_active = 0
+        self._peak_pending = 0
         self._timeout = timeout
         self._pending: deque[tuple[dict, asyncio.Future[dict]]] = deque()
 
@@ -41,6 +51,7 @@ class RequestQueue:
         """Admit a request or queue it pending a free execution slot."""
         if self._active < self._max_concurrent:
             self._active += 1
+            self._peak_active = max(self._peak_active, self._active)
             return
 
         if self._max_size > 0 and len(self._pending) >= self._max_size:
@@ -52,6 +63,7 @@ class RequestQueue:
         waiter: asyncio.Future[dict] = loop.create_future()
         entry = (request, waiter)
         self._pending.append(entry)
+        self._peak_pending = max(self._peak_pending, len(self._pending))
         wait_timeout = self._timeout if timeout is None else timeout
         try:
             if wait_timeout is None:
@@ -91,3 +103,11 @@ class RequestQueue:
     @property
     def pending_count(self) -> int:
         return len(self._pending)
+
+    @property
+    def peak_active_count(self) -> int:
+        return self._peak_active
+
+    @property
+    def peak_pending_count(self) -> int:
+        return self._peak_pending

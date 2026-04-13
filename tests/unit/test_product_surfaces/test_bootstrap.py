@@ -5,6 +5,9 @@ import asyncio
 from mlxs.config.schema import AppConfig
 from mlxs.product_surfaces.bootstrap import (
     ProductRuntime,
+    _await_request_drain,
+    _queue_counts,
+    _effective_eager_residency,
     _runtime_model_config,
     _serving_completion_batch_size,
     _shutdown_grace_timeout,
@@ -49,6 +52,10 @@ def test_runtime_model_config_preserves_explicit_eager_model_config() -> None:
     assert runtime_model is config.model
 
 
+def test_effective_eager_residency_is_true_for_layer4_runtime() -> None:
+    assert _effective_eager_residency(AppConfig()) is True
+
+
 def test_shutdown_grace_timeout_is_bounded_by_request_timeout() -> None:
     config = AppConfig()
     assert _shutdown_grace_timeout(config) == 30.0
@@ -62,6 +69,26 @@ def test_shutdown_grace_timeout_is_bounded_by_request_timeout() -> None:
         update={"server": config.server.model_copy(update={"request_timeout": 0.01})}
     )
     assert _shutdown_grace_timeout(config) == 0.5
+
+
+def test_queue_counts_handles_missing_values() -> None:
+    class _Queue:
+        active_count = None
+        pending_count = None
+
+    assert _queue_counts(_Queue()) == (0, 0)
+
+
+def test_await_request_drain_reports_timeout_state() -> None:
+    class _Queue:
+        active_count = 1
+        pending_count = 1
+
+    result = asyncio.run(_await_request_drain(_Queue(), timeout_s=0.01))
+
+    assert result["drained"] is False
+    assert result["active_count"] == 1
+    assert result["pending_count"] == 1
 
 
 def test_product_runtime_shutdown_waits_for_request_drain() -> None:

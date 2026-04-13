@@ -89,6 +89,27 @@ class TestQueueBoundary:
 
         asyncio.run(_test())
 
+    def test_tracks_peak_active_and_pending_counts(self) -> None:
+        async def _test() -> None:
+            q = RequestQueue(max_size=2, max_concurrent=1)
+            await q.put({"id": 1})
+            waiting_2 = asyncio.create_task(q.put({"id": 2}, timeout=0.2))
+            waiting_3 = asyncio.create_task(q.put({"id": 3}, timeout=0.2))
+            await asyncio.sleep(0)
+            assert q.peak_active_count == 1
+            assert q.peak_pending_count == 2
+            admitted = await q.get()
+            assert admitted == {"id": 2}
+            await waiting_2
+            admitted = await q.get()
+            assert admitted == {"id": 3}
+            await waiting_3
+            await q.get()
+            assert q.active_count == 0
+            assert q.pending_count == 0
+
+        asyncio.run(_test())
+
     def test_unbounded_pending_queue_respects_active_cap(self) -> None:
         async def _test() -> None:
             q = RequestQueue(max_size=0, max_concurrent=1)

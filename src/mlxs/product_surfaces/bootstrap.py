@@ -24,19 +24,40 @@ def _shutdown_grace_timeout(config: AppConfig) -> float:
     return min(30.0, max(0.5, float(request_timeout)))
 
 
-async def _await_request_drain(request_queue: Any, *, timeout_s: float) -> None:
+def _queue_counts(request_queue: Any) -> tuple[int, int]:
+    active = getattr(request_queue, "active_count", None)
+    pending = getattr(request_queue, "pending_count", None)
+    return int(active or 0), int(pending or 0)
+
+
+async def _await_request_drain(request_queue: Any, *, timeout_s: float) -> dict[str, float | int | bool]:
     """Wait briefly for already-admitted requests to drain."""
     if request_queue is None:
-        return
+        return {
+            "drained": True,
+            "waited_s": 0.0,
+            "active_count": 0,
+            "pending_count": 0,
+        }
     loop = asyncio.get_running_loop()
+    started = loop.time()
     deadline = loop.time() + timeout_s
     while True:
-        active = getattr(request_queue, "active_count", None)
-        pending = getattr(request_queue, "pending_count", None)
-        if (active or 0) == 0 and (pending or 0) == 0:
-            return
+        active, pending = _queue_counts(request_queue)
+        if active == 0 and pending == 0:
+            return {
+                "drained": True,
+                "waited_s": loop.time() - started,
+                "active_count": active,
+                "pending_count": pending,
+            }
         if loop.time() >= deadline:
-            return
+            return {
+                "drained": False,
+                "waited_s": loop.time() - started,
+                "active_count": active,
+                "pending_count": pending,
+            }
         await asyncio.sleep(0.01)
 
 
@@ -60,13 +81,32 @@ class ProductRuntime:
     lifecycle: RuntimeLifecycle
 
     async def shutdown(self) -> None:
-        await _await_request_drain(
+        active_count, pending_count = _queue_counts(self.request_queue)
+        timeout_s = _shutdown_grace_timeout(self.config)
+        logger.info(
+            "Layer 4 shutdown starting "
+            "(instance_id=%s, active=%d, pending=%d, grace_timeout_s=%.3f)",
+            self.lifecycle.instance_id,
+            active_count,
+            pending_count,
+            timeout_s,
+        )
+        drain = await _await_request_drain(
             self.request_queue,
-            timeout_s=_shutdown_grace_timeout(self.config),
+            timeout_s=timeout_s,
         )
         if self.batch_host is not None:
             self.batch_host.shutdown()
         self.lifecycle.mark_stopped()
+        logger.info(
+            "Layer 4 shutdown complete in %.3fs "
+            "(instance_id=%s, drained=%s, active=%d, pending=%d)",
+            float(drain["waited_s"]),
+            self.lifecycle.instance_id,
+            bool(drain["drained"]),
+            int(drain["active_count"]),
+            int(drain["pending_count"]),
+        )
 
 
 def _serving_completion_batch_size(config: AppConfig) -> int:
@@ -89,6 +129,12 @@ def _runtime_model_config(config: AppConfig):
         return config.model
     logger.info("Overriding lazy model load for Layer 4 runtime bootstrap")
     return config.model.model_copy(update={"preload": True})
+
+
+def _effective_eager_residency(config: AppConfig) -> bool:
+    """Layer 4 bootstrap always forces eager model residency before ready."""
+    del config
+    return True
 
 
 def create_runtime(config: AppConfig) -> ProductRuntime:
@@ -165,4 +211,18 @@ def create_runtime(config: AppConfig) -> ProductRuntime:
         lifecycle=lifecycle,
     )
     lifecycle.mark_ready()
+    startup_duration_s = (
+        lifecycle.ready_at - lifecycle.started_at
+        if lifecycle.ready_at is not None
+        else 0.0
+    )
+    logger.info(
+        "Layer 4 runtime ready in %.3fs "
+        "(instance_id=%s, effective_eager_residency=%s, warmup_after_load=%s, metrics_enabled=%s)",
+        startup_duration_s,
+        lifecycle.instance_id,
+        _effective_eager_residency(config),
+        config.generate.warmup_after_load,
+        config.observability.metrics_enabled,
+    )
     return runtime
