@@ -41,15 +41,12 @@ class ProductRuntime:
 
 
 def _serving_completion_batch_size(config: AppConfig) -> int:
-    """Current Layer 4 serving policy for text batching.
+    """Layer 4 serving policy for text batching.
 
-    Grouped decode remains disabled at the product surface until remote
-    validation proves semantic parity for same-prompt concurrent requests.
-    Layer 4 still hosts the scheduler-backed path so concurrency is serialized
-    onto one runtime worker instead of fanning out unsafe per-request threads.
+    Product surfaces inherit the configured completion batch size once the
+    Layer 1 grouped-decode path is remotely validated for real-model parity.
     """
-    del config
-    return 1
+    return config.batch.completion_batch_size
 
 
 def create_runtime(config: AppConfig) -> ProductRuntime:

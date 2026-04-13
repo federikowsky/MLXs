@@ -4,7 +4,7 @@ from mlxs.config.schema import AppConfig
 from mlxs.product_surfaces.bootstrap import _serving_completion_batch_size
 
 
-def test_serving_completion_batch_size_is_currently_serialized() -> None:
+def test_serving_completion_batch_size_uses_batch_config() -> None:
     config = AppConfig()
     config = config.model_copy(
         update={
@@ -17,4 +17,4 @@ def test_serving_completion_batch_size_is_currently_serialized() -> None:
         }
     )
 
-    assert _serving_completion_batch_size(config) == 1
+    assert _serving_completion_batch_size(config) == 4

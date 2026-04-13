@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import mlx.core as mx
 
+import mlxs.layers.rope as rope_mod
 from mlxs.layers.rope import (
+    DefaultRoPE,
     DynamicNTKScalingRoPE,
     Llama3RoPE,
     SuScaledRoPE,
@@ -23,8 +25,9 @@ def _rope_input(shape: tuple[int, ...] = (1, 2, 8)) -> mx.array:
 
 
 def test_initialize_rope_default() -> None:
-    """initialize_rope with scaling_config=None returns default nn.RoPE."""
+    """initialize_rope with scaling_config=None returns default wrapper."""
     rope = initialize_rope(dims=8, base=10000.0, traditional=False, scaling_config=None)
+    assert isinstance(rope, DefaultRoPE)
     x = _rope_input((1, 2, 8))
     out = rope(x, 0)
     assert out.shape == x.shape
@@ -40,6 +43,7 @@ def test_initialize_rope_linear() -> None:
         traditional=False,
         scaling_config={"type": "linear", "factor": 2.0},
     )
+    assert isinstance(rope, DefaultRoPE)
     x = _rope_input((1, 2, 8))
     out = rope(x, 0)
     assert out.shape == x.shape
@@ -195,3 +199,39 @@ def test_dynamic_ntk_rope_call() -> None:
     out = rope(x, 0)
     assert out.shape == x.shape
     mx.eval(out)
+
+
+def test_apply_rope_safely_uses_rowwise_path_for_batched_decode() -> None:
+    """Batched single-token decode with offset>0 is routed row-wise."""
+    calls: list[tuple[tuple[int, ...], int]] = []
+
+    def fake_apply(x: mx.array, offset: int | mx.array) -> mx.array:
+        offset_int = int(offset) if isinstance(offset, int) else int(offset.item())
+        calls.append((tuple(int(dim) for dim in x.shape), offset_int))
+        out = x + 1
+        if x.shape[0] > 1:
+            out = mx.concatenate([out[:1], out[1:2] + 5], axis=0)
+        return out
+
+    x = _rope_input((2, 4, 1, 8))
+    out = rope_mod._apply_rope_safely(x, 9, fake_apply)
+    assert calls == [((1, 4, 1, 8), 9), ((1, 4, 1, 8), 9)]
+    assert bool(mx.allclose(out[0], out[1], atol=0, rtol=0).item())
+
+
+def test_apply_rope_safely_keeps_prefill_batched_path() -> None:
+    """Prefill and zero-offset paths still use the batched fast path."""
+    calls: list[tuple[tuple[int, ...], int]] = []
+
+    def fake_apply(x: mx.array, offset: int | mx.array) -> mx.array:
+        offset_int = int(offset) if isinstance(offset, int) else int(offset.item())
+        calls.append((tuple(int(dim) for dim in x.shape), offset_int))
+        return x
+
+    prefill = _rope_input((2, 4, 2, 8))
+    out_prefill = rope_mod._apply_rope_safely(prefill, 9, fake_apply)
+    assert out_prefill.shape == prefill.shape
+    zero_offset = _rope_input((2, 4, 1, 8))
+    out_zero = rope_mod._apply_rope_safely(zero_offset, 0, fake_apply)
+    assert out_zero.shape == zero_offset.shape
+    assert calls == [((2, 4, 2, 8), 9), ((2, 4, 1, 8), 0)]
