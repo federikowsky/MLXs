@@ -237,14 +237,13 @@ async def handle_chat_completions(
         return _json_error(f"Error: {exc}", 500)
 
     if stream:
-        from sse_starlette.sse import EventSourceResponse
-        from starlette.responses import JSONResponse
+        from starlette.responses import StreamingResponse
 
         async def event_generator():
             for sse_chunk in token_events_to_sse_fn(iter(events), model_id=model_id):
                 yield sse_chunk
 
-        return EventSourceResponse(event_generator(), media_type="text/event-stream")
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
 
     from starlette.responses import JSONResponse
 

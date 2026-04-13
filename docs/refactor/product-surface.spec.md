@@ -132,6 +132,10 @@ It owns:
 	•	product-facing management commands or endpoints,
 	•	exposure of management operations.
 
+Layer 4 readiness/lifecycle exposure must reflect materially usable runtime
+state. A product surface must not report itself ready if model residency still
+depends on a first-request lazy load.
+
 3.7 Endpoint-facing admission / rejection / timeout semantics
 
 Where these are product-surface semantics, Layer 4 owns:

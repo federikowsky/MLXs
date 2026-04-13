@@ -217,6 +217,33 @@ def test_chat_completions_routes_supported_video_through_real_handler(
     assert tuple(int(dim) for dim in calls[0]["input_embeddings"].shape) == (3, 4)
 
 
+def test_chat_completions_stream_frames_sse_once() -> None:
+    deps, _calls = _make_deps()
+    client = TestClient(create_app(deps))
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "mlxs",
+            "stream": True,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "stream please"}],
+                }
+            ],
+        },
+    ) as response:
+        lines = [line for line in response.iter_lines() if line]
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert lines[0].startswith("data: {")
+    assert not lines[0].startswith("data: data:")
+    assert lines[-1] == "data: [DONE]"
+
+
 def test_chat_completions_rejects_audio_inputs_in_serving_scope() -> None:
     deps, calls = _make_deps()
     client = TestClient(create_app(deps))

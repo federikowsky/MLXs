@@ -49,6 +49,19 @@ def _serving_completion_batch_size(config: AppConfig) -> int:
     return config.batch.completion_batch_size
 
 
+def _runtime_model_config(config: AppConfig):
+    """Force eager model residency for Layer 4 runtime bootstrap.
+
+    Product-surface health/readiness should only report ready once the model is
+    actually resident. Lazy model loading remains a lower-level capability, but
+    the Layer 4 composition root materializes the model before serving starts.
+    """
+    if config.model.preload or not config.model.lazy_load:
+        return config.model
+    logger.info("Overriding lazy model load for Layer 4 runtime bootstrap")
+    return config.model.model_copy(update={"preload": True})
+
+
 def create_runtime(config: AppConfig) -> ProductRuntime:
     """Construct the concrete Layer 4 runtime from product configuration."""
     import mlx.core as mx
@@ -75,10 +88,11 @@ def create_runtime(config: AppConfig) -> ProductRuntime:
             pass
 
     logger.info("Loading model from %s", config.model.model_path)
+    model_config = _runtime_model_config(config)
     try:
         model, tokenizer = load_model_and_tokenizer(
-            config.model.model_path,
-            config.model,
+            model_config.model_path,
+            model_config,
         )
     except Exception as exc:
         lifecycle.mark_error(str(exc))
