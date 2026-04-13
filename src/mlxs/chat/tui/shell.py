@@ -535,7 +535,14 @@ class ChatShell:
         self._invalidate()
 
     def show_help(self) -> None:
+        if self._confirmation_dialog.visible:
+            self._confirmation_dialog.close()
+        if self._command_palette.visible:
+            self._command_palette.close()
+        if self._reference_picker.visible:
+            self._reference_picker.close()
         self._help_overlay.open()
+        self._application.layout.focus(self._help_overlay.window)
         self._invalidate()
 
     def show_status(self, text: str) -> None:

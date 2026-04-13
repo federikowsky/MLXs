@@ -54,6 +54,7 @@ def test_chat_shell_show_help_opens_overlay_without_transcript_notice() -> None:
     assert "slash commands:" not in transcript
     assert "slash commands:" in help_overlay
     assert shell._help_overlay.visible is True
+    assert shell._application.layout.current_window is shell._help_overlay.window
 
 
 def test_chat_shell_confirmation_accept_runs_callback() -> None:

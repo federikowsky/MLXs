@@ -125,6 +125,39 @@ def test_escape_closes_help_overlay_before_other_overlays() -> None:
     assert called == ["close-help"]
 
 
+def test_help_overlay_blocks_newline_submission_shortcuts() -> None:
+    buffer = Buffer()
+    called: list[str] = []
+    kb = _make_keymap(
+        buffer=buffer,
+        is_help_open=lambda: True,
+        submit_buffer=lambda: called.append("submit"),
+    )
+
+    _binding(kb, ("Keys.ControlM",)).handler(SimpleNamespace(app=None))
+    _binding(kb, ("Keys.ControlJ",)).handler(SimpleNamespace(app=None))
+
+    assert buffer.text == ""
+    assert called == []
+
+
+def test_help_overlay_blocks_slash_and_at_launchers() -> None:
+    buffer = Buffer()
+    called: list[str] = []
+    kb = _make_keymap(
+        buffer=buffer,
+        is_help_open=lambda: True,
+        focus_palette=lambda: called.append("palette"),
+        open_reference_picker=lambda: called.append("picker"),
+    )
+
+    _binding(kb, ("/",)).handler(SimpleNamespace(app=SimpleNamespace(current_buffer=buffer)))
+    _binding(kb, ("@",)).handler(SimpleNamespace(app=SimpleNamespace(current_buffer=buffer)))
+
+    assert buffer.text == ""
+    assert called == []
+
+
 def test_enter_accepts_confirmation_when_open() -> None:
     called: list[str] = []
     kb = _make_keymap(

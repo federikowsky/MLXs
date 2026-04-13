@@ -46,6 +46,8 @@ def build_chat_key_bindings(
 
     @kb.add("/")
     def _slash(event) -> None:
+        if is_help_open():
+            return
         if is_confirmation_open():
             return
         if (
@@ -63,6 +65,8 @@ def build_chat_key_bindings(
 
     @kb.add("@")
     def _at(event) -> None:
+        if is_help_open():
+            return
         if is_confirmation_open():
             return
         if (
@@ -80,6 +84,8 @@ def build_chat_key_bindings(
 
     @kb.add("enter")
     def _newline(event) -> None:
+        if is_help_open():
+            return
         if is_confirmation_open():
             confirm_accept()
             return
@@ -100,6 +106,8 @@ def build_chat_key_bindings(
 
     @kb.add("c-j")
     def _submit(event) -> None:
+        if is_help_open():
+            return
         if is_confirmation_open():
             confirm_accept()
             return
@@ -120,6 +128,8 @@ def build_chat_key_bindings(
 
     @kb.add("tab")
     def _next_completion(event) -> None:
+        if is_help_open() or is_confirmation_open():
+            return
         if buffer.complete_state is None:
             buffer.start_completion(select_first=False)
             return
@@ -127,6 +137,8 @@ def build_chat_key_bindings(
 
     @kb.add("s-tab")
     def _previous_completion(event) -> None:
+        if is_help_open() or is_confirmation_open():
+            return
         if buffer.complete_state is None:
             buffer.start_completion(select_first=False)
             return
@@ -173,6 +185,8 @@ def build_chat_key_bindings(
     def _focus_filter(event) -> None:
         if get_state() != "idle":
             return
+        if is_help_open():
+            return
         if is_confirmation_open():
             return
         if is_reference_picker_open():
@@ -185,6 +199,8 @@ def build_chat_key_bindings(
 
     @kb.add("up")
     def _history_up(event) -> None:
+        if is_help_open():
+            return
         if is_confirmation_open():
             return
         if is_reference_picker_focused():
@@ -199,6 +215,8 @@ def build_chat_key_bindings(
 
     @kb.add("down")
     def _history_down(event) -> None:
+        if is_help_open():
+            return
         if is_confirmation_open():
             return
         if is_reference_picker_focused():
@@ -215,6 +233,8 @@ def build_chat_key_bindings(
     def _previous_session(event) -> None:
         if get_state() != "idle":
             return
+        if is_help_open():
+            return
         if is_confirmation_open():
             return
         callback = get_previous_session_callback()
@@ -224,6 +244,8 @@ def build_chat_key_bindings(
     @kb.add("c-down")
     def _next_session(event) -> None:
         if get_state() != "idle":
+            return
+        if is_help_open():
             return
         if is_confirmation_open():
             return
