@@ -22,6 +22,7 @@ from mlxs.cache.kv import KVCache
 from mlxs.generate.logits import make_logits_processors
 from mlxs.generate.sampling import make_sampler
 from mlxs.generate.stop import StopCondition
+from mlxs.protocols.cache import CacheProtocol
 from mlxs.protocols.generate import TokenizerProtocol
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ class _Sequence:
     current_token: mx.array | None = None
     events: list[TokenEvent] = field(default_factory=list)
     prompt_token_count: int = 0
+    full_prompt_token_count: int | None = None
 
     def setup(self) -> None:
         """Resolve abstractions once before decode loop (O2)."""
@@ -75,7 +77,7 @@ class _Sequence:
         self.logits_processors = make_logits_processors(
             repetition_penalty=self.options.repetition_penalty,
         )
-        self.prompt_token_count = len(self.prompt_tokens)
+        self.prompt_token_count = self.full_prompt_token_count or len(self.prompt_tokens)
 
 
 class BatchScheduler:
@@ -118,6 +120,9 @@ class BatchScheduler:
         tokenizer: TokenizerProtocol,
         prompt: str | list[int],
         options: GenerateOptions,
+        *,
+        cache_state: list[CacheProtocol] | None = None,
+        prompt_token_count: int | None = None,
     ) -> None:
         """Enqueue a new generation request."""
         prompt_tokens = tokenizer.encode(prompt) if isinstance(prompt, str) else list(prompt)
@@ -127,6 +132,8 @@ class BatchScheduler:
             tokenizer=tokenizer,
             prompt_tokens=prompt_tokens,
             options=options,
+            cache=cache_state,  # type: ignore[arg-type]
+            full_prompt_token_count=prompt_token_count,
         )
         self._pending[request_id] = seq
         logger.debug("Added request %s (prompt_len=%d)", request_id, len(prompt_tokens))
@@ -191,7 +198,8 @@ class BatchScheduler:
         """Prefill and sample the first token for one sequence."""
         seq.state = _SeqState.PREFILLING
         seq.setup()
-        seq.cache = seq.model.make_cache()
+        if seq.cache is None:
+            seq.cache = seq.model.make_cache()
 
         prompt_array = mx.array(seq.prompt_tokens)
         total = len(seq.prompt_tokens)
@@ -217,13 +225,21 @@ class BatchScheduler:
 
     def _take_prefill_cohort(self) -> list[tuple[str, _Sequence]]:
         """Take a pending cohort with the same model and prompt length."""
+        items = list(self._pending.items())
+        if not items:
+            return []
+        if items[0][1].cache is not None:
+            return []
+
         capacity = min(
             self._completion_batch_size - len(self._active),
             self._prefill_batch_size,
         )
         cohort: list[tuple[str, _Sequence]] = []
         anchor_key: tuple[int, int] | None = None
-        for request_id, seq in self._pending.items():
+        for request_id, seq in items:
+            if seq.cache is not None:
+                continue
             key = (id(seq.model), len(seq.prompt_tokens))
             if anchor_key is None:
                 anchor_key = key
@@ -469,11 +485,11 @@ class BatchScheduler:
                     values[batch_idx : batch_idx + 1],
                 )
 
-    def drain(self) -> Iterator[tuple[str, list[TokenEvent]]]:
+    def drain(self) -> Iterator[tuple[str, list[TokenEvent], list[KVCache] | None]]:
         """Drain all finished sequences."""
         while self._finished:
             request_id, seq = self._finished.popitem(last=False)
-            yield request_id, seq.events
+            yield request_id, seq.events, seq.cache
 
     @property
     def active_count(self) -> int:

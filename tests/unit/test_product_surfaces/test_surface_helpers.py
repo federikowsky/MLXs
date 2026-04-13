@@ -23,6 +23,7 @@ def _runtime(
     metrics_enabled: bool = False,
     request_timeout: float = 300.0,
     max_queue_size: int = 64,
+    max_concurrent_requests: int = 16,
     generate_fn=None,
 ):
     config = AppConfig()
@@ -32,6 +33,7 @@ def _runtime(
                 update={
                     "request_timeout": request_timeout,
                     "max_queue_size": max_queue_size,
+                    "max_concurrent_requests": max_concurrent_requests,
                 }
             ),
             "observability": config.observability.model_copy(
@@ -51,7 +53,11 @@ def _runtime(
         metrics=InMemoryMetrics() if metrics_enabled else NoOpMetrics(),
         generate_fn=generate_fn or _default_generate,
         batch_host=None,
-        request_queue=RequestQueue(max_size=max_queue_size, timeout=request_timeout),
+        request_queue=RequestQueue(
+            max_size=max_queue_size,
+            max_concurrent=max_concurrent_requests,
+            timeout=request_timeout,
+        ),
     )
 
 
@@ -94,18 +100,25 @@ def test_metrics_snapshot_main_app_mode() -> None:
 
 
 def test_execute_generation_rejects_when_queue_full() -> None:
-    runtime = _runtime(max_queue_size=1)
-    asyncio.run(runtime.request_queue.put({"id": "existing"}))
+    runtime = _runtime(max_queue_size=1, max_concurrent_requests=1)
 
-    with pytest.raises(CapacityExceededError, match="queue full"):
-        asyncio.run(
-            _execute_generation(
+    async def _run() -> None:
+        await runtime.request_queue.put({"id": "active"})
+        task = asyncio.create_task(runtime.request_queue.put({"id": "pending"}, timeout=0.1))
+        await asyncio.sleep(0)
+        with pytest.raises(CapacityExceededError, match="queue full"):
+            await _execute_generation(
                 runtime,
                 "prompt",
                 GenerateOptions(),
                 input_embeddings=None,
             )
-        )
+        admitted = await runtime.request_queue.get()
+        assert admitted == {"id": "pending"}
+        await task
+        await runtime.request_queue.get()
+
+    asyncio.run(_run())
 
 
 def test_execute_generation_times_out_at_layer4_surface() -> None:
@@ -125,6 +138,28 @@ def test_execute_generation_times_out_at_layer4_surface() -> None:
                 input_embeddings=None,
             )
         )
+
+
+def test_execute_generation_times_out_while_waiting_for_admission() -> None:
+    runtime = _runtime(
+        request_timeout=0.01,
+        max_queue_size=1,
+        max_concurrent_requests=1,
+    )
+
+    async def _run() -> None:
+        await runtime.request_queue.put({"id": "active"})
+        with pytest.raises(RequestTimeoutError, match="timed out"):
+            await _execute_generation(
+                runtime,
+                "prompt",
+                GenerateOptions(),
+                input_embeddings=None,
+            )
+        assert runtime.request_queue.pending_count == 0
+        await runtime.request_queue.get()
+
+    asyncio.run(_run())
 
 
 def test_execute_generation_uses_batch_host_for_text_only_requests() -> None:

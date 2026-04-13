@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from mlxs._types import GenerateOptions, TokenEvent
+    from mlxs.protocols.cache import CacheProtocol
     from mlxs.protocols.generate import TokenizerProtocol
     from mlxs.protocols.model import ModelProtocol
 
@@ -32,6 +33,9 @@ class BatchSchedulerProtocol(Protocol):
         tokenizer: TokenizerProtocol,
         prompt: str | list[int],
         options: GenerateOptions,
+        *,
+        cache_state: list[CacheProtocol] | None = None,
+        prompt_token_count: int | None = None,
     ) -> None:
         """Enqueue a new generation request.
 
@@ -41,6 +45,9 @@ class BatchSchedulerProtocol(Protocol):
             tokenizer: Tokenizer for encoding/decoding.
             prompt: Input text or pre-tokenized ids.
             options: Generation parameters.
+            cache_state: Optional imported cache state for prompt-cache reuse.
+            prompt_token_count: Full prompt length when ``prompt`` is a cached
+                suffix rather than the full request prompt.
         """
         ...
 
@@ -60,11 +67,12 @@ class BatchSchedulerProtocol(Protocol):
         """
         ...
 
-    def drain(self) -> Iterator[tuple[str, list[TokenEvent]]]:
+    def drain(self) -> Iterator[tuple[str, list[TokenEvent], list[CacheProtocol] | None]]:
         """Drain all finished sequences from the batch.
 
         Yields:
-            Tuples of (request_id, all_token_events) for completed sequences.
+            Tuples of (request_id, all_token_events, final_cache_state) for
+            completed sequences.
         """
         ...
 

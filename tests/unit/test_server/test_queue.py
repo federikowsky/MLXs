@@ -1,8 +1,4 @@
-"""Tests for request queue with backpressure (§6.7).
-
-Patterns: happy path, boundary, negative path, stateful lifecycle,
-recovery/resilience.
-"""
+"""Tests for Layer 4 request admission semantics (§6.7, Phase 5)."""
 
 from __future__ import annotations
 
@@ -10,121 +6,145 @@ import asyncio
 
 import pytest
 
-from mlxs._errors import CapacityExceededError
+from mlxs._errors import CapacityExceededError, RequestTimeoutError
 from mlxs.server.queue import RequestQueue
 
 
-@pytest.fixture
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
 class TestQueueHappyPath:
-    def test_put_and_get(self) -> None:
+    def test_admits_immediately_when_active_slot_available(self) -> None:
         async def _test() -> None:
-            q = RequestQueue(max_size=10)
+            q = RequestQueue(max_size=10, max_concurrent=2)
             await q.put({"id": 1})
-            result = await q.get()
-            assert result == {"id": 1}
-
-        asyncio.run(_test())
-
-    def test_fifo_order(self) -> None:
-        async def _test() -> None:
-            q = RequestQueue(max_size=10)
-            for i in range(5):
-                await q.put({"id": i})
-            for i in range(5):
-                result = await q.get()
-                assert result["id"] == i
-
-        asyncio.run(_test())
-
-    def test_size_property(self) -> None:
-        async def _test() -> None:
-            q = RequestQueue(max_size=10)
+            assert q.active_count == 1
+            assert q.pending_count == 0
             assert q.size == 0
-            await q.put({"id": 1})
-            assert q.size == 1
             await q.get()
-            assert q.size == 0
+            assert q.active_count == 0
+
+        asyncio.run(_test())
+
+    def test_pending_request_is_admitted_on_release(self) -> None:
+        async def _test() -> None:
+            q = RequestQueue(max_size=10, max_concurrent=1)
+            await q.put({"id": 1})
+            waiting = asyncio.create_task(q.put({"id": 2}, timeout=0.1))
+            await asyncio.sleep(0)
+            assert q.active_count == 1
+            assert q.pending_count == 1
+            released = await q.get()
+            await waiting
+            assert released == {"id": 2}
+            assert q.active_count == 1
+            assert q.pending_count == 0
+            await q.get()
+            assert q.active_count == 0
+
+        asyncio.run(_test())
+
+    def test_pending_admission_is_fifo(self) -> None:
+        async def _test() -> None:
+            q = RequestQueue(max_size=10, max_concurrent=1)
+            await q.put({"id": 1})
+            order: list[int] = []
+
+            async def _wait(request_id: int) -> None:
+                await q.put({"id": request_id}, timeout=0.2)
+                order.append(request_id)
+
+            second = asyncio.create_task(_wait(2))
+            third = asyncio.create_task(_wait(3))
+            await asyncio.sleep(0)
+            assert q.pending_count == 2
+
+            admitted = await q.get()
+            assert admitted == {"id": 2}
+            await second
+            assert order == [2]
+
+            admitted = await q.get()
+            assert admitted == {"id": 3}
+            await third
+            assert order == [2, 3]
+
+            await q.get()
+            assert q.active_count == 0
 
         asyncio.run(_test())
 
 
 class TestQueueBoundary:
-    def test_max_size_one(self) -> None:
+    def test_rejects_when_pending_queue_is_full(self) -> None:
         async def _test() -> None:
-            q = RequestQueue(max_size=1)
+            q = RequestQueue(max_size=1, max_concurrent=1)
             await q.put({"id": 1})
+            waiting = asyncio.create_task(q.put({"id": 2}, timeout=0.1))
+            await asyncio.sleep(0)
             assert q.is_full
-            with pytest.raises(CapacityExceededError):
-                await q.put({"id": 2})
-
-        asyncio.run(_test())
-
-    def test_exactly_at_capacity(self) -> None:
-        async def _test() -> None:
-            q = RequestQueue(max_size=3)
-            for i in range(3):
-                await q.put({"id": i})
-            assert q.is_full
-            assert q.size == 3
-
-        asyncio.run(_test())
-
-    def test_unbounded_queue(self) -> None:
-        async def _test() -> None:
-            q = RequestQueue(max_size=0)  # 0 = unbounded
-            for i in range(100):
-                await q.put({"id": i})
-            assert q.size == 100
-            assert not q.is_full
-
-        asyncio.run(_test())
-
-
-class TestQueueNegativePath:
-    def test_reject_when_full(self) -> None:
-        async def _test() -> None:
-            q = RequestQueue(max_size=2)
-            await q.put({"id": 1})
-            await q.put({"id": 2})
             with pytest.raises(CapacityExceededError, match="queue full"):
-                await q.put({"id": 3})
+                await q.put({"id": 3}, timeout=0.1)
+            admitted = await q.get()
+            assert admitted == {"id": 2}
+            await waiting
+            await q.get()
 
         asyncio.run(_test())
 
-    def test_error_is_mlxs_error(self) -> None:
-        """CapacityExceededError has correct status_hint for HTTP mapping."""
+    def test_unbounded_pending_queue_respects_active_cap(self) -> None:
+        async def _test() -> None:
+            q = RequestQueue(max_size=0, max_concurrent=1)
+            await q.put({"id": 1})
+            tasks = [asyncio.create_task(q.put({"id": i}, timeout=0.2)) for i in range(2, 12)]
+            await asyncio.sleep(0)
+            assert q.active_count == 1
+            assert q.pending_count == 10
+            assert not q.is_full
+            for _ in range(10):
+                await q.get()
+            await asyncio.gather(*tasks)
+            await q.get()
+            assert q.active_count == 0
+            assert q.pending_count == 0
+
+        asyncio.run(_test())
+
+
+class TestQueueTimeouts:
+    def test_pending_request_times_out_while_waiting_for_slot(self) -> None:
+        async def _test() -> None:
+            q = RequestQueue(max_size=1, max_concurrent=1, timeout=0.01)
+            await q.put({"id": 1})
+            with pytest.raises(RequestTimeoutError, match="timed out"):
+                await q.put({"id": 2})
+            assert q.active_count == 1
+            assert q.pending_count == 0
+            await q.get()
+            assert q.active_count == 0
+
+        asyncio.run(_test())
+
+    def test_capacity_restores_after_timed_out_waiter(self) -> None:
+        async def _test() -> None:
+            q = RequestQueue(max_size=1, max_concurrent=1, timeout=0.01)
+            await q.put({"id": 1})
+            with pytest.raises(RequestTimeoutError):
+                await q.put({"id": 2})
+            waiting = asyncio.create_task(q.put({"id": 3}, timeout=0.1))
+            await asyncio.sleep(0)
+            admitted = await q.get()
+            assert admitted == {"id": 3}
+            await waiting
+            await q.get()
+            assert q.active_count == 0
+            assert q.pending_count == 0
+
+        asyncio.run(_test())
+
+
+class TestQueueErrors:
+    def test_capacity_exceeded_error_is_http_compatible(self) -> None:
         err = CapacityExceededError("full")
         assert err.status_hint == 503
 
-
-class TestQueueStateful:
-    def test_capacity_restored_after_get(self) -> None:
-        async def _test() -> None:
-            q = RequestQueue(max_size=1)
-            await q.put({"id": 1})
-            assert q.is_full
-            await q.get()
-            assert not q.is_full
-            await q.put({"id": 2})  # should not raise
-            assert q.size == 1
-
-        asyncio.run(_test())
-
-    def test_multiple_fill_drain_cycles(self) -> None:
-        async def _test() -> None:
-            q = RequestQueue(max_size=2)
-            for cycle in range(3):
-                await q.put({"cycle": cycle, "idx": 0})
-                await q.put({"cycle": cycle, "idx": 1})
-                assert q.is_full
-                await q.get()
-                await q.get()
-                assert q.size == 0
-
-        asyncio.run(_test())
+    def test_request_timeout_error_is_http_compatible(self) -> None:
+        err = RequestTimeoutError("timeout")
+        assert err.status_hint == 503

@@ -91,6 +91,7 @@ def create_runtime(config: AppConfig) -> ProductRuntime:
     prompt_cache_orchestrator = PromptCacheOrchestrator(prompt_cache)
     request_queue = RequestQueue(
         max_size=config.server.max_queue_size,
+        max_concurrent=config.server.max_concurrent_requests,
         timeout=config.server.request_timeout,
     )
     completion_batch_size = _serving_completion_batch_size(config)
@@ -101,6 +102,8 @@ def create_runtime(config: AppConfig) -> ProductRuntime:
             prefill_batch_size=config.batch.prefill_batch_size,
             completion_batch_size=completion_batch_size,
             prefill_step_size=config.batch.prefill_step_size,
+            prompt_cache_orchestrator=prompt_cache_orchestrator,
+            model_id=config.model.model_path or "default",
         )
         if completion_batch_size > 1
         else None

@@ -138,8 +138,12 @@ async def _execute_generation(
     input_embeddings: Any,
 ) -> list[TokenEvent]:
     request_queue = getattr(runtime, "request_queue", None)
+    timeout = getattr(getattr(getattr(runtime, "config", None), "server", None), "request_timeout", None)
+    loop = asyncio.get_running_loop()
+    deadline = None if timeout is None else loop.time() + timeout
     if request_queue is not None:
-        await request_queue.put({"prompt": prompt})
+        queue_timeout = None if deadline is None else max(0.0, deadline - loop.time())
+        await request_queue.put({"prompt": prompt}, timeout=queue_timeout)
     record_counter(runtime, "product_requests_total", 1.0, surface="http")
 
     async def _run() -> list[TokenEvent]:
@@ -160,12 +164,12 @@ async def _execute_generation(
             ),
         )
 
-    timeout = getattr(getattr(getattr(runtime, "config", None), "server", None), "request_timeout", None)
     try:
         if timeout is None:
             events = await _run()
         else:
-            events = await asyncio.wait_for(_run(), timeout=timeout)
+            remaining = max(0.0, deadline - loop.time())
+            events = await asyncio.wait_for(_run(), timeout=remaining)
         record_counter(runtime, "product_requests_completed_total", 1.0, surface="http")
         return events
     except asyncio.TimeoutError as exc:

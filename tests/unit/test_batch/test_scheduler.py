@@ -70,3 +70,40 @@ def test_scheduler_batches_aligned_decode_sequences() -> None:
     assert any(shape[0] == 2 and shape[1] > 1 for shape in model.calls)
     assert (2, 1) in model.calls
     assert max(shape[0] for shape in model.calls) == 2
+
+
+def test_scheduler_adopts_imported_cache_and_preserves_full_prompt_count() -> None:
+    model = _ProbeModel()
+    tokenizer = _DummyTokenizer()
+    options = GenerateOptions(max_tokens=2, temperature=0.0)
+    scheduler = BatchScheduler(
+        prefill_batch_size=1,
+        completion_batch_size=1,
+        prefill_step_size=2048,
+    )
+    imported_cache = model.make_cache()
+    for layer in imported_cache:
+        keys = mx.zeros((1, 1, 3, 4), dtype=mx.float32)
+        values = mx.zeros((1, 1, 3, 4), dtype=mx.float32)
+        layer.update_and_fetch(keys, values)
+
+    scheduler.add(
+        "a",
+        model,
+        tokenizer,
+        [10, 11],
+        options,
+        cache_state=imported_cache,
+        prompt_token_count=5,
+    )
+
+    while scheduler.active_count or scheduler.pending_count:
+        scheduler.step()
+
+    drained = list(scheduler.drain())
+    assert len(drained) == 1
+    request_id, events, final_cache = drained[0]
+    assert request_id == "a"
+    assert final_cache is imported_cache
+    assert events[0].prompt_tokens == 5
+    assert final_cache[0].offset > 3
