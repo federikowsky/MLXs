@@ -12,7 +12,29 @@ import uuid
 from collections.abc import Iterator
 from typing import Any
 
+from starlette.responses import StreamingResponse
+
 from mlxs._types import TokenEvent
+
+
+class DrainFriendlyStreamingResponse(StreamingResponse):
+    """StreamingResponse variant that does not cancel on shutdown disconnect."""
+
+    async def __call__(self, scope, receive, send) -> None:  # type: ignore[override]
+        if scope["type"] == "websocket":
+            send = self._wrap_websocket_denial_send(send)
+            await self.stream_response(send)
+            if self.background is not None:
+                await self.background()
+            return
+
+        try:
+            await self.stream_response(send)
+        except OSError:
+            return
+
+        if self.background is not None:
+            await self.background()
 
 
 def token_events_to_sse(

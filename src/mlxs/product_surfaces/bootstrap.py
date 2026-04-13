@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -13,6 +14,30 @@ from mlxs.product_surfaces.lifecycle import RuntimeLifecycle
 from mlxs.product_surfaces.observability import configure_observability
 
 logger = logging.getLogger(__name__)
+
+
+def _shutdown_grace_timeout(config: AppConfig) -> float:
+    """Bound graceful shutdown wait for already-admitted requests."""
+    request_timeout = getattr(getattr(config, "server", None), "request_timeout", 30.0)
+    if request_timeout is None:
+        return 30.0
+    return min(30.0, max(0.5, float(request_timeout)))
+
+
+async def _await_request_drain(request_queue: Any, *, timeout_s: float) -> None:
+    """Wait briefly for already-admitted requests to drain."""
+    if request_queue is None:
+        return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while True:
+        active = getattr(request_queue, "active_count", None)
+        pending = getattr(request_queue, "pending_count", None)
+        if (active or 0) == 0 and (pending or 0) == 0:
+            return
+        if loop.time() >= deadline:
+            return
+        await asyncio.sleep(0.01)
 
 
 @dataclass(slots=True)
@@ -34,7 +59,11 @@ class ProductRuntime:
     request_queue: Any
     lifecycle: RuntimeLifecycle
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
+        await _await_request_drain(
+            self.request_queue,
+            timeout_s=_shutdown_grace_timeout(self.config),
+        )
         if self.batch_host is not None:
             self.batch_host.shutdown()
         self.lifecycle.mark_stopped()

@@ -178,6 +178,22 @@ def test_metrics_endpoint_exposes_prompt_cache_section() -> None:
     assert payload["request_outcomes"]["completed"] == 0.0
 
 
+def test_create_app_lifespan_awaits_async_shutdown() -> None:
+    runtime = _runtime()
+    marker = {"called": False}
+
+    async def _shutdown() -> None:
+        await asyncio.sleep(0)
+        marker["called"] = True
+
+    runtime.shutdown = _shutdown
+
+    with TestClient(create_app(runtime)):
+        pass
+
+    assert marker["called"] is True
+
+
 def test_metrics_snapshot_includes_request_queue_and_outcome_summary() -> None:
     runtime = _runtime(metrics_enabled=True, max_queue_size=3, max_concurrent_requests=2)
     runtime.metrics.counter("product_requests_total", 7.0, surface="http")

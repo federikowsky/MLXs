@@ -287,8 +287,11 @@ async def handle_chat_completions(
         return _json_error(f"Error: {exc}", 500)
 
     if stream:
-        from starlette.responses import StreamingResponse
-        from mlxs.server.sse import build_sse_chunk, build_sse_error_chunk
+        from mlxs.server.sse import (
+            DrainFriendlyStreamingResponse,
+            build_sse_chunk,
+            build_sse_error_chunk,
+        )
 
         request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         created = int(time.time())
@@ -310,7 +313,7 @@ async def handle_chat_completions(
             finally:
                 yield "data: [DONE]\n\n"
 
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
+        return DrainFriendlyStreamingResponse(event_generator(), media_type="text/event-stream")
 
     from starlette.responses import JSONResponse
 

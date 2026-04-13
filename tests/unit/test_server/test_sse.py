@@ -7,9 +7,15 @@ corner cases, negative path.
 from __future__ import annotations
 
 import json
+import asyncio
 
 from mlxs._types import FinishReason, TokenEvent, TokenLogprobs, TopLogprob
-from mlxs.server.sse import build_completion_response, build_sse_error_chunk, token_events_to_sse
+from mlxs.server.sse import (
+    DrainFriendlyStreamingResponse,
+    build_completion_response,
+    build_sse_error_chunk,
+    token_events_to_sse,
+)
 
 # =============================================================================
 # token_events_to_sse — streaming
@@ -136,6 +142,28 @@ class TestSSEStreamBoundary:
         chunks = list(token_events_to_sse(iter([])))
         assert len(chunks) == 1
         assert chunks[0] == "data: [DONE]\n\n"
+
+    def test_drain_friendly_streaming_response_ignores_disconnect(self) -> None:
+        async def body():
+            yield "data: first\n\n"
+            await asyncio.sleep(0)
+            yield "data: [DONE]\n\n"
+
+        response = DrainFriendlyStreamingResponse(body(), media_type="text/event-stream")
+        messages = []
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            messages.append(message)
+
+        scope = {"type": "http", "asgi": {"spec_version": "2.0"}, "method": "GET", "headers": []}
+        asyncio.run(response(scope, receive, send))
+
+        assert messages[0]["type"] == "http.response.start"
+        assert messages[1]["type"] == "http.response.body"
+        assert messages[-1]["more_body"] is False
 
 
 # =============================================================================

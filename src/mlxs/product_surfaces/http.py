@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import inspect
 from typing import Any
 
 from mlxs.product_surfaces.observability import metrics_endpoint
@@ -48,7 +49,9 @@ def create_app(runtime: Any) -> Any:
         finally:
             shutdown = getattr(runtime, "shutdown", None)
             if callable(shutdown):
-                shutdown()
+                result = shutdown()
+                if inspect.isawaitable(result):
+                    await result
 
     routes = [
         Route("/health", health, methods=["GET"]),
