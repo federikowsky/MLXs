@@ -92,6 +92,7 @@ Confirm Layer 4 is responsible for the following and only the following categori
 	•	Confirm metrics exposure is Layer 4-owned.
 	•	Confirm tracing exposure is Layer 4-owned.
 	•	Confirm logging/telemetry export surfaces are Layer 4-owned.
+	•	Where useful, confirm low-overhead operator visibility exists for prompt-cache hit/miss/entry/byte state.
 
 4.6 Lifecycle and model/session management surfaces
 	•	Reintroduce lifecycle and management exposure in Layer 4.

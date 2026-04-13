@@ -88,6 +88,7 @@ class TestAppConfigDefaults:
         s = ServerConfig()
         assert s.host == "127.0.0.1"
         assert s.port == 8080
+        assert s.max_concurrent_requests == 2
         assert s.request_timeout == 300.0
 
     def test_observability_defaults(self) -> None:

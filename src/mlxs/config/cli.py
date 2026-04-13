@@ -259,7 +259,7 @@ _CLI_SPECS: list[tuple[str, str, str, Any, str]] = [
         "max-concurrent-requests",
         "server.max_concurrent_requests",
         "int",
-        16,
+        2,
         "Max concurrent requests",
     ),
     ("max-queue-size", "server.max_queue_size", "int", 64, "Max pending requests (0=unbounded)"),

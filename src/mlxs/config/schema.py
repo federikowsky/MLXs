@@ -278,7 +278,7 @@ class ServerConfig(_Frozen):
     host: str = Field(default="127.0.0.1", description="Bind address.")
     port: int = Field(default=8080, ge=1, le=65535, description="Listen port.")
     max_concurrent_requests: int = Field(
-        default=16,
+        default=2,
         ge=1,
         description="Max concurrent inference requests.",
     )

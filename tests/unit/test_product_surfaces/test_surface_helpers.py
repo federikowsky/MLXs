@@ -12,14 +12,17 @@ from mlxs._errors import CapacityExceededError, RequestTimeoutError
 from mlxs._types import FinishReason, GenerateOptions, TokenEvent
 from mlxs.config.schema import AppConfig
 from mlxs.observability.metrics import InMemoryMetrics, NoOpMetrics
+from mlxs.protocols.prompt_cache import PromptCacheStats
 from mlxs.product_surfaces.compat_openai import (
     _execute_generation,
     _stream_generation,
     build_openai_options,
 )
+from mlxs.product_surfaces.http import create_app
 from mlxs.product_surfaces.lifecycle import RuntimeLifecycle
 from mlxs.product_surfaces.observability import metrics_snapshot
 from mlxs.server.queue import RequestQueue
+from starlette.testclient import TestClient
 
 
 def _runtime(
@@ -54,6 +57,15 @@ def _runtime(
         config=config,
         model=SimpleNamespace(),
         tokenizer=SimpleNamespace(),
+        prompt_cache=SimpleNamespace(
+            stats=lambda: PromptCacheStats(
+                hit_count=0,
+                miss_count=0,
+                eviction_count=0,
+                entry_count=0,
+                total_bytes=0,
+            )
+        ),
         metrics=InMemoryMetrics() if metrics_enabled else NoOpMetrics(),
         generate_fn=generate_fn or _default_generate,
         batch_host=None,
@@ -101,6 +113,62 @@ def test_metrics_snapshot_main_app_mode() -> None:
     assert snapshot["route_mode"] == "main_app"
     assert snapshot["metrics_port_compatibility_only"] is True
     assert snapshot["backend"] == "in_memory"
+    assert snapshot["prompt_cache"]["available"] is True
+    assert snapshot["prompt_cache"]["entry_count"] == 0
+
+
+def test_metrics_snapshot_includes_prompt_cache_stats_and_limits() -> None:
+    runtime = _runtime(metrics_enabled=True)
+    runtime.prompt_cache = SimpleNamespace(
+        stats=lambda: PromptCacheStats(
+            hit_count=3,
+            miss_count=1,
+            eviction_count=2,
+            entry_count=4,
+            total_bytes=123456,
+        )
+    )
+
+    snapshot = metrics_snapshot(runtime)
+
+    prompt_cache = snapshot["prompt_cache"]
+    assert prompt_cache["enabled"] is True
+    assert prompt_cache["max_entries"] == 100
+    assert prompt_cache["hit_count"] == 3
+    assert prompt_cache["miss_count"] == 1
+    assert prompt_cache["lookup_count"] == 4
+    assert prompt_cache["hit_ratio"] == 0.75
+    assert prompt_cache["eviction_count"] == 2
+    assert prompt_cache["entry_count"] == 4
+    assert prompt_cache["total_bytes"] == 123456
+
+
+def test_metrics_endpoint_exposes_prompt_cache_section() -> None:
+    runtime = _runtime(metrics_enabled=True)
+    runtime.prompt_cache = SimpleNamespace(
+        stats=lambda: PromptCacheStats(
+            hit_count=2,
+            miss_count=3,
+            eviction_count=1,
+            entry_count=4,
+            total_bytes=987654,
+        )
+    )
+
+    client = TestClient(create_app(runtime))
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["prompt_cache"]["enabled"] is True
+    assert payload["prompt_cache"]["available"] is True
+    assert payload["prompt_cache"]["hit_count"] == 2
+    assert payload["prompt_cache"]["miss_count"] == 3
+    assert payload["prompt_cache"]["lookup_count"] == 5
+    assert payload["prompt_cache"]["hit_ratio"] == 0.4
+    assert payload["prompt_cache"]["eviction_count"] == 1
+    assert payload["prompt_cache"]["entry_count"] == 4
+    assert payload["prompt_cache"]["total_bytes"] == 987654
 
 
 def test_execute_generation_rejects_when_queue_full() -> None:

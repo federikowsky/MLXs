@@ -52,7 +52,45 @@ def metrics_snapshot(runtime: Any) -> dict[str, Any]:
         snapshot["histograms"] = {key: list(values) for key, values in metrics._histograms.items()}
     else:
         snapshot["backend"] = "noop"
+    snapshot["prompt_cache"] = _prompt_cache_snapshot(runtime)
     return snapshot
+
+
+def _prompt_cache_snapshot(runtime: Any) -> dict[str, Any]:
+    config = getattr(runtime, "config", None)
+    prompt_cache_config = getattr(config, "prompt_cache", None)
+    payload: dict[str, Any] = {
+        "enabled": bool(prompt_cache_config and prompt_cache_config.enabled),
+        "max_entries": getattr(prompt_cache_config, "max_entries", None),
+        "max_bytes": getattr(prompt_cache_config, "max_bytes", None),
+        "trim_on_rss_gb": getattr(prompt_cache_config, "trim_on_rss_gb", None),
+        "target_rss_ratio": getattr(prompt_cache_config, "target_rss_ratio", None),
+        "on_memory_ceiling": (
+            getattr(getattr(prompt_cache_config, "on_memory_ceiling", None), "value", None)
+        ),
+    }
+
+    prompt_cache = getattr(runtime, "prompt_cache", None)
+    stats_fn = getattr(prompt_cache, "stats", None)
+    if not callable(stats_fn):
+        payload["available"] = False
+        return payload
+
+    stats = stats_fn()
+    lookups = stats.hit_count + stats.miss_count
+    payload.update(
+        {
+            "available": True,
+            "hit_count": stats.hit_count,
+            "miss_count": stats.miss_count,
+            "lookup_count": lookups,
+            "hit_ratio": (stats.hit_count / lookups) if lookups > 0 else None,
+            "eviction_count": stats.eviction_count,
+            "entry_count": stats.entry_count,
+            "total_bytes": stats.total_bytes,
+        }
+    )
+    return payload
 
 
 async def metrics_endpoint(request: Any) -> Any:

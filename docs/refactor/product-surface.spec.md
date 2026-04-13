@@ -123,6 +123,11 @@ It owns:
 	•	logging/telemetry surfaces,
 	•	export and integration surfaces for operational observability.
 
+For cache-backed serving features, Layer 4 observability may expose cheap,
+operator-meaningful cache state snapshots such as hit/miss counts, entry count,
+and approximate resident bytes, provided those remain observational and do not
+move cache policy or ownership into Layer 4.
+
 3.6 Lifecycle and model/session management surfaces
 
 It owns:
