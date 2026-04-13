@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+import time
+import uuid
 from typing import Any
 
 from mlxs._errors import CapacityExceededError, InvalidPromptError, MLXsError, RequestTimeoutError
@@ -179,6 +181,43 @@ async def _execute_generation(
         await _release_request_slot(runtime)
 
 
+async def _stream_generation(
+    runtime: Any,
+    prompt: str,
+    options: GenerateOptions,
+):
+    """Stream generation through the Layer 4 product surface."""
+    request_queue = getattr(runtime, "request_queue", None)
+    timeout = getattr(getattr(getattr(runtime, "config", None), "server", None), "request_timeout", None)
+    loop = asyncio.get_running_loop()
+    deadline = None if timeout is None else loop.time() + timeout
+    if request_queue is not None:
+        queue_timeout = None if deadline is None else max(0.0, deadline - loop.time())
+        await request_queue.put({"prompt": prompt}, timeout=queue_timeout)
+    record_counter(runtime, "product_requests_total", 1.0, surface="http")
+
+    batch_host = getattr(runtime, "batch_host", None)
+    if batch_host is None:
+        events = await _execute_generation(
+            runtime,
+            prompt,
+            options,
+            input_embeddings=None,
+        )
+        for event in events:
+            yield event
+        return
+
+    try:
+        async for event in batch_host.stream_execute(prompt, options):
+            if timeout is not None and loop.time() >= deadline:
+                raise RequestTimeoutError(f"Request timed out after {timeout} seconds.")
+            yield event
+        record_counter(runtime, "product_requests_completed_total", 1.0, surface="http")
+    finally:
+        await _release_request_slot(runtime)
+
+
 async def handle_chat_completions(
     request: Any,
     *,
@@ -217,12 +256,15 @@ async def handle_chat_completions(
                 process_media_inputs_fn=process_media_inputs_fn,
                 process_video_inputs_fn=process_video_inputs_fn,
             )
-        events = await _execute_generation(
-            runtime,
-            prompt,
-            options,
-            input_embeddings=input_embeddings,
-        )
+        if stream and input_embeddings is None:
+            events = None
+        else:
+            events = await _execute_generation(
+                runtime,
+                prompt,
+                options,
+                input_embeddings=input_embeddings,
+            )
     except CapacityExceededError as exc:
         record_counter(runtime, "product_requests_rejected_total", 1.0, surface="http")
         return _json_error(str(exc), exc.status_hint)
@@ -238,14 +280,25 @@ async def handle_chat_completions(
 
     if stream:
         from starlette.responses import StreamingResponse
+        from mlxs.server.sse import build_sse_chunk
+
+        request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        created = int(time.time())
 
         async def event_generator():
-            for sse_chunk in token_events_to_sse_fn(iter(events), model_id=model_id):
-                yield sse_chunk
+            async for event in _stream_generation(runtime, prompt, options):
+                yield build_sse_chunk(
+                    event,
+                    model_id=model_id,
+                    request_id=request_id,
+                    created=created,
+                )
+            yield "data: [DONE]\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 
     from starlette.responses import JSONResponse
 
+    assert events is not None
     response = build_completion_response_fn(events, model_id=model_id)
     return JSONResponse(response)

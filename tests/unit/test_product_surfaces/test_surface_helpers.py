@@ -12,7 +12,11 @@ from mlxs._errors import CapacityExceededError, RequestTimeoutError
 from mlxs._types import FinishReason, GenerateOptions, TokenEvent
 from mlxs.config.schema import AppConfig
 from mlxs.observability.metrics import InMemoryMetrics, NoOpMetrics
-from mlxs.product_surfaces.compat_openai import _execute_generation, build_openai_options
+from mlxs.product_surfaces.compat_openai import (
+    _execute_generation,
+    _stream_generation,
+    build_openai_options,
+)
 from mlxs.product_surfaces.lifecycle import RuntimeLifecycle
 from mlxs.product_surfaces.observability import metrics_snapshot
 from mlxs.server.queue import RequestQueue
@@ -214,3 +218,31 @@ def test_execute_generation_falls_back_when_input_embeddings_are_present() -> No
 
     assert called == {"batch": 0, "generate": 1}
     assert [event.text for event in events] == ["fallback"]
+
+
+def test_stream_generation_uses_batch_host_stream_execute() -> None:
+    called = {"stream": 0, "execute": 0}
+
+    class _BatchHost:
+        async def execute(self, prompt: str, options: GenerateOptions) -> list[TokenEvent]:
+            del prompt, options
+            called["execute"] += 1
+            return [TokenEvent(token_id=9, text="buffered", finish_reason=FinishReason.STOP)]
+
+        async def stream_execute(self, prompt: str, options: GenerateOptions):
+            del prompt, options
+            called["stream"] += 1
+            yield TokenEvent(token_id=1, text="a")
+            yield TokenEvent(token_id=2, text="b", finish_reason=FinishReason.STOP)
+
+    runtime = _runtime()
+    runtime.batch_host = _BatchHost()
+
+    async def _run() -> None:
+        seen = []
+        async for event in _stream_generation(runtime, "prompt", GenerateOptions()):
+            seen.append(event.text)
+        assert seen == ["a", "b"]
+
+    asyncio.run(_run())
+    assert called == {"stream": 1, "execute": 0}

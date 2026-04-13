@@ -22,6 +22,8 @@ class _PendingResult:
     loop: asyncio.AbstractEventLoop
     future: asyncio.Future[list[TokenEvent]]
     cache_plan: PromptCachePlan | None
+    events: list[TokenEvent]
+    stream_queue: asyncio.Queue[TokenEvent | None] | None
 
 
 class BatchServingHost:
@@ -83,30 +85,28 @@ class BatchServingHost:
         options: GenerateOptions,
     ) -> list[TokenEvent]:
         """Execute one text-only request through the scheduler host."""
-        request_id = uuid.uuid4().hex[:12]
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[list[TokenEvent]] = loop.create_future()
-        cache_plan = self._prepare_prompt_cache_plan(prompt)
-        with self._lock:
-            self._pending[request_id] = _PendingResult(
-                loop=loop,
-                future=future,
-                cache_plan=cache_plan,
-            )
-        self._ensure_thread()
-        if cache_plan is None:
-            scheduler_prompt = prompt
-            cache_state = None
-            prompt_token_count = None
-        else:
-            scheduler_prompt = cache_plan.prompt_for_generation
-            cache_state = cache_plan.cache_for_generation
-            prompt_token_count = len(cache_plan.full_prompt_token_ids)
-        self._commands.put(
-            ("add", request_id, scheduler_prompt, options, cache_state, prompt_token_count)
-        )
+        request_id, future, _stream_queue = self._start_request(prompt, options, stream=False)
         try:
             return await future
+        except asyncio.CancelledError:
+            self._commands.put(("remove", request_id))
+            raise
+
+    async def stream_execute(
+        self,
+        prompt: str | list[int],
+        options: GenerateOptions,
+    ):
+        """Execute one request and yield TokenEvents incrementally."""
+        request_id, future, stream_queue = self._start_request(prompt, options, stream=True)
+        assert stream_queue is not None
+        try:
+            while True:
+                event = await stream_queue.get()
+                if event is None:
+                    break
+                yield event
+            await future
         except asyncio.CancelledError:
             self._commands.put(("remove", request_id))
             raise
@@ -131,7 +131,9 @@ class BatchServingHost:
             if not self._has_work():
                 continue
 
-            self._scheduler.step()
+            step_events = self._scheduler.step()
+            for request_id, events in step_events.items():
+                self._publish_events(request_id, events)
             for request_id, events, final_cache in self._scheduler.drain():
                 self._complete_request(request_id, events, final_cache)
 
@@ -179,14 +181,18 @@ class BatchServingHost:
             pending = self._pending.pop(request_id, None)
         if pending is None:
             return
-        self._commit_prompt_cache(pending.cache_plan, events, final_cache)
+        if not pending.events and events:
+            pending.events.extend(events)
+        self._commit_prompt_cache(pending.cache_plan, pending.events, final_cache)
 
         def _resolve() -> None:
             if pending.future.cancelled() or pending.future.done():
                 return
-            pending.future.set_result(events)
+            pending.future.set_result(list(pending.events))
 
         pending.loop.call_soon_threadsafe(_resolve)
+        if pending.stream_queue is not None:
+            pending.loop.call_soon_threadsafe(pending.stream_queue.put_nowait, None)
 
     def _has_work(self) -> bool:
         return self._scheduler.pending_count > 0 or self._scheduler.active_count > 0
@@ -226,6 +232,53 @@ class BatchServingHost:
             generated_ids=[],
             final_cache_out=[cache_for_commit] if cache_for_commit is not None else [],
         )
+
+    def _publish_events(self, request_id: str, events: list[TokenEvent]) -> None:
+        with self._lock:
+            pending = self._pending.get(request_id)
+        if pending is None:
+            return
+        pending.events.extend(events)
+        if pending.stream_queue is None:
+            return
+        for event in events:
+            pending.loop.call_soon_threadsafe(pending.stream_queue.put_nowait, event)
+
+    def _start_request(
+        self,
+        prompt: str | list[int],
+        options: GenerateOptions,
+        *,
+        stream: bool,
+    ) -> tuple[str, asyncio.Future[list[TokenEvent]], asyncio.Queue[TokenEvent | None] | None]:
+        request_id = uuid.uuid4().hex[:12]
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[list[TokenEvent]] = loop.create_future()
+        stream_queue: asyncio.Queue[TokenEvent | None] | None = (
+            asyncio.Queue() if stream else None
+        )
+        cache_plan = self._prepare_prompt_cache_plan(prompt)
+        with self._lock:
+            self._pending[request_id] = _PendingResult(
+                loop=loop,
+                future=future,
+                cache_plan=cache_plan,
+                events=[],
+                stream_queue=stream_queue,
+            )
+        self._ensure_thread()
+        if cache_plan is None:
+            scheduler_prompt = prompt
+            cache_state = None
+            prompt_token_count = None
+        else:
+            scheduler_prompt = cache_plan.prompt_for_generation
+            cache_state = cache_plan.cache_for_generation
+            prompt_token_count = len(cache_plan.full_prompt_token_ids)
+        self._commands.put(
+            ("add", request_id, scheduler_prompt, options, cache_state, prompt_token_count)
+        )
+        return request_id, future, stream_queue
 
 
 __all__ = ["BatchServingHost"]

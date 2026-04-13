@@ -32,10 +32,28 @@ def token_events_to_sse(
     created = int(time.time())
 
     for event in events:
-        chunk = _build_chunk(event, model_id=model_id, request_id=rid, created=created)
-        yield f"data: {json.dumps(chunk)}\n\n"
+        yield build_sse_chunk(
+            event,
+            model_id=model_id,
+            request_id=rid,
+            created=created,
+        )
 
     yield "data: [DONE]\n\n"
+
+
+def build_sse_chunk(
+    event: TokenEvent,
+    *,
+    model_id: str = "mlxs",
+    request_id: str | None = None,
+    created: int | None = None,
+) -> str:
+    """Build one SSE data frame for a single TokenEvent."""
+    rid = request_id or f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    ts = created if created is not None else int(time.time())
+    chunk = _build_chunk(event, model_id=model_id, request_id=rid, created=ts)
+    return f"data: {json.dumps(chunk)}\n\n"
 
 
 def _build_chunk(
