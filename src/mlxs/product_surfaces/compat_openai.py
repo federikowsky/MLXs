@@ -143,6 +143,9 @@ async def _execute_generation(
     record_counter(runtime, "product_requests_total", 1.0, surface="http")
 
     async def _run() -> list[TokenEvent]:
+        batch_host = getattr(runtime, "batch_host", None)
+        if batch_host is not None and input_embeddings is None:
+            return await batch_host.execute(prompt, options)
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,

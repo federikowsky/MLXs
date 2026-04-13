@@ -50,6 +50,7 @@ def _runtime(
         tokenizer=SimpleNamespace(),
         metrics=InMemoryMetrics() if metrics_enabled else NoOpMetrics(),
         generate_fn=generate_fn or _default_generate,
+        batch_host=None,
         request_queue=RequestQueue(max_size=max_queue_size, timeout=request_timeout),
     )
 
@@ -124,3 +125,57 @@ def test_execute_generation_times_out_at_layer4_surface() -> None:
                 input_embeddings=None,
             )
         )
+
+
+def test_execute_generation_uses_batch_host_for_text_only_requests() -> None:
+    called: list[tuple[str, GenerateOptions]] = []
+
+    class _BatchHost:
+        async def execute(self, prompt: str, options: GenerateOptions) -> list[TokenEvent]:
+            called.append((prompt, options))
+            return [TokenEvent(token_id=1, text="ok", finish_reason=FinishReason.STOP)]
+
+    runtime = _runtime()
+    runtime.batch_host = _BatchHost()
+
+    events = asyncio.run(
+        _execute_generation(
+            runtime,
+            "prompt",
+            GenerateOptions(),
+            input_embeddings=None,
+        )
+    )
+
+    assert called
+    assert [event.text for event in events] == ["ok"]
+
+
+def test_execute_generation_falls_back_when_input_embeddings_are_present() -> None:
+    called = {"batch": 0, "generate": 0}
+
+    class _BatchHost:
+        async def execute(self, prompt: str, options: GenerateOptions) -> list[TokenEvent]:
+            del prompt, options
+            called["batch"] += 1
+            return [TokenEvent(token_id=1, text="batched", finish_reason=FinishReason.STOP)]
+
+    def _generate(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        called["generate"] += 1
+        return iter([TokenEvent(token_id=1, text="fallback", finish_reason=FinishReason.STOP)])
+
+    runtime = _runtime(generate_fn=_generate)
+    runtime.batch_host = _BatchHost()
+
+    events = asyncio.run(
+        _execute_generation(
+            runtime,
+            "prompt",
+            GenerateOptions(),
+            input_embeddings=object(),
+        )
+    )
+
+    assert called == {"batch": 0, "generate": 1}
+    assert [event.text for event in events] == ["fallback"]

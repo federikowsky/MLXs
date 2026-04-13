@@ -93,15 +93,18 @@ class BatchScheduler:
         "_completion_batch_size",
         "_finished",
         "_pending",
+        "_prefill_batch_size",
         "_prefill_step_size",
     )
 
     def __init__(
         self,
         *,
+        prefill_batch_size: int = 1,
         completion_batch_size: int = 4,
         prefill_step_size: int = 2048,
     ) -> None:
+        self._prefill_batch_size = prefill_batch_size
         self._completion_batch_size = completion_batch_size
         self._prefill_step_size = prefill_step_size
         self._pending: OrderedDict[str, _Sequence] = OrderedDict()
@@ -214,7 +217,10 @@ class BatchScheduler:
 
     def _take_prefill_cohort(self) -> list[tuple[str, _Sequence]]:
         """Take a pending cohort with the same model and prompt length."""
-        capacity = self._completion_batch_size - len(self._active)
+        capacity = min(
+            self._completion_batch_size - len(self._active),
+            self._prefill_batch_size,
+        )
         cohort: list[tuple[str, _Sequence]] = []
         anchor_key: tuple[int, int] | None = None
         for request_id, seq in self._pending.items():
@@ -227,7 +233,7 @@ class BatchScheduler:
             if len(cohort) >= capacity:
                 break
 
-        if len(cohort) <= 1:
+        if capacity <= 1 or len(cohort) <= 1:
             return []
 
         for request_id, _ in cohort:

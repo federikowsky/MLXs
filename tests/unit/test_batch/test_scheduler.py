@@ -55,7 +55,11 @@ def test_scheduler_batches_aligned_decode_sequences() -> None:
         top_logprobs=0,
         stream=True,
     )
-    scheduler = BatchScheduler(completion_batch_size=2, prefill_step_size=2048)
+    scheduler = BatchScheduler(
+        prefill_batch_size=2,
+        completion_batch_size=2,
+        prefill_step_size=2048,
+    )
     scheduler.add("a", model, tokenizer, [10, 11, 12], options)
     scheduler.add("b", model, tokenizer, [10, 11, 12], options)
 
