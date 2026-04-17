@@ -163,6 +163,12 @@ Where these are product-surface semantics, Layer 4 owns:
 	•	endpoint-facing overload behavior,
 	•	translation of lower-layer admission/backpressure into user-visible behavior.
 
+For streaming endpoints, Layer 4 may need two different failure surfaces:
+	•	pre-header admission failures should remain ordinary HTTP errors (for example `503` queue-full before a stream starts),
+	•	post-header failures must remain in-stream terminal error frames because transport headers are already committed.
+
+Where a streaming response has already started, Layer 4 may terminate the stream with an explicit error event followed by the normal terminal stream sentinel, provided the outcome counters remain truthful.
+
 ⸻
 
 4. Non-responsibilities

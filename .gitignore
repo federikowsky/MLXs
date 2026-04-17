@@ -59,3 +59,4 @@ logs/
 CLAUDE.md
 scripts/smoke_ouro.py
 uv.lock
+.omx/

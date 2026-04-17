@@ -9,10 +9,18 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
+from dataclasses import dataclass
 
 from mlxs._errors import CapacityExceededError, RequestTimeoutError
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class RequestQueueReservation:
+    request: dict
+    waiter: asyncio.Future[dict] | None = None
+    entry: tuple[dict, asyncio.Future[dict]] | None = None
 
 
 class RequestQueue:
@@ -47,12 +55,12 @@ class RequestQueue:
         self._timeout = timeout
         self._pending: deque[tuple[dict, asyncio.Future[dict]]] = deque()
 
-    async def put(self, request: dict, *, timeout: float | None = None) -> None:
-        """Admit a request or queue it pending a free execution slot."""
+    def reserve(self, request: dict) -> RequestQueueReservation:
+        """Reserve immediate or pending capacity without waiting for service."""
         if self._active < self._max_concurrent:
             self._active += 1
             self._peak_active = max(self._peak_active, self._active)
-            return
+            return RequestQueueReservation(request=request)
 
         if self._max_size > 0 and len(self._pending) >= self._max_size:
             raise CapacityExceededError(
@@ -64,18 +72,41 @@ class RequestQueue:
         entry = (request, waiter)
         self._pending.append(entry)
         self._peak_pending = max(self._peak_pending, len(self._pending))
+        return RequestQueueReservation(request=request, waiter=waiter, entry=entry)
+
+    async def await_reservation(
+        self,
+        reservation: RequestQueueReservation,
+        *,
+        timeout: float | None = None,
+    ) -> None:
+        if reservation.waiter is None:
+            return
         wait_timeout = self._timeout if timeout is None else timeout
         try:
             if wait_timeout is None:
-                await waiter
+                await reservation.waiter
             else:
-                await asyncio.wait_for(waiter, timeout=wait_timeout)
+                await asyncio.wait_for(reservation.waiter, timeout=wait_timeout)
         except asyncio.TimeoutError as exc:
-            try:
-                self._pending.remove(entry)
-            except ValueError:
-                pass
+            if reservation.entry is not None:
+                try:
+                    self._pending.remove(reservation.entry)
+                except ValueError:
+                    pass
             raise RequestTimeoutError(f"Request timed out after {wait_timeout} seconds.") from exc
+        except asyncio.CancelledError:
+            if reservation.entry is not None:
+                try:
+                    self._pending.remove(reservation.entry)
+                except ValueError:
+                    pass
+            raise
+
+    async def put(self, request: dict, *, timeout: float | None = None) -> None:
+        """Admit a request or queue it pending a free execution slot."""
+        reservation = self.reserve(request)
+        await self.await_reservation(reservation, timeout=timeout)
 
     async def get(self) -> dict:
         """Release one active slot and admit the next pending request if any."""

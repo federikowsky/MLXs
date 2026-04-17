@@ -14,6 +14,10 @@ from mlxs.observability.logger import setup_logging
 from mlxs.observability.metrics import InMemoryMetrics, create_metrics
 
 logger = logging.getLogger(__name__)
+_UNSET = object()
+_PROCESS_RSS_CACHE_TTL_S = 0.25
+_PROCESS_RSS_CACHE: dict[int, tuple[float, int]] = {}
+_MAX_RECOMMENDED_WORKING_SET_SIZE_BYTES: int | None | object = _UNSET
 
 
 def configure_observability(config: Any) -> Any:
@@ -74,19 +78,29 @@ def metrics_snapshot(runtime: Any) -> dict[str, Any]:
 
 
 def _process_snapshot() -> dict[str, Any]:
+    now = time.time()
     payload: dict[str, Any] = {
         "available": True,
         "pid": os.getpid(),
         "rss_kb": None,
         "rss_bytes": None,
         "rss_source": "ps",
+        "rss_sample_age_s": None,
     }
     try:
-        out = subprocess.check_output(
-            ["ps", "-o", "rss=", "-p", str(payload["pid"])],
-            text=True,
-        ).strip()
-        rss_kb = int(out)
+        pid = int(payload["pid"])
+        cached = _PROCESS_RSS_CACHE.get(pid)
+        if cached is not None and (now - cached[0]) <= _PROCESS_RSS_CACHE_TTL_S:
+            rss_kb = cached[1]
+            payload["rss_sample_age_s"] = now - cached[0]
+        else:
+            out = subprocess.check_output(
+                ["ps", "-o", "rss=", "-p", str(pid)],
+                text=True,
+            ).strip()
+            rss_kb = int(out)
+            _PROCESS_RSS_CACHE[pid] = (now, rss_kb)
+            payload["rss_sample_age_s"] = 0.0
         payload["rss_kb"] = rss_kb
         payload["rss_bytes"] = rss_kb * 1024
     except Exception:
@@ -118,11 +132,15 @@ def _memory_snapshot(
             getattr(getattr(prompt_cache, "on_memory_ceiling", None), "value", None)
         ),
     }
+    global _MAX_RECOMMENDED_WORKING_SET_SIZE_BYTES
     try:
-        info = mx.device_info()
-        payload["max_recommended_working_set_size_bytes"] = info.get(
-            "max_recommended_working_set_size"
-        )
+        if _MAX_RECOMMENDED_WORKING_SET_SIZE_BYTES is _UNSET:
+            info = mx.device_info()
+            _MAX_RECOMMENDED_WORKING_SET_SIZE_BYTES = info.get(
+                "max_recommended_working_set_size"
+            )
+        if _MAX_RECOMMENDED_WORKING_SET_SIZE_BYTES is not _UNSET:
+            payload["max_recommended_working_set_size_bytes"] = _MAX_RECOMMENDED_WORKING_SET_SIZE_BYTES
     except Exception:
         payload["available"] = False
 
@@ -285,12 +303,16 @@ def _request_outcomes_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     completed = counters.get("product_requests_completed_total{surface=http}", 0.0)
     rejected = counters.get("product_requests_rejected_total{surface=http}", 0.0)
     timed_out = counters.get("product_requests_timeout_total{surface=http}", 0.0)
+    failed = counters.get("product_requests_failed_total{surface=http}", 0.0)
+    cancelled = counters.get("product_requests_cancelled_total{surface=http}", 0.0)
     return {
         "total": total,
         "completed": completed,
         "rejected": rejected,
         "timed_out": timed_out,
-        "incomplete": max(0.0, total - completed - rejected - timed_out),
+        "failed": failed,
+        "cancelled": cancelled,
+        "incomplete": max(0.0, total - completed - rejected - timed_out - failed - cancelled),
     }
 
 

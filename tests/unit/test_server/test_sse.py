@@ -149,7 +149,11 @@ class TestSSEStreamBoundary:
             await asyncio.sleep(0)
             yield "data: [DONE]\n\n"
 
-        response = DrainFriendlyStreamingResponse(body(), media_type="text/event-stream")
+        response = DrainFriendlyStreamingResponse(
+            body(),
+            media_type="text/event-stream",
+            ignore_disconnect=True,
+        )
         messages = []
 
         async def receive():
@@ -163,6 +167,95 @@ class TestSSEStreamBoundary:
 
         assert messages[0]["type"] == "http.response.start"
         assert messages[1]["type"] == "http.response.body"
+        assert messages[-1]["more_body"] is False
+
+    def test_drain_friendly_streaming_response_stops_on_disconnect_by_default(self) -> None:
+        async def body():
+            yield "data: first\n\n"
+            await asyncio.sleep(0)
+            yield "data: [DONE]\n\n"
+
+        response = DrainFriendlyStreamingResponse(body(), media_type="text/event-stream")
+        messages = []
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            messages.append(message)
+
+        scope = {"type": "http", "asgi": {"spec_version": "2.0"}, "method": "GET", "headers": []}
+        asyncio.run(response(scope, receive, send))
+
+        assert messages[0]["type"] == "http.response.start"
+        assert len(messages) == 2
+        assert messages[-1]["type"] == "http.response.body"
+        assert messages[-1]["more_body"] is True
+
+    def test_drain_friendly_streaming_response_notifies_disconnect_once(self) -> None:
+        async def body():
+            yield "data: first\n\n"
+            await asyncio.sleep(0)
+            yield "data: [DONE]\n\n"
+
+        calls = []
+
+        async def on_disconnect():
+            calls.append("disconnect")
+
+        response = DrainFriendlyStreamingResponse(
+            body(),
+            media_type="text/event-stream",
+            on_disconnect=on_disconnect,
+        )
+        messages = []
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            messages.append(message)
+
+        scope = {"type": "http", "asgi": {"spec_version": "2.0"}, "method": "GET", "headers": []}
+        asyncio.run(response(scope, receive, send))
+
+        assert calls == ["disconnect"]
+
+    def test_drain_friendly_streaming_response_does_not_notify_after_finish(self) -> None:
+        async def body():
+            yield "data: first\n\n"
+            await asyncio.sleep(0)
+            yield "data: [DONE]\n\n"
+
+        calls = []
+
+        async def on_disconnect():
+            calls.append("disconnect")
+
+        response = DrainFriendlyStreamingResponse(
+            body(),
+            media_type="text/event-stream",
+            on_disconnect=on_disconnect,
+            ignore_disconnect=False,
+        )
+        messages = []
+        seen = False
+
+        async def receive():
+            nonlocal seen
+            if seen:
+                return {"type": "http.disconnect"}
+            seen = True
+            await asyncio.sleep(0)
+            return {"type": "http.request"}
+
+        async def send(message):
+            messages.append(message)
+
+        scope = {"type": "http", "asgi": {"spec_version": "2.0"}, "method": "GET", "headers": []}
+        asyncio.run(response(scope, receive, send))
+
+        assert calls == []
         assert messages[-1]["more_body"] is False
 
 

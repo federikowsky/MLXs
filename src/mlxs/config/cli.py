@@ -262,7 +262,7 @@ _CLI_SPECS: list[tuple[str, str, str, Any, str]] = [
         2,
         "Max concurrent requests",
     ),
-    ("max-queue-size", "server.max_queue_size", "int", 64, "Max pending requests (0=unbounded)"),
+    ("max-queue-size", "server.max_queue_size", "int", 2, "Max pending requests (0=unbounded)"),
     ("request-timeout", "server.request_timeout", "float", 300.0, "Request timeout (seconds)"),
     ("workers", "server.workers", "int", 1, "Number of workers"),
     # observability

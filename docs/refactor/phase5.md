@@ -108,6 +108,8 @@ Confirm Layer 4 is responsible for the following and only the following categori
 	•	Reintroduce endpoint-facing rejection semantics in Layer 4.
 	•	Reintroduce endpoint-facing timeout semantics in Layer 4.
 	•	Confirm these remain product-surface semantics, not lower-layer runtime policy.
+	•	For streaming routes, confirm pre-header overload is still an HTTP error while post-header timeout/failure remains an in-stream terminal error shape.
+	•	Where useful, confirm client-abandoned streams are reflected as cancelled work rather than indefinite incomplete work.
 
 ⸻
 

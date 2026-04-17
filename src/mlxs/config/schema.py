@@ -283,7 +283,7 @@ class ServerConfig(_Frozen):
         description="Max concurrent inference requests.",
     )
     max_queue_size: int = Field(
-        default=64,
+        default=2,
         ge=0,
         description="Max pending requests in queue. 0 = unbounded.",
     )

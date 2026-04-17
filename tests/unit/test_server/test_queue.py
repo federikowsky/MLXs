@@ -71,7 +71,6 @@ class TestQueueHappyPath:
 
         asyncio.run(_test())
 
-
 class TestQueueBoundary:
     def test_rejects_when_pending_queue_is_full(self) -> None:
         async def _test() -> None:

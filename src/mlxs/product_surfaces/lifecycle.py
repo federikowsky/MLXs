@@ -18,6 +18,7 @@ class RuntimeLifecycle:
     ready_at: float | None = None
     stopped_at: float | None = None
     ready: bool = False
+    draining: bool = False
     stopped: bool = False
     last_error: str | None = None
 
@@ -25,11 +26,16 @@ class RuntimeLifecycle:
         self.ready_at = time.time()
         self.stopped_at = None
         self.ready = True
+        self.draining = False
         self.stopped = False
         self.last_error = None
 
+    def mark_draining(self) -> None:
+        self.draining = True
+
     def mark_stopped(self) -> None:
         self.stopped_at = time.time()
+        self.draining = False
         self.stopped = True
 
     def mark_error(self, message: str) -> None:
@@ -48,6 +54,7 @@ class RuntimeLifecycle:
         payload: dict[str, Any] = {
             "status": status,
             "ready": self.ready and not self.stopped,
+            "draining": self.draining,
             "model_id": self.model_id,
             "instance_id": self.instance_id,
             "started_at": self.started_at,

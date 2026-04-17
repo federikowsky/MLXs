@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import mlx.core as mx
+import pytest
 from starlette.testclient import TestClient
 
 from mlxs._types import FinishReason, TokenEvent
@@ -289,6 +290,35 @@ def test_chat_completions_stream_emits_error_chunk_on_timeout() -> None:
     assert response.status_code == 200
     assert any("Request timed out after 0.01 seconds." in line for line in lines)
     assert lines[-1] == "data: [DONE]"
+
+
+def test_chat_completions_stream_rejects_immediately_when_queue_full() -> None:
+    deps, _calls = _make_deps()
+    deps.request_queue = RequestQueue(max_size=1, max_concurrent=1, timeout=1.0)
+
+    async def _fill() -> None:
+        await deps.request_queue.put({"id": "active"})
+        deps.request_queue.reserve({"id": "pending"})
+
+    asyncio.run(_fill())
+    client = TestClient(create_app(deps))
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "mlxs",
+            "stream": True,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "stream please"}],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["message"].startswith("Request queue full")
 
 
 def test_chat_completions_rejects_audio_inputs_in_serving_scope() -> None:

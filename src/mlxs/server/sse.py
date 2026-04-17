@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Iterator
 from typing import Any
 
+import anyio
 from starlette.responses import StreamingResponse
 
 from mlxs._types import TokenEvent
@@ -19,6 +20,36 @@ from mlxs._types import TokenEvent
 
 class DrainFriendlyStreamingResponse(StreamingResponse):
     """StreamingResponse variant that does not cancel on shutdown disconnect."""
+
+    def __init__(
+        self,
+        content,
+        *,
+        ignore_disconnect: Any = None,
+        on_disconnect: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(content, **kwargs)
+        self._ignore_disconnect = ignore_disconnect
+        self._on_disconnect = on_disconnect
+        self._disconnect_notified = False
+        self._stream_finished = False
+
+    def _should_ignore_disconnect(self) -> bool:
+        if callable(self._ignore_disconnect):
+            return bool(self._ignore_disconnect())
+        return bool(self._ignore_disconnect)
+
+    async def _notify_disconnect(self) -> None:
+        if self._disconnect_notified:
+            return
+        self._disconnect_notified = True
+        callback = self._on_disconnect
+        if callback is None:
+            return
+        result = callback()
+        if hasattr(result, "__await__"):
+            await result
 
     async def __call__(self, scope, receive, send) -> None:  # type: ignore[override]
         if scope["type"] == "websocket":
@@ -28,10 +59,36 @@ class DrainFriendlyStreamingResponse(StreamingResponse):
                 await self.background()
             return
 
-        try:
-            await self.stream_response(send)
-        except OSError:
-            return
+        async with anyio.create_task_group() as task_group:
+            async def stream_body() -> None:
+                try:
+                    await self.stream_response(send)
+                    self._stream_finished = True
+                except OSError:
+                    if self._stream_finished:
+                        return
+                    if self._should_ignore_disconnect():
+                        return
+                    await self._notify_disconnect()
+                finally:
+                    task_group.cancel_scope.cancel()
+
+            async def watch_disconnect() -> None:
+                while True:
+                    message = await receive()
+                    if message["type"] != "http.disconnect":
+                        continue
+                    if self._stream_finished:
+                        return
+                    if self._should_ignore_disconnect():
+                        await anyio.sleep(0.05)
+                        continue
+                    await self._notify_disconnect()
+                    task_group.cancel_scope.cancel()
+                    return
+
+            task_group.start_soon(stream_body)
+            task_group.start_soon(watch_disconnect)
 
         if self.background is not None:
             await self.background()

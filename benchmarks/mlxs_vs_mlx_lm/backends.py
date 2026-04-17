@@ -10,17 +10,18 @@ from __future__ import annotations
 
 import contextlib
 import gc
-import math
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from benchmarks.mlxs_vs_mlx_lm.memory import rss_bytes_self
 
 CANONICAL_BENCHMARK_CLASS = "Class A — Minimal fast-path decode"
 CANONICAL_CLEAR_CACHE_INTERVAL = 256
 CANONICAL_STREAM_POLICY = "dedicated_generation_stream"
+CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD = 512
 MLX_LM_UPSTREAM_ANCHOR = "mlx-lm main / release v0.31.2 (2026-04-07)"
 
 
@@ -69,18 +70,35 @@ def runtime_profile(
     )
     return {
         "benchmark_class": CANONICAL_BENCHMARK_CLASS,
-        "runtime_path_label": "benchmark-local helper on the canonical Layer 1 subtree",
-        "runtime_root": "mlxs.runtime_core.run_greedy",
+        "runtime_path_label": (
+            "benchmark-local helper on the canonical Layer 1 subtree with "
+            "short-prompt prepared-step overlap"
+        ),
+        "runtime_root": (
+            "mlxs.runtime_core.decode_step plus "
+            "prepare_decode_step/schedule_next_decode_step/materialize_prepared_step "
+            f"for prompts <= {CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD}"
+        ),
         "layer1_subtree": [
             "CoreState.create/adopt",
             "run_prefill",
-            "greedy_select + mx.eval + item()",
+            "decode_step baseline for long prompts",
+            "prepare_decode_step + mx.async_eval for short prompts",
+            "schedule_next_decode_step + greedy_select for short prompts",
+            "materialize_prepared_step + item() for short prompts",
             "termination.finish_for",
-            "single-token forward step",
+            "single-token forward lookahead step",
         ],
         "stream_handling": "Dedicated benchmark-owned generation stream via CoreExecutionPolicy.",
-        "mx_async_eval": "Not used on the current Layer 1 path; deliberate documented divergence.",
-        "mx_eval": "mx.eval(token) before scalar extraction; cache state eval during chunked prefill.",
+        "mx_async_eval": (
+            "Used only on the short-prompt prepared-step branch "
+            f"(prompt_tokens <= {CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD})."
+        ),
+        "mx_eval": (
+            "Short prompts retain mx.eval(token) on the first generated token; "
+            "long prompts use the baseline per-step mx.eval(token); "
+            "cache state eval during chunked prefill."
+        ),
         "item_extraction": "int(token.item()) per generated token.",
         "clear_cache_decode_rule": (
             f"generation_tokens % {clear_cache_interval} == 0 inside Layer 1 decode progression."
@@ -201,9 +219,13 @@ def _run_mlxs_class_a_trial(
 ) -> GenerationMetrics:
     mx = _require_mx()
     from mlxs.runtime_core import CoreExecutionPolicy, CoreState, CoreTerminationPolicy
-    from mlxs.runtime_core.policy import stream_context
+    from mlxs.runtime_core.decode import (
+        decode_step,
+        materialize_prepared_step,
+        prepare_decode_step,
+        schedule_next_decode_step,
+    )
     from mlxs.runtime_core.prefill import run_prefill
-    from mlxs.runtime_core.selection import greedy_select
 
     variant = "mlxs_compiled" if compile_decode else "mlxs_eager"
     if session.error or session.model is None:
@@ -263,30 +285,66 @@ def _run_mlxs_class_a_trial(
         t_prefill_end = time.perf_counter()
         t_first: float | None = None
         t_end: float | None = None
+        use_short_prompt_lookahead = (
+            len(prompt_tokens) <= CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD
+        )
 
-        while True:
-            with stream_context(execution):
-                token = greedy_select(logits)
-                mx.eval(token)
-            token_id = int(token.item())
-            generated_tokens = state.increment_generation()
-            finish = termination.finish_for(token_id, generation_tokens=generated_tokens)
-            now = time.perf_counter()
-            if t_first is None:
-                t_first = now
+        if use_short_prompt_lookahead:
+            prepared = prepare_decode_step(logits, execution=execution, prime_token=True)
 
-            if (
-                execution.clear_cache_interval > 0
-                and generated_tokens % execution.clear_cache_interval == 0
-            ):
-                mx.clear_cache()
+            while True:
+                next_prepared = None
+                # Class A uses a fixed length budget with no EOS tokens, so a
+                # single-token lookahead stays within the canonical contract.
+                if generated_tokens + 1 < max_tokens:
+                    next_prepared = schedule_next_decode_step(
+                        model,
+                        state,
+                        prepared,
+                        execution=execution,
+                        step_fn=step_fn,
+                        prime_token=True,
+                    )
 
-            if finish is not None:
-                t_end = now
-                break
+                result = materialize_prepared_step(
+                    state,
+                    prepared,
+                    termination=termination,
+                    execution=execution,
+                    force_eval=generated_tokens == 0,
+                )
+                generated_tokens = result.generation_tokens
+                now = time.perf_counter()
+                if t_first is None:
+                    t_first = now
 
-            with stream_context(execution):
-                logits = step_fn(token[None])[:, -1, :]
+                if result.finish is not None:
+                    t_end = now
+                    break
+
+                assert next_prepared is not None
+                prepared = next_prepared
+        else:
+            while True:
+                result, next_logits = decode_step(
+                    model,
+                    state,
+                    logits,
+                    termination=termination,
+                    execution=execution,
+                    step_fn=step_fn,
+                )
+                generated_tokens = result.generation_tokens
+                now = time.perf_counter()
+                if t_first is None:
+                    t_first = now
+
+                if result.finish is not None:
+                    t_end = now
+                    break
+
+                assert next_logits is not None
+                logits = next_logits
 
         assert t_first is not None
         assert t_end is not None

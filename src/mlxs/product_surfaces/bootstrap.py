@@ -81,6 +81,7 @@ class ProductRuntime:
     lifecycle: RuntimeLifecycle
 
     async def shutdown(self) -> None:
+        self.lifecycle.mark_draining()
         active_count, pending_count = _queue_counts(self.request_queue)
         timeout_s = _shutdown_grace_timeout(self.config)
         logger.info(

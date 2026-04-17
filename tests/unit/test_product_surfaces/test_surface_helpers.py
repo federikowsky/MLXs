@@ -29,7 +29,7 @@ def _runtime(
     *,
     metrics_enabled: bool = False,
     request_timeout: float = 300.0,
-    max_queue_size: int = 64,
+    max_queue_size: int = 2,
     max_concurrent_requests: int = 16,
     generate_fn=None,
 ):
@@ -100,9 +100,11 @@ def test_build_openai_options_layer4_mapping() -> None:
 def test_lifecycle_payload_reports_layer4_status() -> None:
     lifecycle = RuntimeLifecycle(model_id="m")
     lifecycle.mark_ready()
+    lifecycle.mark_draining()
     payload = lifecycle.health_payload(metrics_enabled=True, metrics_route_enabled=True)
     assert payload["status"] == "ok"
     assert payload["ready"] is True
+    assert payload["draining"] is True
     assert payload["model_id"] == "m"
     assert payload["instance_id"] is not None
     assert payload["ready_at"] is not None
@@ -121,6 +123,7 @@ def test_metrics_snapshot_main_app_mode() -> None:
     assert snapshot["backend"] == "in_memory"
     assert snapshot["process"]["pid"] is not None
     assert snapshot["process"]["rss_source"] == "ps"
+    assert snapshot["process"]["rss_sample_age_s"] is not None
     assert snapshot["startup"]["available"] is True
     assert snapshot["startup"]["ready"] is True
     assert snapshot["startup"]["startup_duration_s"] is not None
@@ -190,7 +193,7 @@ def test_metrics_endpoint_exposes_prompt_cache_section() -> None:
     assert payload["prompt_cache"]["total_bytes"] == 987654
     assert payload["startup"]["effective_eager_residency"] is True
     assert payload["request_queue"]["available"] is True
-    assert payload["request_queue"]["configured_max_queue_size"] == 64
+    assert payload["request_queue"]["configured_max_queue_size"] == 2
     assert payload["request_outcomes"]["completed"] == 0.0
 
 
@@ -210,6 +213,26 @@ def test_create_app_lifespan_awaits_async_shutdown() -> None:
     assert marker["called"] is True
 
 
+def test_metrics_tracks_failed_request_outcome() -> None:
+    def _boom(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("boom")
+
+    runtime = _runtime(metrics_enabled=True, generate_fn=_boom)
+    runtime.lifecycle.mark_ready()
+    client = TestClient(create_app(runtime))
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "mlxs", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 500
+    payload = client.get("/metrics").json()
+    assert payload["request_outcomes"]["total"] == 1.0
+    assert payload["request_outcomes"]["failed"] == 1.0
+    assert payload["request_outcomes"]["incomplete"] == 0.0
+
+
 def test_metrics_snapshot_includes_request_queue_and_outcome_summary() -> None:
     runtime = _runtime(metrics_enabled=True, max_queue_size=3, max_concurrent_requests=2)
     runtime.lifecycle.mark_ready()
@@ -217,6 +240,8 @@ def test_metrics_snapshot_includes_request_queue_and_outcome_summary() -> None:
     runtime.metrics.counter("product_requests_completed_total", 4.0, surface="http")
     runtime.metrics.counter("product_requests_rejected_total", 2.0, surface="http")
     runtime.metrics.counter("product_requests_timeout_total", 1.0, surface="http")
+    runtime.metrics.counter("product_requests_failed_total", 0.0, surface="http")
+    runtime.metrics.counter("product_requests_cancelled_total", 0.0, surface="http")
 
     async def _seed_queue() -> None:
         await runtime.request_queue.put({"id": "active-1"})
@@ -235,11 +260,11 @@ def test_metrics_snapshot_includes_request_queue_and_outcome_summary() -> None:
     assert queue["configured_max_concurrent_requests"] == 2
     assert queue["configured_max_queue_size"] == 3
     assert queue["active_count"] == 2
-    assert queue["pending_count"] == 1
+    assert queue["pending_count"] == 0
     assert queue["peak_active_count"] == 2
     assert queue["peak_pending_count"] == 1
     assert queue["peak_inflight_count"] == 3
-    assert queue["inflight_count"] == 3
+    assert queue["inflight_count"] == 2
     assert queue["is_full"] is False
 
     outcomes = snapshot["request_outcomes"]
@@ -247,6 +272,25 @@ def test_metrics_snapshot_includes_request_queue_and_outcome_summary() -> None:
     assert outcomes["completed"] == 4.0
     assert outcomes["rejected"] == 2.0
     assert outcomes["timed_out"] == 1.0
+    assert outcomes["failed"] == 0.0
+    assert outcomes["cancelled"] == 0.0
+    assert outcomes["incomplete"] == 0.0
+
+
+def test_metrics_snapshot_includes_failed_and_cancelled_outcomes() -> None:
+    runtime = _runtime(metrics_enabled=True)
+    runtime.lifecycle.mark_ready()
+    runtime.metrics.counter("product_requests_total", 5.0, surface="http")
+    runtime.metrics.counter("product_requests_completed_total", 1.0, surface="http")
+    runtime.metrics.counter("product_requests_timeout_total", 1.0, surface="http")
+    runtime.metrics.counter("product_requests_failed_total", 2.0, surface="http")
+    runtime.metrics.counter("product_requests_cancelled_total", 1.0, surface="http")
+
+    snapshot = metrics_snapshot(runtime)
+    outcomes = snapshot["request_outcomes"]
+
+    assert outcomes["failed"] == 2.0
+    assert outcomes["cancelled"] == 1.0
     assert outcomes["incomplete"] == 0.0
 
 
@@ -280,6 +324,7 @@ def test_metrics_snapshot_includes_process_rss_snapshot() -> None:
     process = snapshot["process"]
     assert process["pid"] is not None
     assert process["rss_source"] == "ps"
+    assert process["rss_sample_age_s"] is not None
     if process["available"]:
         assert process["rss_kb"] is not None
         assert process["rss_bytes"] == process["rss_kb"] * 1024

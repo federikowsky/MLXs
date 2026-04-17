@@ -19,6 +19,14 @@ logger = logging.getLogger(__name__)
 _VIDEO_SERVING_MODEL_TYPES = frozenset({"qwen3_5", "qwen3_5_moe"})
 
 
+def _record_failed_request(runtime: Any) -> None:
+    record_counter(runtime, "product_requests_failed_total", 1.0, surface="http")
+
+
+def _record_cancelled_request(runtime: Any) -> None:
+    record_counter(runtime, "product_requests_cancelled_total", 1.0, surface="http")
+
+
 def build_openai_options(body: dict[str, Any]) -> GenerateOptions:
     """Build Layer 4 compatibility options from an OpenAI-style request body."""
     return GenerateOptions(
@@ -185,16 +193,28 @@ async def _stream_generation(
     runtime: Any,
     prompt: str,
     options: GenerateOptions,
+    *,
+    reservation: Any = None,
 ):
     """Stream generation through the Layer 4 product surface."""
     request_queue = getattr(runtime, "request_queue", None)
     timeout = getattr(getattr(getattr(runtime, "config", None), "server", None), "request_timeout", None)
     loop = asyncio.get_running_loop()
     deadline = None if timeout is None else loop.time() + timeout
-    if request_queue is not None:
+    if request_queue is not None and reservation is None:
         queue_timeout = None if deadline is None else max(0.0, deadline - loop.time())
         try:
             await request_queue.put({"prompt": prompt}, timeout=queue_timeout)
+        except CapacityExceededError:
+            record_counter(runtime, "product_requests_rejected_total", 1.0, surface="http")
+            raise
+        except RequestTimeoutError:
+            record_counter(runtime, "product_requests_timeout_total", 1.0, surface="http")
+            raise
+    elif request_queue is not None and reservation is not None:
+        queue_timeout = None if deadline is None else max(0.0, deadline - loop.time())
+        try:
+            await request_queue.await_reservation(reservation, timeout=queue_timeout)
         except CapacityExceededError:
             record_counter(runtime, "product_requests_rejected_total", 1.0, surface="http")
             raise
@@ -281,12 +301,23 @@ async def handle_chat_completions(
     except RequestTimeoutError as exc:
         return _json_error(str(exc), exc.status_hint)
     except MLXsError as exc:
+        if exc.status_hint >= 500:
+            _record_failed_request(runtime)
         return _json_error(str(exc), exc.status_hint)
     except Exception as exc:
+        _record_failed_request(runtime)
         logger.exception("Unhandled product-surface error")
         return _json_error(f"Error: {exc}", 500)
 
     if stream:
+        reservation = None
+        request_queue = getattr(runtime, "request_queue", None)
+        if request_queue is not None:
+            try:
+                reservation = request_queue.reserve({"prompt": prompt})
+            except CapacityExceededError as exc:
+                record_counter(runtime, "product_requests_rejected_total", 1.0, surface="http")
+                return _json_error(str(exc), exc.status_hint)
         from mlxs.server.sse import (
             DrainFriendlyStreamingResponse,
             build_sse_chunk,
@@ -298,7 +329,12 @@ async def handle_chat_completions(
 
         async def event_generator():
             try:
-                async for event in _stream_generation(runtime, prompt, options):
+                async for event in _stream_generation(
+                    runtime,
+                    prompt,
+                    options,
+                    reservation=reservation,
+                ):
                     yield build_sse_chunk(
                         event,
                         model_id=model_id,
@@ -306,14 +342,28 @@ async def handle_chat_completions(
                         created=created,
                     )
             except (CapacityExceededError, RequestTimeoutError, MLXsError) as exc:
+                if not isinstance(exc, (CapacityExceededError, RequestTimeoutError)) and getattr(
+                    exc, "status_hint", 500
+                ) >= 500:
+                    _record_failed_request(runtime)
                 yield build_sse_error_chunk(str(exc), status_code=exc.status_hint)
             except Exception as exc:
+                _record_failed_request(runtime)
                 logger.exception("Unhandled product-surface streaming error")
                 yield build_sse_error_chunk(f"Error: {exc}", status_code=500)
             finally:
                 yield "data: [DONE]\n\n"
 
-        return DrainFriendlyStreamingResponse(event_generator(), media_type="text/event-stream")
+        lifecycle = getattr(runtime, "lifecycle", None)
+        return DrainFriendlyStreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            ignore_disconnect=lambda: bool(
+                lifecycle is not None
+                and (getattr(lifecycle, "draining", False) or getattr(lifecycle, "stopped", False))
+            ),
+            on_disconnect=lambda: _record_cancelled_request(runtime),
+        )
 
     from starlette.responses import JSONResponse
 
