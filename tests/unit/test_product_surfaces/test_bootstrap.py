@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 
+from mlxs._types import StreamPolicy
 from mlxs.config.schema import AppConfig
 from mlxs.product_surfaces.bootstrap import (
     ProductRuntime,
     _await_request_drain,
-    _queue_counts,
     _effective_eager_residency,
+    _make_generate_fn,
+    _queue_counts,
     _runtime_model_config,
     _serving_completion_batch_size,
     _shutdown_grace_timeout,
@@ -54,6 +56,42 @@ def test_runtime_model_config_preserves_explicit_eager_model_config() -> None:
 
 def test_effective_eager_residency_is_true_for_layer4_runtime() -> None:
     assert _effective_eager_residency(AppConfig()) is True
+
+
+def test_make_generate_fn_returns_impl_for_single_stream() -> None:
+    config = AppConfig()
+
+    def _impl(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return args, kwargs
+
+    assert _make_generate_fn(config, _impl) is _impl
+
+
+def test_make_generate_fn_injects_execution_stream_for_overlap(monkeypatch) -> None:
+    config = AppConfig().model_copy(
+        update={
+            "generate": AppConfig().generate.model_copy(
+                update={"stream_policy": StreamPolicy.OVERLAP}
+            )
+        }
+    )
+    fake_stream = object()
+    monkeypatch.setattr(
+        "mlxs.product_surfaces.bootstrap._new_generation_stream",
+        lambda: fake_stream,
+    )
+
+    seen: dict[str, object] = {}
+
+    def _impl(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args
+        seen.update(kwargs)
+        return "ok"
+
+    wrapped = _make_generate_fn(config, _impl)
+
+    assert wrapped("m", "t", "p", "o") == "ok"
+    assert seen["execution_stream"] is fake_stream
 
 
 def test_shutdown_grace_timeout_is_bounded_by_request_timeout() -> None:

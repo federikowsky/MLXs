@@ -28,6 +28,13 @@ class PreparedDecodeStep:
     token: mx.array
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedNextLogits:
+    """One raw next-logits handle produced by Layer 1 before Layer 2 transforms it."""
+
+    logits: mx.array
+
+
 def _default_step_fn(
     model: ModelProtocol,
     state: CoreState,
@@ -89,13 +96,36 @@ def schedule_next_decode_step(
     greedy fast path when the caller can guarantee that a subsequent
     decode step is needed.
     """
-    resolved_step = _resolve_step_fn(model, state, step_fn)
+    next_logits = prepare_next_logits(
+        model,
+        state,
+        prepared,
+        execution=execution,
+        step_fn=step_fn,
+    ).logits
     with stream_context(execution):
-        next_logits = resolved_step(prepared.token[None])[:, -1, :]
         next_token = select_token(next_logits)
         if prime_token:
             mx.async_eval(next_token)
     return PreparedDecodeStep(logits=next_logits, token=next_token)
+
+
+def prepare_next_logits(
+    model: ModelProtocol,
+    state: CoreState,
+    prepared: PreparedDecodeStep,
+    *,
+    execution: CoreExecutionPolicy,
+    step_fn: StepFn | None = None,
+    prime_logits: bool = False,
+) -> PreparedNextLogits:
+    """Build raw next logits before Layer 2 transforms/selects the next token."""
+    resolved_step = _resolve_step_fn(model, state, step_fn)
+    with stream_context(execution):
+        next_logits = resolved_step(prepared.token[None])[:, -1, :]
+        if prime_logits:
+            mx.async_eval(next_logits)
+    return PreparedNextLogits(logits=next_logits)
 
 
 def materialize_prepared_step(

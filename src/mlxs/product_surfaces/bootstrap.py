@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from mlxs._types import StreamPolicy
 from mlxs.advanced_engines.prompt_cache import PromptCacheOrchestrator
 from mlxs.config.schema import AppConfig
-from mlxs.product_surfaces.batched_serving import BatchServingHost
 from mlxs.product_surfaces.lifecycle import RuntimeLifecycle
 from mlxs.product_surfaces.observability import configure_observability
+
+if TYPE_CHECKING:
+    from mlxs.product_surfaces.batched_serving import BatchServingHost
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +33,11 @@ def _queue_counts(request_queue: Any) -> tuple[int, int]:
     return int(active or 0), int(pending or 0)
 
 
-async def _await_request_drain(request_queue: Any, *, timeout_s: float) -> dict[str, float | int | bool]:
+async def _await_request_drain(
+    request_queue: Any,
+    *,
+    timeout_s: float,
+) -> dict[str, float | int | bool]:
     """Wait briefly for already-admitted requests to drain."""
     if request_queue is None:
         return {
@@ -66,7 +73,7 @@ class ProductRuntime:
     """Layer 4-owned runtime container used only at the product boundary.
 
     This is intentionally a Layer 4 composition container. It is not a lower-layer
-    context object and must not be pushed into Layers 1–3 as an architectural input.
+    context object and must not be pushed into Layers 1-3 as an architectural input.
     """
 
     config: AppConfig
@@ -138,13 +145,37 @@ def _effective_eager_residency(config: AppConfig) -> bool:
     return True
 
 
+def _new_generation_stream() -> Any:
+    import mlx.core as mx
+
+    return mx.new_stream(mx.default_device())
+
+
+def _make_generate_fn(
+    config: AppConfig,
+    generate_impl: Any,
+) -> Any:
+    """Build Layer 4 generate binding with optional dedicated stream ownership."""
+    if config.generate.stream_policy != StreamPolicy.OVERLAP:
+        return generate_impl
+
+    generation_stream = _new_generation_stream()
+
+    def _generate(*args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("execution_stream", generation_stream)
+        return generate_impl(*args, **kwargs)
+
+    return _generate
+
+
 def create_runtime(config: AppConfig) -> ProductRuntime:
     """Construct the concrete Layer 4 runtime from product configuration."""
     import mlx.core as mx
 
-    from mlxs.generate.compile import warmup
     from mlxs.general_path import generate_single_request
+    from mlxs.generate.compile import warmup
     from mlxs.load import load_model_and_tokenizer
+    from mlxs.product_surfaces.batched_serving import BatchServingHost
     from mlxs.prompt_cache import PromptCache
     from mlxs.server.queue import RequestQueue
 
@@ -206,7 +237,7 @@ def create_runtime(config: AppConfig) -> ProductRuntime:
         prompt_cache=prompt_cache,
         prompt_cache_orchestrator=prompt_cache_orchestrator,
         metrics=metrics,
-        generate_fn=generate_single_request,
+        generate_fn=_make_generate_fn(config, generate_single_request),
         batch_host=batch_host,
         request_queue=request_queue,
         lifecycle=lifecycle,
