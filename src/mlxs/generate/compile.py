@@ -17,6 +17,16 @@ import mlx.nn as nn
 
 logger = logging.getLogger(__name__)
 
+COMPILED_DECODE_PROMPT_TOKEN_LIMIT = 512
+
+
+def compile_decode_eligible(
+    *,
+    prompt_token_count: int,
+) -> bool:
+    """Return whether the current decode request is eligible for compiled decode."""
+    return prompt_token_count <= COMPILED_DECODE_PROMPT_TOKEN_LIMIT
+
 
 def make_compiled_step(
     model: nn.Module,

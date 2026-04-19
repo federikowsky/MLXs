@@ -199,3 +199,58 @@ def test_batch_serving_host_uses_prompt_cache_plan_and_commits_prompt_only_cache
     committed_cache = final_cache_out[0][0]
     assert committed_cache.offset == 4
     host.shutdown()
+
+
+def test_batch_serving_host_supports_legacy_scheduler_contract() -> None:
+    class _LegacyScheduler:
+        def __init__(self) -> None:
+            self.pending_count = 0
+            self.active_count = 0
+            self.added: list[str] = []
+            self._finished: dict[str, list[TokenEvent]] = {}
+
+        def add(  # type: ignore[no-untyped-def]
+            self,
+            request_id,
+            model,
+            tokenizer,
+            prompt,
+            options,
+        ) -> None:
+            del model, tokenizer, options
+            self.added.append(str(prompt))
+            self.pending_count = 1
+            self._finished[request_id] = [
+                TokenEvent(token_id=1, text="ok", finish_reason=FinishReason.STOP)
+            ]
+
+        def remove(self, request_id: str) -> None:
+            del request_id
+            self.pending_count = 0
+            self.active_count = 0
+
+        def step(self) -> dict[str, list[TokenEvent]]:
+            self.pending_count = 0
+            self.active_count = 1 if self._finished else 0
+            return {}
+
+        def drain(self):
+            finished = list(self._finished.items())
+            self._finished.clear()
+            self.active_count = 0
+            for request_id, events in finished:
+                yield request_id, events
+
+    host = BatchServingHost(
+        model=object(),
+        tokenizer=object(),
+        prefill_batch_size=1,
+        completion_batch_size=4,
+        prefill_step_size=2048,
+        scheduler=_LegacyScheduler(),
+    )
+
+    events = asyncio.run(host.execute("prompt", GenerateOptions()))
+
+    assert [event.text for event in events] == ["ok"]
+    host.shutdown()

@@ -132,3 +132,36 @@ def test_qwen2_multimodal_sanitize_uses_shared_family_remap() -> None:
     assert "visual.patch_embed.proj.weight" not in sanitized
     assert "vision_model.blocks.0.norm1.weight" not in sanitized
     assert "mm_projector.weight" not in sanitized
+
+
+def test_qwen2_flat_config_with_extra_metadata_keeps_top_level_text_args() -> None:
+    """Flat checkpoints with extra metadata must not fall back to default text args."""
+    ModelCls, ArgsCls = get_model_classes("qwen2")
+    args = ArgsCls.from_dict(
+        {
+            **MINIMAL_QWEN2,
+            "architectures": ["Qwen2ForCausalLM"],
+            "hidden_act": "silu",
+            "use_cache": True,
+        }
+    )
+
+    assert args.text_config  # exercises the flat-config leftover metadata path
+
+    model = ModelCls(args)
+    attn = model.layers[0].self_attn
+    cache = model.make_cache()
+    logits = model(mx.array([[1, 2, 3, 4]]), cache=cache)
+
+    assert attn.n_heads == MINIMAL_QWEN2["num_attention_heads"]
+    assert attn.n_kv_heads == MINIMAL_QWEN2["num_key_value_heads"]
+    assert attn.head_dim == MINIMAL_QWEN2["hidden_size"] // MINIMAL_QWEN2["num_attention_heads"]
+    assert tuple(attn.q_proj.weight.shape) == (
+        MINIMAL_QWEN2["hidden_size"],
+        MINIMAL_QWEN2["hidden_size"],
+    )
+    assert tuple(attn.k_proj.weight.shape) == (
+        MINIMAL_QWEN2["hidden_size"],
+        MINIMAL_QWEN2["hidden_size"] // MINIMAL_QWEN2["num_attention_heads"] * MINIMAL_QWEN2["num_key_value_heads"],
+    )
+    assert logits.shape == (1, 4, args.vocab_size)

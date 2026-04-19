@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import queue
 import threading
 import uuid
@@ -26,6 +27,13 @@ class _PendingResult:
     stream_queue: asyncio.Queue[TokenEvent | None] | None
 
 
+def _supports_kwarg(callable_obj: Callable[..., Any], name: str) -> bool:
+    try:
+        return name in inspect.signature(callable_obj).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 class BatchServingHost:
     """Layer 4-owned text generation host using a single batch scheduler worker.
 
@@ -43,6 +51,9 @@ class BatchServingHost:
         "_pending",
         "_prompt_cache_orchestrator",
         "_scheduler",
+        "_scheduler_add_supports_cache_state",
+        "_scheduler_add_supports_prompt_token_count",
+        "_scheduler_drains_cache_state",
         "_stop",
         "_thread",
         "_tokenizer",
@@ -64,10 +75,27 @@ class BatchServingHost:
         self._tokenizer = tokenizer
         self._prompt_cache_orchestrator = prompt_cache_orchestrator
         self._model_id = model_id
-        self._scheduler = scheduler or BatchScheduler(
-            prefill_batch_size=prefill_batch_size,
-            completion_batch_size=completion_batch_size,
-            prefill_step_size=prefill_step_size,
+        if scheduler is None:
+            scheduler_kwargs = {
+                "completion_batch_size": completion_batch_size,
+                "prefill_step_size": prefill_step_size,
+            }
+            if _supports_kwarg(BatchScheduler, "prefill_batch_size"):
+                scheduler_kwargs["prefill_batch_size"] = prefill_batch_size
+            self._scheduler = BatchScheduler(**scheduler_kwargs)
+        else:
+            self._scheduler = scheduler
+        self._scheduler_add_supports_cache_state = _supports_kwarg(
+            self._scheduler.add,
+            "cache_state",
+        )
+        self._scheduler_add_supports_prompt_token_count = _supports_kwarg(
+            self._scheduler.add,
+            "prompt_token_count",
+        )
+        self._scheduler_drains_cache_state = (
+            self._scheduler_add_supports_cache_state
+            and self._scheduler_add_supports_prompt_token_count
         )
         self._commands: queue.Queue[tuple[Any, ...]] = queue.Queue()
         self._pending: dict[str, _PendingResult] = {}
@@ -134,7 +162,12 @@ class BatchServingHost:
             step_events = self._scheduler.step()
             for request_id, events in step_events.items():
                 self._publish_events(request_id, events)
-            for request_id, events, final_cache in self._scheduler.drain():
+            for drained in self._scheduler.drain():
+                if len(drained) == 3:
+                    request_id, events, final_cache = drained
+                else:
+                    request_id, events = drained
+                    final_cache = None
                 self._complete_request(request_id, events, final_cache)
 
     def _drain_commands(self, *, block: bool) -> None:
@@ -154,15 +187,14 @@ class BatchServingHost:
 
     def _handle_command(self, command: tuple[Any, ...]) -> None:
         match command:
-            case ("add", request_id, prompt, options, cache_state, prompt_token_count):
+            case ("add", request_id, prompt, options, add_kwargs):
                 self._scheduler.add(
                     request_id,
                     self._model,
                     self._tokenizer,
                     prompt,
                     options,
-                    cache_state=cache_state,
-                    prompt_token_count=prompt_token_count,
+                    **add_kwargs,
                 )
             case ("remove", request_id):
                 self._scheduler.remove(request_id)
@@ -201,7 +233,13 @@ class BatchServingHost:
         self,
         prompt: str | list[int],
     ) -> PromptCachePlan | None:
-        if self._prompt_cache_orchestrator is None or self._model_id is None:
+        if (
+            self._prompt_cache_orchestrator is None
+            or self._model_id is None
+            or not self._scheduler_add_supports_cache_state
+            or not self._scheduler_add_supports_prompt_token_count
+            or not self._scheduler_drains_cache_state
+        ):
             return None
         token_ids = (
             self._tokenizer.encode(prompt)
@@ -269,15 +307,14 @@ class BatchServingHost:
         self._ensure_thread()
         if cache_plan is None:
             scheduler_prompt = prompt
-            cache_state = None
-            prompt_token_count = None
+            add_kwargs: dict[str, Any] = {}
         else:
             scheduler_prompt = cache_plan.prompt_for_generation
-            cache_state = cache_plan.cache_for_generation
-            prompt_token_count = len(cache_plan.full_prompt_token_ids)
-        self._commands.put(
-            ("add", request_id, scheduler_prompt, options, cache_state, prompt_token_count)
-        )
+            add_kwargs = {
+                "cache_state": cache_plan.cache_for_generation,
+                "prompt_token_count": len(cache_plan.full_prompt_token_ids),
+            }
+        self._commands.put(("add", request_id, scheduler_prompt, options, add_kwargs))
         return request_id, future, stream_queue
 
 

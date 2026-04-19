@@ -7,58 +7,83 @@ logic testable via the pure ``build_completions`` helper.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from prompt_toolkit.completion import CompleteEvent, Completer, Completion
-from prompt_toolkit.document import Document
+try:
+    from prompt_toolkit.completion import CompleteEvent, Completer, Completion
+    from prompt_toolkit.document import Document
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised in product-surface tests
+    if exc.name != "prompt_toolkit":
+        raise
+    _PROMPT_TOOLKIT_IMPORT_ERROR = exc
+    CompleteEvent = Any
+    Document = Any
+    Completer = object
+    Completion = None
+else:
+    _PROMPT_TOOLKIT_IMPORT_ERROR = None
 
 
-class ChatCompleter(Completer):
-    """Completion menu for slash commands, /export paths, and @file mentions."""
+if _PROMPT_TOOLKIT_IMPORT_ERROR is None:
 
-    def __init__(self, command_names: tuple[str, ...]) -> None:
-        self._command_names = command_names
+    class ChatCompleter(Completer):
+        """Completion menu for slash commands, /export paths, and @file mentions."""
 
-    def get_completions(
-        self,
-        document: Document,
-        complete_event: CompleteEvent,
-    ):
-        del complete_event
-        before = document.text_before_cursor
-        stripped = before.lstrip()
+        def __init__(self, command_names: tuple[str, ...]) -> None:
+            self._command_names = command_names
 
-        if stripped.startswith("/") and " " not in stripped[1:]:
-            for candidate in self._command_names:
-                if candidate.startswith(stripped):
+        def get_completions(
+            self,
+            document: Document,
+            complete_event: CompleteEvent,
+        ):
+            del complete_event
+            before = document.text_before_cursor
+            stripped = before.lstrip()
+
+            if stripped.startswith("/") and " " not in stripped[1:]:
+                for candidate in self._command_names:
+                    if candidate.startswith(stripped):
+                        yield Completion(
+                            candidate,
+                            start_position=-len(stripped),
+                            display=candidate,
+                        )
+                return
+
+            export_prefix = _export_completion_prefix(before)
+            if export_prefix is not None:
+                for candidate in _path_completion_values(export_prefix, Path.cwd()):
                     yield Completion(
                         candidate,
-                        start_position=-len(stripped),
+                        start_position=-len(export_prefix),
                         display=candidate,
+                        display_meta="export path",
                     )
-            return
+                return
 
-        export_prefix = _export_completion_prefix(before)
-        if export_prefix is not None:
-            for candidate in _path_completion_values(export_prefix, Path.cwd()):
+            mention_token = mention_completion_token(before)
+            if mention_token is None:
+                return
+            mention_prefix = mention_token[1:]
+            for candidate in reference_candidate_values(mention_prefix, Path.cwd()):
                 yield Completion(
-                    candidate,
-                    start_position=-len(export_prefix),
-                    display=candidate,
-                    display_meta="export path",
+                    f"@{candidate}",
+                    start_position=-len(mention_token),
+                    display=f"@{candidate}",
+                    display_meta="attach file",
                 )
-            return
 
-        mention_token = mention_completion_token(before)
-        if mention_token is None:
-            return
-        mention_prefix = mention_token[1:]
-        for candidate in reference_candidate_values(mention_prefix, Path.cwd()):
-            yield Completion(
-                f"@{candidate}",
-                start_position=-len(mention_token),
-                display=f"@{candidate}",
-                display_meta="attach file",
-            )
+else:
+
+    class ChatCompleter:
+        """Fallback stub when prompt-toolkit is unavailable."""
+
+        def __init__(self, command_names: tuple[str, ...]) -> None:
+            del command_names
+            raise ModuleNotFoundError(
+                "prompt_toolkit is required for ChatCompleter"
+            ) from _PROMPT_TOOLKIT_IMPORT_ERROR
 
 
 def build_completions(

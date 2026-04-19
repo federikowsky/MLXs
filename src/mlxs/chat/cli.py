@@ -15,6 +15,10 @@ here for backwards compatibility with existing callers and tests:
 
 from __future__ import annotations
 
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
 # ── Canonical modules — re-exported for backwards compatibility ───────────────
 from mlxs.chat.input import (  # noqa: F401
     AttachmentResolutionError,
@@ -40,7 +44,53 @@ from mlxs.chat.tui.completion import (  # noqa: F401
     ChatCompleter as _ChatCompleter,
     build_completions,
 )
-from mlxs.chat.tui.shell import ChatShell, RepoContext, discover_repo_context
+try:
+    from mlxs.chat.tui.shell import ChatShell, RepoContext, discover_repo_context
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised in product-surface tests
+    if exc.name != "prompt_toolkit":
+        raise
+    _PROMPT_TOOLKIT_IMPORT_ERROR = exc
+
+    @dataclass(frozen=True)
+    class RepoContext:
+        """Fallback repo information when prompt-toolkit is unavailable."""
+
+        cwd: Path
+        cwd_label: str
+        branch: str | None
+
+    def discover_repo_context(cwd: Path | None = None) -> RepoContext:
+        """Collect cwd + git branch even when the TUI dependency is unavailable."""
+        workdir = cwd or Path.cwd()
+        branch: str | None = None
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=workdir,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=0.5,
+            )
+            candidate = result.stdout.strip()
+            if result.returncode == 0 and candidate and candidate != "HEAD":
+                branch = candidate
+        except Exception:
+            branch = None
+        return RepoContext(
+            cwd=workdir,
+            cwd_label=str(workdir),
+            branch=branch,
+        )
+
+    class ChatShell:
+        """Fallback shell stub that raises a clear optional-dependency error."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            raise ModuleNotFoundError(
+                "prompt_toolkit is required for ChatShell"
+            ) from _PROMPT_TOOLKIT_IMPORT_ERROR
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
 

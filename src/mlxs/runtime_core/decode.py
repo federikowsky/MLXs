@@ -53,6 +53,72 @@ def _resolve_step_fn(
     return step_fn if step_fn is not None else _default_step_fn(model, state)
 
 
+def _prepare_next_logits_with_resolved_step(
+    prepared: PreparedDecodeStep,
+    *,
+    execution: CoreExecutionPolicy,
+    resolved_step: StepFn,
+    prime_logits: bool = False,
+) -> PreparedNextLogits:
+    with stream_context(execution):
+        next_logits = resolved_step(prepared.token[None])[:, -1, :]
+        if prime_logits:
+            mx.async_eval(next_logits)
+    return PreparedNextLogits(logits=next_logits)
+
+
+def _schedule_next_decode_step_with_resolved_step(
+    prepared: PreparedDecodeStep,
+    *,
+    execution: CoreExecutionPolicy,
+    resolved_step: StepFn,
+    select_token: TokenSelector = greedy_select,
+    prime_token: bool = True,
+) -> PreparedDecodeStep:
+    next_logits = _prepare_next_logits_with_resolved_step(
+        prepared,
+        execution=execution,
+        resolved_step=resolved_step,
+    ).logits
+    with stream_context(execution):
+        next_token = select_token(next_logits)
+        if prime_token:
+            mx.async_eval(next_token)
+    return PreparedDecodeStep(logits=next_logits, token=next_token)
+
+
+def _decode_step_with_resolved_step(
+    state: CoreState,
+    logits: mx.array,
+    *,
+    termination: CoreTerminationPolicy,
+    execution: CoreExecutionPolicy,
+    resolved_step: StepFn,
+    select_token: TokenSelector = greedy_select,
+) -> tuple[CoreStepResult, mx.array | None]:
+    with stream_context(execution):
+        token = select_token(logits)
+        mx.eval(token)
+
+    token_id = int(token.item())
+    generation_tokens = state.increment_generation()
+    finish = termination.finish_for(token_id, generation_tokens=generation_tokens)
+    _clear_cache_if_due(execution, generation_tokens=generation_tokens)
+
+    result = CoreStepResult(
+        token_id=token_id,
+        finish=finish,
+        prompt_tokens=state.prompt_tokens,
+        generation_tokens=generation_tokens,
+    )
+    if finish is not None:
+        return result, None
+
+    with stream_context(execution):
+        next_logits = resolved_step(token[None])[:, -1, :]
+    return result, next_logits
+
+
 def _clear_cache_if_due(
     execution: CoreExecutionPolicy,
     *,
@@ -96,18 +162,14 @@ def schedule_next_decode_step(
     greedy fast path when the caller can guarantee that a subsequent
     decode step is needed.
     """
-    next_logits = prepare_next_logits(
-        model,
-        state,
+    resolved_step = _resolve_step_fn(model, state, step_fn)
+    return _schedule_next_decode_step_with_resolved_step(
         prepared,
         execution=execution,
-        step_fn=step_fn,
-    ).logits
-    with stream_context(execution):
-        next_token = select_token(next_logits)
-        if prime_token:
-            mx.async_eval(next_token)
-    return PreparedDecodeStep(logits=next_logits, token=next_token)
+        resolved_step=resolved_step,
+        select_token=select_token,
+        prime_token=prime_token,
+    )
 
 
 def prepare_next_logits(
@@ -121,11 +183,12 @@ def prepare_next_logits(
 ) -> PreparedNextLogits:
     """Build raw next logits before Layer 2 transforms/selects the next token."""
     resolved_step = _resolve_step_fn(model, state, step_fn)
-    with stream_context(execution):
-        next_logits = resolved_step(prepared.token[None])[:, -1, :]
-        if prime_logits:
-            mx.async_eval(next_logits)
-    return PreparedNextLogits(logits=next_logits)
+    return _prepare_next_logits_with_resolved_step(
+        prepared,
+        execution=execution,
+        resolved_step=resolved_step,
+        prime_logits=prime_logits,
+    )
 
 
 def materialize_prepared_step(
@@ -167,25 +230,11 @@ def decode_step(
 ) -> tuple[CoreStepResult, mx.array | None]:
     """Advance the decode state by exactly one token."""
     resolved_step = _resolve_step_fn(model, state, step_fn)
-
-    with stream_context(execution):
-        token = select_token(logits)
-        mx.eval(token)
-
-    token_id = int(token.item())
-    generation_tokens = state.increment_generation()
-    finish = termination.finish_for(token_id, generation_tokens=generation_tokens)
-    _clear_cache_if_due(execution, generation_tokens=generation_tokens)
-
-    result = CoreStepResult(
-        token_id=token_id,
-        finish=finish,
-        prompt_tokens=state.prompt_tokens,
-        generation_tokens=generation_tokens,
+    return _decode_step_with_resolved_step(
+        state,
+        logits,
+        termination=termination,
+        execution=execution,
+        resolved_step=resolved_step,
+        select_token=select_token,
     )
-    if finish is not None:
-        return result, None
-
-    with stream_context(execution):
-        next_logits = resolved_step(token[None])[:, -1, :]
-    return result, next_logits

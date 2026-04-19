@@ -18,12 +18,14 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from mlxs._types import FinishReason, GenerateOptions, TokenEvent
+from mlxs.batch.fast_batch import _FastBatchRow, _SharedFastBatch
 from mlxs.cache.kv import KVCache
 from mlxs.generate.logits import make_logits_processors
 from mlxs.generate.sampling import make_sampler
 from mlxs.generate.stop import StopCondition
 from mlxs.protocols.cache import CacheProtocol
 from mlxs.protocols.generate import TokenizerProtocol
+from mlxs.runtime_core.policy import CoreExecutionPolicy, CoreTerminationPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +95,7 @@ class BatchScheduler:
     __slots__ = (
         "_active",
         "_completion_batch_size",
+        "_fast_batch",
         "_finished",
         "_pending",
         "_prefill_batch_size",
@@ -111,7 +114,8 @@ class BatchScheduler:
         self._prefill_step_size = prefill_step_size
         self._pending: OrderedDict[str, _Sequence] = OrderedDict()
         self._active: OrderedDict[str, _Sequence] = OrderedDict()
-        self._finished: OrderedDict[str, _Sequence] = OrderedDict()
+        self._finished: OrderedDict[str, tuple[list[TokenEvent], list[CacheProtocol] | None]] = OrderedDict()
+        self._fast_batch: _SharedFastBatch | None = None
 
     def add(
         self,
@@ -142,13 +146,20 @@ class BatchScheduler:
         """Cancel and remove a request."""
         if request_id in self._pending:
             del self._pending[request_id]
+        elif self._fast_batch is not None and self._fast_batch.contains(request_id):
+            finished = self._fast_batch.cancel(request_id)
+            if finished is not None:
+                rid, events, final_cache = finished
+                self._finished[rid] = (events, final_cache)
+            if len(self._fast_batch) == 0:
+                self._fast_batch = None
         elif request_id in self._active:
             seq = self._active.pop(request_id)
             # Mark final event as cancelled
             if seq.events:
                 seq.events[-1].finish_reason = FinishReason.CANCELLED
             seq.state = _SeqState.FINISHED
-            self._finished[request_id] = seq
+            self._finished[request_id] = (seq.events, seq.cache)
         # If already finished, no-op
 
     def step(self) -> dict[str, list[TokenEvent]]:
@@ -161,7 +172,16 @@ class BatchScheduler:
 
         # When the batch is empty, admit a full cohort before the first decode
         # step so aligned requests can batch together immediately.
-        self._prefill_pending(results, fill_capacity=not self._active)
+        self._prefill_pending(results, fill_capacity=self.active_count == 0)
+
+        if self._fast_batch is not None:
+            batch_results, finished = self._fast_batch.step()
+            for request_id, events in batch_results.items():
+                results.setdefault(request_id, []).extend(events)
+            for request_id, events, final_cache in finished:
+                self._finished[request_id] = (events, final_cache)
+            if len(self._fast_batch) == 0:
+                self._fast_batch = None
 
         # Decode active sequences
         self._decode_active(results)
@@ -175,8 +195,14 @@ class BatchScheduler:
         fill_capacity: bool = False,
     ) -> None:
         """Prefill pending sequences while there is decode capacity."""
+        if self._fast_batch is not None:
+            return
         while self._pending and len(self._active) < self._completion_batch_size:
             if fill_capacity:
+                cohort = self._take_fast_prefill_cohort()
+                if len(cohort) > 1:
+                    self._activate_fast_batch(cohort)
+                    break
                 cohort = self._take_prefill_cohort()
                 if len(cohort) > 1:
                     self._prefill_cohort(cohort, results)
@@ -188,6 +214,85 @@ class BatchScheduler:
 
             if not fill_capacity:
                 break
+
+    def _eligible_for_fast_batch(self, seq: _Sequence) -> bool:
+        return (
+            seq.cache is None
+            and seq.options.temperature == 0.0
+            and seq.options.top_p == 1.0
+            and seq.options.top_k == 0
+            and seq.options.min_p == 0.0
+            and not seq.options.logprobs
+            and seq.options.top_logprobs == 0
+            and seq.options.repetition_penalty == 1.0
+            and not seq.options.stop_sequences
+            and not seq.options.extra_eos_token_ids
+        )
+
+    def _supports_fast_batch_model(self, model: nn.Module) -> bool:
+        cache = model.make_cache()
+        return bool(cache) and all(type(layer) is KVCache for layer in cache)
+
+    def _take_fast_prefill_cohort(self) -> list[tuple[str, _Sequence]]:
+        items = list(self._pending.items())
+        if not items or self._active:
+            return []
+
+        capacity = min(
+            self._completion_batch_size,
+            self._prefill_batch_size,
+        )
+        cohort: list[tuple[str, _Sequence]] = []
+        anchor_key: tuple[int, int] | None = None
+        for request_id, seq in items:
+            if not self._eligible_for_fast_batch(seq):
+                continue
+            if not self._supports_fast_batch_model(seq.model):
+                continue
+            key = (id(seq.model), len(seq.prompt_tokens))
+            if anchor_key is None:
+                anchor_key = key
+            if key != anchor_key:
+                continue
+            cohort.append((request_id, seq))
+            if len(cohort) >= capacity:
+                break
+
+        if len(cohort) <= 1:
+            return []
+
+        for request_id, _ in cohort:
+            del self._pending[request_id]
+        return cohort
+
+    def _activate_fast_batch(
+        self,
+        cohort: list[tuple[str, _Sequence]],
+    ) -> None:
+        model = cohort[0][1].model
+        rows: list[_FastBatchRow] = []
+        prompt_tokens: list[list[int]] = []
+        for request_id, seq in cohort:
+            rows.append(
+                _FastBatchRow(
+                    request_id=request_id,
+                    tokenizer=seq.tokenizer,
+                    termination=CoreTerminationPolicy(
+                        max_tokens=seq.options.max_tokens,
+                        eos_token_ids=((seq.tokenizer.eos_token_id,) if seq.tokenizer.eos_token_id is not None else ()),
+                    ),
+                    prompt_token_count=len(seq.prompt_tokens),
+                )
+            )
+            prompt_tokens.append(seq.prompt_tokens)
+
+        self._fast_batch = _SharedFastBatch.from_aligned_cohort(
+            model=model,
+            rows=rows,
+            prompt_tokens=prompt_tokens,
+            execution=CoreExecutionPolicy(),
+            prefill_step_size=self._prefill_step_size,
+        )
 
     def _prefill_one(
         self,
@@ -322,7 +427,7 @@ class BatchScheduler:
 
         if finish_reason is not None:
             seq.state = _SeqState.FINISHED
-            self._finished[request_id] = seq
+            self._finished[request_id] = (seq.events, seq.cache)
         else:
             seq.current_token = y
             seq.state = _SeqState.DECODING
@@ -419,7 +524,7 @@ class BatchScheduler:
         # Move finished sequences out of active
         for rid in finished_ids:
             seq = self._active.pop(rid)
-            self._finished[rid] = seq
+            self._finished[rid] = (seq.events, seq.cache)
 
     def _decode_groups(self) -> list[list[tuple[str, _Sequence]]]:
         """Group active sequences that can share a single decode forward."""
@@ -488,12 +593,13 @@ class BatchScheduler:
     def drain(self) -> Iterator[tuple[str, list[TokenEvent], list[KVCache] | None]]:
         """Drain all finished sequences."""
         while self._finished:
-            request_id, seq = self._finished.popitem(last=False)
-            yield request_id, seq.events, seq.cache
+            request_id, (events, final_cache) = self._finished.popitem(last=False)
+            yield request_id, events, final_cache
 
     @property
     def active_count(self) -> int:
-        return len(self._active)
+        fast = 0 if self._fast_batch is None else len(self._fast_batch)
+        return len(self._active) + fast
 
     @property
     def pending_count(self) -> int:

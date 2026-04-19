@@ -14,7 +14,7 @@ from mlxs._types import FinishReason, GenerateOptions, TokenEvent, TokenLogprobs
 from mlxs.cache.kv import KVCache
 from mlxs.general_path.finish import map_core_finish_reason
 from mlxs.general_path.stop import StopSequenceMatcher
-from mlxs.generate.compile import make_compiled_step
+from mlxs.generate.compile import compile_decode_eligible, make_compiled_step
 from mlxs.generate.logits import make_logits_processors
 from mlxs.generate.sampling import make_sampler
 from mlxs.protocols.generate import TokenizerProtocol
@@ -116,6 +116,25 @@ def _use_prepared_step_enriched_path(
     return prompt_token_count <= SHORT_LOGPROBS_PREPARED_STEP_THRESHOLD
 
 
+def _use_sampled_prepared_step_path(
+    *,
+    prompt_token_count: int,
+    options: GenerateOptions,
+    logits_processors: list[Any],
+    execution_stream: Any | None,
+) -> bool:
+    if execution_stream is None or logits_processors or options.logprobs:
+        return False
+    if prompt_token_count > SHORT_LOGPROBS_PREPARED_STEP_THRESHOLD:
+        return False
+    return (
+        options.temperature != 0.0
+        or options.top_p < 1.0
+        or options.top_k > 0
+        or options.min_p > 0.0
+    )
+
+
 def _use_processor_prepared_step_path(
     *,
     prompt_token_count: int,
@@ -191,11 +210,21 @@ def generate_single_request(
         repetition_penalty=options.repetition_penalty,
     )
     stop_sequences = StopSequenceMatcher(options.stop_sequences)
-    step_fn = make_compiled_step(model, state.cache) if compile_decode else None
+    use_compiled_decode = compile_decode and compile_decode_eligible(
+        prompt_token_count=prompt_token_count,
+    )
+    step_fn = make_compiled_step(model, state.cache) if use_compiled_decode else None
+    select_token_from_logits = lambda step_logits: _select_token_from_logits(sampler, step_logits)
     use_prepared_step_enriched_path = _use_prepared_step_enriched_path(
         prompt_token_count=prompt_token_count,
         options=options,
         logits_processors=logits_processors,
+    )
+    use_sampled_prepared_step_path = _use_sampled_prepared_step_path(
+        prompt_token_count=prompt_token_count,
+        options=options,
+        logits_processors=logits_processors,
+        execution_stream=execution_stream,
     )
     use_processor_prepared_step_path = _use_processor_prepared_step_path(
         prompt_token_count=prompt_token_count,
@@ -231,7 +260,7 @@ def generate_single_request(
             prepared = prepare_decode_step(
                 logits,
                 execution=execution,
-                select_token=lambda step_logits: _select_token_from_logits(sampler, step_logits),
+                select_token=select_token_from_logits,
             )
 
             while True:
@@ -244,10 +273,7 @@ def generate_single_request(
                         state,
                         prepared,
                         execution=execution,
-                        select_token=lambda step_logits: _select_token_from_logits(
-                            sampler,
-                            step_logits,
-                        ),
+                        select_token=select_token_from_logits,
                         step_fn=step_fn,
                     )
 
@@ -292,11 +318,59 @@ def generate_single_request(
                     return
 
                 assert next_logits is not None
+        elif use_sampled_prepared_step_path:
+            prepared = prepare_decode_step(
+                logits,
+                execution=execution,
+                select_token=select_token_from_logits,
+            )
+
+            while True:
+                next_prepared = None
+                if len(generated_tokens) + 1 < options.max_tokens:
+                    next_prepared = schedule_next_decode_step(
+                        model,
+                        state,
+                        prepared,
+                        execution=execution,
+                        select_token=select_token_from_logits,
+                        step_fn=step_fn,
+                    )
+
+                result = materialize_prepared_step(
+                    state,
+                    prepared,
+                    termination=termination,
+                    execution=execution,
+                    force_eval=not generated_tokens,
+                )
+
+                token_id = result.token_id
+                generated_tokens.append(token_id)
+                text = tokenizer.decode(token_id)
+                finish_reason = map_core_finish_reason(result.finish)
+                if finish_reason is None and stop_sequences.check(text):
+                    finish_reason = FinishReason.STOP
+
+                yield TokenEvent(
+                    token_id=token_id,
+                    text=text,
+                    finish_reason=finish_reason,
+                    logprobs=None,
+                    prompt_tokens=prompt_token_count,
+                    generation_tokens=result.generation_tokens,
+                )
+
+                if finish_reason is not None:
+                    return
+
+                assert next_prepared is not None
+                prepared = next_prepared
         elif use_processor_prepared_step_path:
             prepared = prepare_decode_step(
                 logits,
                 execution=execution,
-                select_token=lambda step_logits: _select_token_from_logits(sampler, step_logits),
+                select_token=select_token_from_logits,
             )
 
             while True:
@@ -346,10 +420,7 @@ def generate_single_request(
                 prepared = prepare_decode_step(
                     step_logits,
                     execution=execution,
-                    select_token=lambda next_step_logits: _select_token_from_logits(
-                        sampler,
-                        next_step_logits,
-                    ),
+                    select_token=select_token_from_logits,
                 )
         else:
             while True:
@@ -372,10 +443,7 @@ def generate_single_request(
                     step_logits,
                     termination=termination,
                     execution=execution,
-                    select_token=lambda step_logits: _select_token_from_logits(
-                        sampler,
-                        step_logits,
-                    ),
+                    select_token=select_token_from_logits,
                     step_fn=step_fn,
                 )
 

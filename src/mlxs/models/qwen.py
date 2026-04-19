@@ -67,7 +67,17 @@ class ModelArgs(MultimodalArgsMixin[dict[str, Any]]):
     def resolved_text_args(self) -> ModelArgs:
         """Resolve the language-side config for nested multimodal layouts."""
 
-        if self.text_config:
+        if self.text_config and any(
+            key in self.text_config
+            for key in (
+                "hidden_size",
+                "num_hidden_layers",
+                "num_attention_heads",
+                "num_key_value_heads",
+                "intermediate_size",
+                "vocab_size",
+            )
+        ):
             return type(self).from_dict(self.text_config)
         return self
 

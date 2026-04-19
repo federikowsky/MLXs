@@ -13,6 +13,7 @@ from benchmarks.mlxs_vs_mlx_lm.backends import (
     CANONICAL_BENCHMARK_CLASS,
     CANONICAL_CLEAR_CACHE_INTERVAL,
     GenerationMetrics,
+    compiled_decode_eligible,
     close_session,
     generate_mlx_lm_loaded,
     generate_mlxs_loaded,
@@ -281,6 +282,9 @@ def _run_backend_session(
         session = load_mlx_lm(model_path, trust_remote_code=cfg.trust_remote_code)
     else:
         session = load_mlxs(model_path, trust_remote_code=cfg.trust_remote_code)
+    compile_enabled = backend_variant == "mlxs_compiled" and compiled_decode_eligible(
+        prompt_token_count=len(prompt_token_ids),
+    )
 
     header: dict[str, Any] = {
         "backend": "mlx_lm" if backend_variant == "mlx_lm" else "mlxs",
@@ -289,7 +293,7 @@ def _run_backend_session(
         "rss_bytes_before_load": session.rss_bytes_before_load,
         "rss_bytes_after_load": session.rss_bytes_after_load,
         "load_error": session.error,
-        "compile_enabled": backend_variant == "mlxs_compiled",
+        "compile_enabled": compile_enabled,
         "warmup_runs": cfg.warmup_runs,
         "timed_runs": cfg.timed_runs,
         "warmup_generated_tokens": max(1, min(16, cfg.max_tokens)),

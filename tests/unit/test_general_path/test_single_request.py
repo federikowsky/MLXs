@@ -229,6 +229,117 @@ def test_generate_single_request_short_logprobs_passes_execution_stream(monkeypa
     assert seen_streams == [stream]
 
 
+def test_generate_single_request_short_sampled_path_uses_prepared_step(monkeypatch) -> None:
+    schedule_calls: list[int] = []
+    results = iter(
+        [
+            CoreStepResult(token_id=1, finish=None, prompt_tokens=3, generation_tokens=1),
+            CoreStepResult(
+                token_id=2,
+                finish=CoreFinishSignal.LENGTH,
+                prompt_tokens=3,
+                generation_tokens=2,
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        single_request,
+        "run_prefill",
+        lambda *args, **kwargs: mx.array([[1.0, 0.0, 0.0]]),
+    )
+    monkeypatch.setattr(single_request, "make_logits_processors", lambda **kwargs: [])
+    monkeypatch.setattr(
+        single_request,
+        "decode_step",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("decode_step should not run on short sampled prepared branch")
+        ),
+    )
+    monkeypatch.setattr(
+        single_request,
+        "prepare_decode_step",
+        lambda *args, **kwargs: single_request.SimpleNamespace(
+            logits=mx.array([[0.0, 1.0, 0.0]]),
+            token=mx.array([1]),
+        ),
+    )
+    monkeypatch.setattr(
+        single_request,
+        "schedule_next_decode_step",
+        lambda *args, **kwargs: schedule_calls.append(1)
+        or single_request.SimpleNamespace(
+            logits=mx.array([[0.0, 0.0, 1.0]]),
+            token=mx.array([2]),
+        ),
+    )
+    monkeypatch.setattr(
+        single_request,
+        "materialize_prepared_step",
+        lambda *args, **kwargs: next(results),
+    )
+
+    events = list(
+        generate_single_request(
+            _GenModel(),
+            _GenTokenizer(),
+            [10, 11, 12],
+            GenerateOptions(max_tokens=2, temperature=0.8, top_k=40, logprobs=False),
+            execution_stream=object(),
+        )
+    )
+
+    assert [event.token_id for event in events] == [1, 2]
+    assert [event.logprobs for event in events] == [None, None]
+    assert schedule_calls == [1]
+
+
+def test_generate_single_request_short_sampled_path_requires_execution_stream(
+    monkeypatch,
+) -> None:
+    decode_calls: list[object | None] = []
+    monkeypatch.setattr(
+        single_request,
+        "run_prefill",
+        lambda *args, **kwargs: mx.array([[1.0, 0.0, 0.0]]),
+    )
+    monkeypatch.setattr(single_request, "make_logits_processors", lambda **kwargs: [])
+    monkeypatch.setattr(
+        single_request,
+        "prepare_decode_step",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("sampled prepared-step branch should not run without execution_stream")
+        ),
+    )
+
+    def fake_decode(*args: Any, **kwargs: Any) -> tuple[CoreStepResult, None]:
+        del args
+        decode_calls.append(kwargs["execution"].stream)
+        return (
+            CoreStepResult(
+                token_id=1,
+                finish=CoreFinishSignal.LENGTH,
+                prompt_tokens=3,
+                generation_tokens=1,
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(single_request, "decode_step", fake_decode)
+
+    events = list(
+        generate_single_request(
+            _GenModel(),
+            _GenTokenizer(),
+            [10, 11, 12],
+            GenerateOptions(max_tokens=1, temperature=0.8, top_k=40, logprobs=False),
+        )
+    )
+
+    assert [event.token_id for event in events] == [1]
+    assert decode_calls == [None]
+
+
 def test_generate_single_request_short_logprobs_with_processors_stays_on_decode_step(
     monkeypatch,
 ) -> None:
@@ -510,6 +621,105 @@ def test_generate_single_request_long_logprobs_stays_on_decode_step(monkeypatch)
             _GenTokenizer(),
             list(range(single_request.SHORT_LOGPROBS_PREPARED_STEP_THRESHOLD + 1)),
             GenerateOptions(max_tokens=1, temperature=0.0, logprobs=True),
+        )
+    )
+
+    assert [event.token_id for event in events] == [1]
+    assert decode_calls == [1]
+
+
+def test_generate_single_request_short_compile_decode_uses_compiled_step(monkeypatch) -> None:
+    compiled_calls: list[int] = []
+    monkeypatch.setattr(
+        single_request,
+        "run_prefill",
+        lambda *args, **kwargs: mx.array([[1.0, 0.0, 0.0]]),
+    )
+    monkeypatch.setattr(single_request, "make_logits_processors", lambda **kwargs: [])
+    monkeypatch.setattr(
+        single_request,
+        "make_compiled_step",
+        lambda *args, **kwargs: compiled_calls.append(1)
+        or (lambda input_ids: mx.array([[[0.0, 0.0, 1.0]]])),
+    )
+    monkeypatch.setattr(
+        single_request,
+        "prepare_decode_step",
+        lambda *args, **kwargs: single_request.SimpleNamespace(
+            logits=mx.array([[0.0, 1.0, 0.0]]),
+            token=mx.array([1]),
+        ),
+    )
+    monkeypatch.setattr(
+        single_request,
+        "schedule_next_decode_step",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no next step expected")),
+    )
+    monkeypatch.setattr(
+        single_request,
+        "materialize_prepared_step",
+        lambda *args, **kwargs: CoreStepResult(
+            token_id=1,
+            finish=CoreFinishSignal.LENGTH,
+            prompt_tokens=3,
+            generation_tokens=1,
+        ),
+    )
+
+    events = list(
+        generate_single_request(
+            _GenModel(),
+            _GenTokenizer(),
+            [10, 11, 12],
+            GenerateOptions(max_tokens=1, temperature=0.0, logprobs=False),
+            compile_decode=True,
+            execution_stream=object(),
+        )
+    )
+
+    assert len(events) == 1
+    assert compiled_calls == [1]
+
+
+def test_generate_single_request_long_compile_decode_skips_compiled_step(monkeypatch) -> None:
+    monkeypatch.setattr(
+        single_request,
+        "run_prefill",
+        lambda *args, **kwargs: mx.array([[1.0, 0.0, 0.0]]),
+    )
+    monkeypatch.setattr(single_request, "make_logits_processors", lambda **kwargs: [])
+    monkeypatch.setattr(
+        single_request,
+        "make_compiled_step",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("compiled step should not be built on long prompt")
+        ),
+    )
+    decode_calls: list[int] = []
+
+    def fake_decode(*args: Any, **kwargs: Any) -> tuple[CoreStepResult, None]:
+        del args
+        decode_calls.append(1)
+        assert kwargs["step_fn"] is None
+        return (
+            CoreStepResult(
+                token_id=1,
+                finish=CoreFinishSignal.LENGTH,
+                prompt_tokens=513,
+                generation_tokens=1,
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(single_request, "decode_step", fake_decode)
+
+    events = list(
+        generate_single_request(
+            _GenModel(),
+            _GenTokenizer(),
+            list(range(single_request.SHORT_LOGPROBS_PREPARED_STEP_THRESHOLD + 1)),
+            GenerateOptions(max_tokens=1, temperature=0.0, logprobs=False),
+            compile_decode=True,
         )
     )
 

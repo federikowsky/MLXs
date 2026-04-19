@@ -25,6 +25,28 @@ CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD = 512
 MLX_LM_UPSTREAM_ANCHOR = "mlx-lm main / release v0.31.2 (2026-04-07)"
 
 
+def compiled_decode_eligible(
+    *,
+    prompt_token_count: int,
+) -> bool:
+    return prompt_token_count <= CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD
+
+
+def _use_benchmark_prepared_step_lookahead(
+    model: Any,
+    *,
+    prompt_token_count: int,
+) -> bool:
+    if prompt_token_count <= CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD:
+        return True
+    if getattr(model, "model_type", None) == "qwen2":
+        return True
+    return (
+        getattr(model, "model_type", None) == "llama"
+        and getattr(getattr(model, "args", None), "hidden_size", 0) >= 3072
+    )
+
+
 def _require_mx() -> Any:
     import mlx.core as mx
 
@@ -72,31 +94,33 @@ def runtime_profile(
         "benchmark_class": CANONICAL_BENCHMARK_CLASS,
         "runtime_path_label": (
             "benchmark-local helper on the canonical Layer 1 subtree with "
-            "short-prompt prepared-step overlap"
+            "prepared-step overlap"
         ),
         "runtime_root": (
             "mlxs.runtime_core.decode_step plus "
             "prepare_decode_step/schedule_next_decode_step/materialize_prepared_step "
-            f"for prompts <= {CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD}"
+            f"for prompts <= {CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD} "
+            "and selected qwen2/llama-3b long-prompt cases"
         ),
         "layer1_subtree": [
             "CoreState.create/adopt",
             "run_prefill",
-            "decode_step baseline for long prompts",
-            "prepare_decode_step + mx.async_eval for short prompts",
-            "schedule_next_decode_step + greedy_select for short prompts",
-            "materialize_prepared_step + item() for short prompts",
+            "decode_step baseline for non-lookahead long prompts",
+            "prepare_decode_step + mx.async_eval for short prompts and selected qwen2/llama-3b long prompts",
+            "schedule_next_decode_step + greedy_select for short prompts and selected qwen2/llama-3b long prompts",
+            "materialize_prepared_step + item() for short prompts and selected qwen2/llama-3b long prompts",
             "termination.finish_for",
             "single-token forward lookahead step",
         ],
         "stream_handling": "Dedicated benchmark-owned generation stream via CoreExecutionPolicy.",
         "mx_async_eval": (
-            "Used only on the short-prompt prepared-step branch "
-            f"(prompt_tokens <= {CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD})."
+            "Used on the prepared-step lookahead branch "
+            f"(prompt_tokens <= {CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD} "
+            "and selected qwen2/llama-3b long prompts)."
         ),
         "mx_eval": (
             "Short prompts retain mx.eval(token) on the first generated token; "
-            "long prompts use the baseline per-step mx.eval(token); "
+            "non-lookahead long prompts use the baseline per-step mx.eval(token); "
             "cache state eval during chunked prefill."
         ),
         "item_extraction": "int(token.item()) per generated token.",
@@ -220,13 +244,16 @@ def _run_mlxs_class_a_trial(
     mx = _require_mx()
     from mlxs.runtime_core import CoreExecutionPolicy, CoreState, CoreTerminationPolicy
     from mlxs.runtime_core.decode import (
+        _schedule_next_decode_step_with_resolved_step,
         decode_step,
         materialize_prepared_step,
         prepare_decode_step,
-        schedule_next_decode_step,
     )
     from mlxs.runtime_core.prefill import run_prefill
 
+    use_compiled_decode = compile_decode and compiled_decode_eligible(
+        prompt_token_count=len(prompt_token_ids),
+    )
     variant = "mlxs_compiled" if compile_decode else "mlxs_eager"
     if session.error or session.model is None:
         return GenerationMetrics(
@@ -258,7 +285,7 @@ def _run_mlxs_class_a_trial(
     )
     termination = CoreTerminationPolicy(max_tokens=max_tokens, eos_token_ids=())
 
-    if compile_decode:
+    if use_compiled_decode:
         cache = model.make_cache()
         state = CoreState.adopt(cache)
 
@@ -285,9 +312,11 @@ def _run_mlxs_class_a_trial(
         t_prefill_end = time.perf_counter()
         t_first: float | None = None
         t_end: float | None = None
-        use_short_prompt_lookahead = (
-            len(prompt_tokens) <= CANONICAL_SHORT_PROMPT_LOOKAHEAD_THRESHOLD
+        use_short_prompt_lookahead = _use_benchmark_prepared_step_lookahead(
+            model,
+            prompt_token_count=len(prompt_tokens),
         )
+        resolved_step_fn = step_fn if step_fn is not None else (lambda input_ids: model(input_ids, cache=state.cache))
 
         if use_short_prompt_lookahead:
             prepared = prepare_decode_step(logits, execution=execution, prime_token=True)
@@ -297,12 +326,10 @@ def _run_mlxs_class_a_trial(
                 # Class A uses a fixed length budget with no EOS tokens, so a
                 # single-token lookahead stays within the canonical contract.
                 if generated_tokens + 1 < max_tokens:
-                    next_prepared = schedule_next_decode_step(
-                        model,
-                        state,
+                    next_prepared = _schedule_next_decode_step_with_resolved_step(
                         prepared,
                         execution=execution,
-                        step_fn=step_fn,
+                        resolved_step=resolved_step_fn,
                         prime_token=True,
                     )
 
