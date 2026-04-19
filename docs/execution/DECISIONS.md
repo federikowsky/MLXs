@@ -400,3 +400,9 @@ Append-only. Newest entries go last.
 - Decision: the next active path is `M01.R11 post-R10 acceptance closure rerank`.
 - Why: `R10` is promoted, but AC2 absolute closure vs `mlx_lm` still needs to be re-evaluated from the new accepted state, and AC1 remains open. The next step is no longer implementation-by-default; it is reranking from the promoted baseline.
 - Evidence: D058, `STATUS.md`, `WORKLOG.md`, existing AC1/AC2 acceptance state.
+
+## D061 — 2026-04-19 — accepted
+
+- Decision: create a durable git checkpoint commit for the accepted promoted baseline through `R10`.
+- Why: the accepted main baseline now contains a long chain of promoted code and the full file-backed execution system; it needs a durable checkpoint before `R11` continues from it.
+- Evidence: local main commit `fcb69de` (`checkpoint: capture accepted baseline through R10`).

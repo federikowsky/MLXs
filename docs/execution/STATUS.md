@@ -24,6 +24,7 @@ Updated: 2026-04-19
 
 ## Accepted baseline summary
 
+- Durable git checkpoint committed: `fcb69de` captures the accepted promoted baseline through `R10` plus the `R11` handoff state.
 - Sampled-pure short Layer 2 win promoted.
 - Compile decode eligibility promoted with prompt-aware gate `<=512`.
 - Chat optional `prompt_toolkit` boundary fix promoted.

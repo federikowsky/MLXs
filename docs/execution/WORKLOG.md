@@ -622,3 +622,17 @@ Append-only operational history. Keep it dense.
 - Outcome:
   - `R10` promoted into accepted local baseline and accepted remote tree
   - next path is post-promotion acceptance rerank, not immediate new implementation
+
+## 2026-04-19 — durable accepted-baseline checkpoint committed
+
+- Commit: `fcb69de`
+- Type: milestone checkpoint commit
+- Captures:
+  - accepted promoted baseline through `R10`
+  - promoted shared Layer 1 + Layer 3 batch progression kernel
+  - repo-native scheduler AC2 probe
+  - accepted file-backed execution system through `R11` handoff
+- Excludes:
+  - rejected redesign worktree code
+  - remote mirror trees
+  - reverted experimental variants

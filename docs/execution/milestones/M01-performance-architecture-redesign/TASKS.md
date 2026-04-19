@@ -70,4 +70,5 @@
 - [x] Carry the scheduler-level AC2 probe into the R10 worktree and validate `R10` locally.
 - [x] Run remote-authoritative `R10` AC2 compare on fresh remote mirrors.
 - [x] Promote `R10`.
+- [x] Create a durable git checkpoint for the accepted promoted baseline through `R10`.
 - [ ] Re-rank AC1/AC2/AC13 from the promoted R10 baseline.
