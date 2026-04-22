@@ -1,8 +1,9 @@
-"""Scheduler-level AC2 probe for MLXs batch throughput redesign work."""
+"""Direct AC2 compare between MLXs BatchScheduler and mlx_lm BatchGenerator."""
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import statistics
 import time
@@ -14,13 +15,25 @@ from transformers import AutoTokenizer
 
 from benchmarks.mlxs_vs_mlx_lm.harness import CANONICAL_MODEL_PATH, _build_prompt_token_ids
 from benchmarks.mlxs_vs_mlx_lm.memory import rss_bytes_self
-from benchmarks.mlxs_vs_mlx_lm.scheduler_ac2_utils import p95, summarize_probe_trials
-from mlxs._types import GenerateOptions, ModelMode
-from mlxs.batch.scheduler import BatchScheduler
-from mlxs.load.loader import load_model
+from benchmarks.mlxs_vs_mlx_lm.scheduler_ac2_probe import run_probe as run_mlxs_probe
+from benchmarks.mlxs_vs_mlx_lm.scheduler_ac2_utils import (
+    compare_prompt_results,
+    p95,
+    summarize_probe_trials,
+)
 
 
-def _run_case(
+def _resolve_stop_tokens(tokenizer: Any) -> list[list[int]] | None:
+    eos_token_ids = getattr(tokenizer, "eos_token_ids", None)
+    if eos_token_ids is None:
+        eos_token_id = getattr(tokenizer, "eos_token_id", None)
+        return [[int(eos_token_id)]] if eos_token_id is not None else None
+    if isinstance(eos_token_ids, int):
+        return [[int(eos_token_ids)]]
+    return [[int(token_id)] for token_id in eos_token_ids]
+
+
+def _run_mlx_lm_case(
     model: Any,
     tokenizer: Any,
     *,
@@ -30,48 +43,44 @@ def _run_case(
     prefill_step_size: int,
     trial_seed: int,
 ) -> dict[str, Any]:
-    prompt = _build_prompt_token_ids(tokenizer, prompt_target)
-    scheduler = BatchScheduler(
-        prefill_batch_size=n,
+    mlx_lm_generate = importlib.import_module("mlx_lm.generate")
+    prompt = list(_build_prompt_token_ids(tokenizer, prompt_target))
+    generator = mlx_lm_generate.BatchGenerator(
+        model,
+        stop_tokens=_resolve_stop_tokens(tokenizer),
         completion_batch_size=n,
+        prefill_batch_size=n,
         prefill_step_size=prefill_step_size,
     )
-    options = GenerateOptions(
-        max_tokens=max_tokens,
-        temperature=0.0,
-        top_p=1.0,
-        top_k=0,
-        min_p=0.0,
-        seed=trial_seed,
-        stop_sequences=(),
-        extra_eos_token_ids=(),
-        repetition_penalty=1.0,
-        logprobs=False,
-        top_logprobs=0,
-        stream=True,
-    )
-
-    for idx in range(n):
-        scheduler.add(f"r{idx}", model, tokenizer, prompt, options)
 
     outputs = {f"r{idx}": [] for idx in range(n)}
     first_token_at: dict[str, float] = {}
     completion_at: dict[str, float] = {}
+    pending: set[int] = set()
 
+    mx.random.seed(int(trial_seed) % (2**32))
     mx.reset_peak_memory()
     mx.clear_cache()
-    t0 = time.perf_counter()
-    while scheduler.pending_count or scheduler.active_count:
-        step_results = scheduler.step()
-        now = time.perf_counter()
-        for request_id, events in step_results.items():
-            outputs[request_id].extend(int(event.token_id) for event in events)
-            if request_id not in first_token_at and events:
-                first_token_at[request_id] = now - t0
-        for request_id, _events, _final_cache in scheduler.drain():
-            completion_at[request_id] = now - t0
+    try:
+        t0 = time.perf_counter()
+        uids = generator.insert([prompt for _ in range(n)], max_tokens=[max_tokens] * n)
+        request_ids = {int(uid): f"r{idx}" for idx, uid in enumerate(uids)}
+        pending = set(int(uid) for uid in uids)
+        while pending:
+            responses = generator.next_generated()
+            now = time.perf_counter()
+            for response in responses:
+                request_id = request_ids[int(response.uid)]
+                outputs[request_id].append(int(response.token))
+                if request_id not in first_token_at:
+                    first_token_at[request_id] = now - t0
+                if response.finish_reason is not None:
+                    completion_at[request_id] = now - t0
+                    pending.discard(int(response.uid))
+        wall = time.perf_counter() - t0
+    finally:
+        generator.close()
 
-    wall = time.perf_counter() - t0
     generated_tokens = sum(len(tokens) for tokens in outputs.values())
     return {
         "prompt_target": prompt_target,
@@ -86,7 +95,7 @@ def _run_case(
     }
 
 
-def run_probe(
+def run_mlx_lm_probe(
     *,
     prompt_targets: tuple[int, ...],
     n: int,
@@ -97,20 +106,22 @@ def run_probe(
     trust_remote_code: bool,
     seed: int,
 ) -> dict[str, Any]:
+    from mlx_lm import load
+
     tokenizer = AutoTokenizer.from_pretrained(
         str(CANONICAL_MODEL_PATH),
         trust_remote_code=trust_remote_code,
     )
-    model = load_model(
-        CANONICAL_MODEL_PATH,
+    model, _ = load(
+        str(CANONICAL_MODEL_PATH),
+        tokenizer_config={"trust_remote_code": trust_remote_code},
         lazy=False,
-        model_mode=ModelMode.AUTO,
     )
 
     results = []
     for prompt_target in prompt_targets:
         for warm_idx in range(warmup_runs):
-            _run_case(
+            _run_mlx_lm_case(
                 model,
                 tokenizer,
                 n=n,
@@ -120,7 +131,7 @@ def run_probe(
                 trial_seed=seed - 1000 - warm_idx,
             )
         trials = [
-            _run_case(
+            _run_mlx_lm_case(
                 model,
                 tokenizer,
                 n=n,
@@ -141,6 +152,7 @@ def run_probe(
 
     return {
         "surface": "AC2 scheduler-level canonical fast path",
+        "backend": "mlx_lm.BatchGenerator",
         "model_path": str(CANONICAL_MODEL_PATH),
         "n": n,
         "max_tokens": max_tokens,
@@ -148,6 +160,59 @@ def run_probe(
         "warmup_runs": warmup_runs,
         "timed_runs": timed_runs,
         "results": results,
+    }
+
+
+def run_compare(
+    *,
+    prompt_targets: tuple[int, ...],
+    n: int,
+    max_tokens: int,
+    warmup_runs: int,
+    timed_runs: int,
+    prefill_step_size: int,
+    trust_remote_code: bool,
+    seed: int,
+) -> dict[str, Any]:
+    mlxs_payload = run_mlxs_probe(
+        prompt_targets=prompt_targets,
+        n=n,
+        max_tokens=max_tokens,
+        warmup_runs=warmup_runs,
+        timed_runs=timed_runs,
+        prefill_step_size=prefill_step_size,
+        trust_remote_code=trust_remote_code,
+        seed=seed,
+    )
+    mlx_lm_payload = run_mlx_lm_probe(
+        prompt_targets=prompt_targets,
+        n=n,
+        max_tokens=max_tokens,
+        warmup_runs=warmup_runs,
+        timed_runs=timed_runs,
+        prefill_step_size=prefill_step_size,
+        trust_remote_code=trust_remote_code,
+        seed=seed,
+    )
+    return {
+        "surface": "AC2 direct canonical compare",
+        "model_path": str(CANONICAL_MODEL_PATH),
+        "n": n,
+        "max_tokens": max_tokens,
+        "prefill_step_size": prefill_step_size,
+        "warmup_runs": warmup_runs,
+        "timed_runs": timed_runs,
+        "prompt_targets": list(prompt_targets),
+        "comparison_semantics": {
+            "throughput_ratio": "higher is better for MLXs",
+            "latency_ratio": "lower is better for MLXs",
+        },
+        "mlxs": mlxs_payload,
+        "mlx_lm": mlx_lm_payload,
+        "comparisons": compare_prompt_results(
+            mlxs_payload["results"],
+            mlx_lm_payload["results"],
+        ),
     }
 
 
@@ -164,7 +229,7 @@ def main() -> int:
     parser.add_argument("--prompt-targets", type=int, nargs="+", default=(256, 2048))
     args = parser.parse_args()
 
-    payload = run_probe(
+    payload = run_compare(
         prompt_targets=tuple(args.prompt_targets),
         n=max(1, args.n),
         max_tokens=max(1, args.max_tokens),

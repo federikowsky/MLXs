@@ -1,6 +1,6 @@
 # M01.R1b MLX Capability Inventory
 
-Updated: 2026-04-19
+Updated: 2026-04-20
 
 ## Phase 0 — Framing
 
@@ -83,3 +83,40 @@ Why:
 ## Consequence
 
 - Resume `M01.R2 first bounded redesign slice — runtime_core.run_greedy lookahead-path adoption`
+
+## Phase 4 — R29 consequence
+
+- Current local installed versions:
+  - `mlx 0.31.1`
+  - `mlx-lm 0.31.2`
+- Current official MLX surface rechecked:
+  - latest MLX release is still `v0.31.1`
+  - official docs still expose:
+    - streams
+    - custom extensions
+    - custom Metal kernels
+- R29 result:
+  - these capabilities remain available in the design space
+  - they are not justified for the current `AC1` front because the accepted-sensitive local substrate probe did not isolate one dominant substrate-level bottleneck
+- Consequence:
+  - carry the capability surface forward to the next strongest front
+  - do not treat `AC1` as a built-in-MLX or custom-kernel problem by default on current evidence
+
+## Phase 5 — R30 consequence
+
+- Local `R30` lower-boundary readback:
+  - current decisive staggered surface still reproduces the late-request starvation gap
+  - below that, the measurable split is eval-boundary / owner-pipeline cost rather than attention, mask, or cache-update kernels
+- Capability consequence:
+  - MLX streams and `async_eval` remain relevant ingredients
+  - they are not justified as a standalone path on the current `AC2` evidence because they appear as part of a broader generation-owner contract difference
+  - custom extensions and custom Metal kernels are not justified on the current `AC2` evidence because no dominant op-level bottleneck was isolated
+
+## Phase 6 — first integrated `R30` candidate consequence
+
+- Rejected local candidate result:
+  - repaired the staggered late-request step positions
+  - still lost badly on the real staggered surface because it duplicated generation-owner work
+- Capability consequence:
+  - this failure still points at internal batch ownership, not at missing MLX primitives
+  - built-in MLX and custom-kernel paths remain out

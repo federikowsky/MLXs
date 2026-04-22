@@ -71,4 +71,108 @@
 - [x] Run remote-authoritative `R10` AC2 compare on fresh remote mirrors.
 - [x] Promote `R10`.
 - [x] Create a durable git checkpoint for the accepted promoted baseline through `R10`.
-- [ ] Re-rank AC1/AC2/AC13 from the promoted R10 baseline.
+- [x] Re-rank AC1/AC2/AC13 from the promoted R10 baseline.
+- [x] Reconcile the current accepted AC2 surface against historical pre-R10 AC2 ledger entries.
+- [x] Run direct current accepted-surface AC2 closure rerun package and decide whether a new redesign front is justified.
+- [x] Supersede the stale post-`R10` AC2 collapse ledger with the repaired direct comparator.
+- [x] Re-rank the open targets from the repaired post-`R14` accepted state.
+- [x] Begin `M01.R16 AC1 weakest-case decomposition and benchmark/core convergence ranking`.
+- [x] Run local helper/core split on `Llama-3.2-1B 256/2048` and `Qwen2.5-1.5B 256`.
+- [x] Run remote Class A truth-first reruns for `Llama-3.2-1B 256/2048`, `Qwen2.5-1.5B 256`, and `Llama-3.2-3B 256`.
+- [x] Choose the next active path after `R16`.
+- [x] Define the exact first bounded `R17` short-prompt materialization-alignment slice.
+- [x] Open the `R17` isolated runtime worktree.
+- [x] Implement the first `R17` convergence candidate on `run_greedy` only.
+- [x] Reject and revert `R17` after local/remote validation.
+- [x] Define the exact shared helper/core short-prompt `R18` slice.
+- [x] Open the `R18` isolated runtime worktree.
+- [x] Implement the first `R18` shared short-prompt candidate on benchmark helper + `run_greedy`.
+- [x] Reject and revert `R18` after local truth-first validation.
+- [x] Define the exact lower-overhead shared `R19` short-prompt slice.
+- [x] Open the `R19` isolated runtime worktree.
+- [x] Implement the first `R19` low-overhead short-prompt candidate on benchmark helper + `run_greedy`.
+- [x] Reject `R19` after authoritative weakest-case remote validation.
+- [x] Begin `M01.R20` weakest-case helper-surface hot-loop decomposition.
+- [x] Open the `R20` isolated runtime worktree.
+- [x] Rerank the next non-exhausted AC1 family from `R20`.
+- [x] Create and record the focused model audit note for current `Llama`/`Qwen` benchmark families.
+- [x] Open the `R21` isolated runtime worktree.
+- [x] Define the exact helper-surface schedule-next forward-build redesign slice.
+- [x] Implement the first `R21` helper-surface schedule-next candidate.
+- [x] Open the `R22` isolated runtime worktree.
+- [x] Implement the `R22` resident token-lookahead helper contract candidate.
+- [x] Validate `R22` locally on focused runtime/benchmark suites.
+- [x] Run remote-authoritative control/candidate Class A rerun for `R22`.
+- [x] Reject `R22` after remote validation.
+- [x] Begin `M01.R23 AC1 model/cache forward-step substrate parity audit`.
+- [x] Open the `R23` isolated runtime worktree.
+- [x] Create the live `R23` audit artifact and evidence gate.
+- [x] Run the interleaved prompt-tail / first-decode local substrate probes on `Llama-3.2-1B 256`.
+- [x] Run the remote-authoritative `R23` substrate probe on the approved host.
+- [x] Decide whether one bounded first-decode substrate patch is justified.
+- [x] Close `R23` negatively and freeze the standalone single-request boundary family.
+- [x] Open the `R24` isolated runtime worktree.
+- [x] Begin `M01.R24 AC2 batch-first resident progression redesign rerank`.
+- [x] Create the live `R24` batch-first rerank artifact.
+- [x] Refresh the current MLXs vs `mlx_lm` batch divergence map from the repaired direct comparator.
+- [x] Rank one main batch thesis and one fallback thesis from current truth.
+- [x] Start `R24-S1` fast-path prompt/handoff decomposition.
+- [x] Run the no-patch current fast-path vs upstream prompt/generation decomposition probe.
+- [x] Decide whether the first bounded batch slice belongs to resident prompt-batch ownership or extendable active-batch ownership first.
+- [x] Start `R24-S2` fast-path first-step decomposition.
+- [x] Run the no-patch current fast-path first-step decomposition probe.
+- [x] Decide whether the first bounded active-batch slice belongs to scheduling/materialization or row append/event shaping.
+- [x] Implement the first bounded `R24-S2` candidate in the worktree.
+- [x] Reject `R24-S2` after remote scheduler guardrails.
+- [x] Start `R24-S3` active-batch overlap decomposition.
+- [x] Run the no-patch consecutive-step overlap probe.
+- [x] Decide whether the next bounded slice belongs to overlap/readiness ownership or broader active-batch state lifetime.
+- [x] Start `R24-S4` active-batch state-lifetime redesign.
+- [x] Attempt the first bounded dual-step `_SharedFastBatch` owner candidate.
+- [x] Reject and revert `R24-S4a`.
+- [x] Repair the file-backed state after the `R24-S4` inconsistency.
+- [x] Start `M01.R25 canonical prompt-batch + extendable active-batch ownership redesign`.
+- [x] Define and implement the first integrated `R25` owner-boundary slice in an isolated worktree.
+- [x] Reject the token-resident `R25` owner variant after local scheduler truth-first validation.
+- [x] Reject the dual-ready `R25` owner variant after local scheduler truth-first validation.
+- [x] Add the staggered late-admission direct compare probe in the isolated worktree.
+- [x] Run the first staggered local compare and rerank from its evidence.
+- [x] Establish authoritative remote staggered baseline against `mlx_lm`.
+- [x] Add the staggered per-request decomposition probe.
+- [x] Run local + remote staggered decomposition.
+- [x] Reject `R26-S1` full dynamic late-admission owner after local truth-first validation.
+- [x] Reject `R26-S2` concurrent late prefill plus legacy continuation handoff after local truth-first validation.
+- [x] Start `M01.R26-S4 integrated prompt-owner budgeted progression redesign`.
+- [x] Define and implement the exact prompt-owner budget/chunking slice.
+- [x] Reject `R26-S4` after local staggered truth-first validation.
+- [x] Start `M01.R26-S5 true-overlap prompt-progress substrate redesign`.
+- [x] Reject `R26-S5` and close the `R26` batch prompt-progress family.
+- [x] Start `M01.R27 global rerank after R26 family closure`.
+- [x] Choose the next move as integrated refactor rather than another mini-slice.
+- [x] Open the `R28` isolated runtime worktree.
+- [x] Start `M01.R28 integrated AC1 canonical single-request progression contract refactor`.
+- [x] Reject `R28` after accepted-sensitive local AC1 validation.
+- [x] Start `M01.R29 AC1 lower-level substrate and capability rerank`.
+- [x] Create the no-patch AC1 substrate probe and run it on the accepted-sensitive local surfaces.
+- [x] Classify the remaining AC1 bottleneck as internal, built-in MLX capability, custom extension/custom Metal kernel, or exhausted.
+- [x] Continue immediately into the one next active path chosen by the `R29` evidence gate.
+- [x] Start `M01.R30 AC2 lower-level substrate and capability rerank on the staggered batch surface`.
+- [x] Start `M01.PC1 repository process correction — autonomous integrated-refactor policy hardening`.
+- [x] Strengthen `AGENTS.md`.
+- [x] Strengthen `docs/execution/REDESIGN_MODE.md`.
+- [x] Add `docs/execution/REFACTOR_POLICY.md`.
+- [x] Record that the old process was too slice-fragmented.
+- [x] Normalize worktree / branch hygiene as binding repo policy.
+- [x] Clean safe stale worktrees / branches after `M01.PC1`.
+- [x] Resume `M01.R30` under the corrected operating model.
+- [x] Add the repo-native `R30` lower-boundary staggered probe.
+- [x] Run the local `R30` lower-boundary probe on the decisive staggered surface.
+- [x] Choose the exact `R30` next path from evidence.
+- [x] Define and implement the first integrated lower-level batch generation-owner / eval-discipline runtime candidate under `R30`.
+- [x] Reject the first integrated `R30` runtime candidate after local truth-first validation.
+- [x] Rerank `R30` to one active extendable dynamic generation owner on the staggered surface.
+- [x] Define and implement the last acceptable `R30` one-owner dynamic candidate.
+- [x] Reject the last acceptable `R30` candidate after local truth-first validation.
+- [x] Close `R30` for this phase.
+- [x] Open fresh dedicated worktree `codex/m01-r31-mixed-offset-cache-substrate`.
+- [ ] Define the bounded `R31` mixed-offset batch cache substrate thesis.

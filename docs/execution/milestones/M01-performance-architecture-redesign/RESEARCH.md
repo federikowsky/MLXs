@@ -197,3 +197,8 @@ Research is complete only when:
 1. `ARCHITECTURE_NOTES.md` contains concrete maps for MLXs, `mlx_lm`, and MLX.
 2. this file contains the ranked redesign thesis and first bounded slice.
 3. `STATUS`, `TASKS`, `RISKS`, `DECISIONS`, `WORKLOG`, and `FREEZE` reflect the research mode.
+
+## R20 Addendum — Model Correctness
+
+Current-target `Llama` and `Qwen` correctness findings are recorded in [MODEL_AUDIT.md](MODEL_AUDIT.md).
+For the current weakest-case AC1 work, implementation mismatch is not currently the leading explanation for the measured gap.

@@ -216,3 +216,7 @@ Updated: 2026-04-19
 4. MLXs batch path still rebuilds grouping/cache state and shapes events inside the scheduler loop.
 5. MLX itself rewards explicit evaluation discipline and resident progression, and punishes extra graph/eval boundaries.
 6. MLXs has no batch-aware cache substrate today; `mlx_lm` batch residency depends on cache objects that support `merge`, `filter`, `extend`, and `extract`, while MLXs `KVCache` only exposes per-request mutation and serialization.
+
+## R20 Model Audit Note
+
+See [MODEL_AUDIT.md](MODEL_AUDIT.md) for the focused `Llama` and `Qwen` correctness sanity checks used during the weakest-case AC1 decomposition.

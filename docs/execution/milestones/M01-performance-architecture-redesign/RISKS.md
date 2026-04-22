@@ -2,6 +2,8 @@
 
 ## Open
 
+- Governance drift risk: without binding repo-level policy, future MLXs work can regress back into micro-family churn even when fronts are already sufficiently understood.
+
 - Runtime redesign may require contract changes across both benchmark helper and `runtime_core`.
 - A redesign that helps AC2 may hurt accepted single-request guardrails if state ownership widens carelessly.
 - Current accepted wins on Qwen and Llama 3B long decode are benchmark-surface scoped; migrating them into runtime may expose new regressions.
@@ -33,6 +35,34 @@
 - `R10` will likely require new private Layer 1 batched progression helpers and row-level cache operations; the risk is widening Layer 1 too far into row lifecycle or product semantics.
 - `R10` is now promoted; the new risk is over-reading the scheduler-level AC2 win before re-establishing absolute acceptance against `mlx_lm` on the promoted baseline.
 - The scheduler-level AC2 probe is now repo-native tooling; future misuse risk is treating it as the only benchmark surface rather than one input into broader acceptance closure.
+- `R11` established a direct current accepted-surface AC2 rerun far below the old pre-R10 ledger; the immediate risk is optimizing against inconsistent acceptance ledgers before the surface discrepancy is reconciled.
+- `R12` now resolves that truth gap enough to supersede the old ledger; the new risk is choosing another redesign family before the provenance of the accepted-surface drift is documented clearly.
+- `R15` now supersedes the stale AC2 collapse ledger; the new rerank risk is letting old AC2 urgency continue to shape choices by inertia.
+- `R16` shows the short-prompt helper/core split is still material; the new implementation risk is over-broadening that fix into long-prompt, batch, or general-path work before the short-prompt slice is proven.
+- Reduced-run exploratory `R16` remote reruns diverged sharply on `Qwen 256` and `Llama 3B 256`; treat them as truth-first guardrails, not accepted-ledger replacements.
+- `R17` now points at one concrete materialization-contract difference; the risk is assuming that one change fully closes AC1 before weakest-case and guardrail validation.
+- `R17` is now rejected; the new risk is choosing another slice that still does not directly exercise the accepted AC1 helper surface.
+- `R18` is now rejected; the new risk is choosing a shared convergence shape that still adds too much hot-loop overhead on the smallest accepted model.
+- `R19` is now rejected; the new risk is continuing to patch the convergence family after three failures instead of re-decomposing the real weakest-case helper surface.
+- Model correctness risk is now reduced for the current `Llama-3.2-1B` and `Qwen2.5-1.5B` targets; the new risk is over-correcting back toward model-audit suspicion when the measured weakest-case bottleneck is helper-path scheduling cost.
+- `R22` now shows a stronger risk: better `mlxs/mlx_lm` ratios can be produced by rerun drift in the paired `mlx_lm` baseline even while absolute MLXs decode throughput is flat-to-negative. Future decisions must anchor on control/candidate MLXs absolute throughput first.
+- `R22` also shows that helper token-choreography simplification is not enough; the next risk is spending more cycles on helper-only variants when the remaining tax likely sits in the model/cache forward-step substrate.
+- `R23` early reads show a new risk: broad steady-state model-forward probes can look near-neutral and still miss a real prompt-tail / first-decode tax. Future single-request probes must isolate the boundary after prefill rather than average it away.
+- `R23` final result adds a stronger risk: an isolated component can look materially worse (`first_decode_forward`) while the full decisive boundary is already better overall. Future gates must optimize complete boundary totals, not subcomponent deltas alone.
+- `R24` rerank adds a batch-side analogue: the current accepted surface is narrow enough that old AC2 structural taxes may now be partially neutralized. Future batch gates must separate canonical fast-path taxes from broader practical scheduler taxes instead of mixing them.
+- `R24-S1` adds a stronger risk: thesis-level architecture may still be correct while the first bounded slice is wrong. Future `R24` work must keep the dual-owner redesign thesis while letting the first bounded slice move to the actual slower component.
+- `R24-S2` adds the next risk: an isolated first-step micro win can still regress the real AC2 surface because current+next token materialization also carries overlap readiness. Future slices must measure at least two consecutive active-batch steps.
+- `R24-S3` initial readback shows a new risk: optimizing step 0 and optimizing step 1 can pull in opposite directions. Future slices must preserve second-step readiness explicitly rather than assuming step-0 wins compose.
+- `R24-S3` final classification adds a stronger risk: seam-level overlap edits can keep rediscovering symptoms without touching the real owner. Future work must move to state lifetime, not another overlap micro-family.
+- State-repair risk: if a family-level thesis remains active after its first concrete candidate is already rejected, the file-backed system becomes internally inconsistent and future autonomous sequencing degrades.
+- `R25` adds the next stronger risk: an extendable per-row-offset batch cache can be directionally correct for dynamic batching and still be the wrong thing to inject into the current aligned canonical fast path.
+- Surface-governance risk: the repaired direct AC2 canonical compare is too static to rank late-admission redesign by itself; future dynamic batching work can drift if it keeps optimizing against the wrong surface.
+- `R26-S2` adds a new risk: fixing the admission semantics is not enough if the prompt-side owner still runs whole-prompt work synchronously on the main generation step.
+- Remote-state risk is now explicit: the nominal accepted remote tree cannot be assumed authoritative without verification because it drifted from file-backed expectations.
+- `R30` local lower-boundary probe adds the next risk: the visible gap can tempt a too-narrow standalone `async_eval` / stream tweak even though the measured split is really part of a broader generation-owner contract difference.
+- `R30` also reduces one risk: attention, mask, and cache-update kernels are not the leading current explanation on the decisive staggered surface, so a custom-kernel pivot would currently be premature.
+- first integrated `R30` runtime candidate adds a stronger risk: repairing step positions with parallel generation owners can still lose badly because the design duplicates active generation stepping.
+- the last acceptable `R30` candidate adds the family-closing risk: even one-owner dynamic extension can stay too slow if mixed-offset cache/mask/rope behavior is not redesigned together.
 
 ## Watch
 
@@ -53,4 +83,35 @@
 - `M01.R8` ranking is complete.
 - `M01.R9` is complete and rejected.
 - `M01.R10` is complete and promoted.
-- Next blocker is re-ranking acceptance closure from the new promoted baseline before choosing the next redesign front.
+- `M01.R11` rerank is complete.
+- `M01.R12` reconciliation is complete.
+- `M01.R15` rerank is complete.
+- `M01.R16` weakest-case decomposition is complete.
+- `M01.R17` candidate is implemented, rejected, and reverted.
+- `M01.R18` candidate is implemented, rejected, and reverted.
+- `M01.R19` candidate is implemented and rejected.
+- `M01.R20` decomposition is complete.
+- `M01.R21` exact slice definition and first candidate are complete through `R22`, and the candidate is rejected after local + remote validation.
+- `M01.R23` is complete and negative.
+- `M01.R24` worktree is open.
+- `M01.R24` divergence map and thesis ranking are complete.
+- `M01.R24-S1` is complete.
+- `M01.R24-S2` is complete and rejected.
+- `M01.R24-S3` local overlap probe is complete.
+- `M01.R24-S3` classification is complete.
+- `R24-S4a` is rejected and frozen.
+- `R25` isolated owner-boundary family is implemented locally and rejected.
+- `R26` remote authority and decomposition are complete.
+- `R26-S1` and `R26-S2` are rejected.
+- `R26-S4` is rejected locally after fixing the step semantics but not the throughput surface.
+- `R26-S5` is rejected locally after preserving the fixed step semantics but still missing the throughput gate.
+- `R28` is complete and rejected.
+- `R29` is complete and closes the current AC1 front for this phase.
+- `M01.PC1` process correction is complete.
+- Safe stale worktrees and branches are cleaned for the closed clean M01 paths.
+- `R30` local lower-boundary rerank is complete.
+- `R30` now chooses lower-level internal batch redesign as the next path.
+- first integrated `R30` runtime candidate is rejected locally and reverted.
+- the last acceptable `R30` candidate is rejected locally and reverted.
+- `R30` is now closed for this phase.
+- `R31 mixed-offset batch cache substrate redesign` is now the active broader path.
